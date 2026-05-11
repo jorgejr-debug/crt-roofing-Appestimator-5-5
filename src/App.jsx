@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLoadScript } from "@react-google-maps/api";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 
 const AUTH_KEY = "crt_roofing_auth_v1";
 const USERS_KEY = "crt_roofing_users_v1";
 const DRAFT_KEY = (userKey) => `crt_roofing_draft_v1:${userKey}`;
 const SAVED_KEY = (userKey) => `crt_roofing_saved_v1:${userKey}`;
+const FIELD_NOTES_DRAFT_KEY = (userKey) => `crt_roofing_field_notes_draft_v1:${userKey}`;
+const INSPECTIONS_KEY = (userKey) => `crt_roofing_inspections_v1:${userKey}`;
+const ADMIN_PRICING_KEY = "crt_roofing_admin_pricing_v1";
 
 const JOB_TYPE_OPTIONS = [
   { value: "existingRoof", label: "Existing Roof" },
@@ -85,6 +90,27 @@ const DEFAULT_SUBCONTRACTOR_ADD_ON_ITEMS = [
   { description: "Install new vent", quantity: 0, unitPrice: 100 },
 ];
 
+const DEFAULT_FIELD_NOTES = {
+  jobName: "",
+  customerName: "",
+  jobAddress: "",
+  date: "",
+  technicianName: "",
+  roofTypeObserved: "",
+  customerRequestedRoofPreference: "",
+  roofConditionNotes: "",
+  accessNotes: "",
+  safetyConcerns: "",
+  existingRoofLayers: "",
+  acUnitsCount: "",
+  drainsCount: "",
+  scuppersCount: "",
+  penetrationsCount: "",
+  parapetNotes: "",
+  photos: [],
+  internalNotes: "",
+};
+
 const TEMPLATE_CARDS = [
   { key: "tpo", title: "TPO Estimate", estimateType: "TPO", comingSoon: false },
   { key: "sprayFoam", title: "Spray Foam Estimate", estimateType: "Spray Foam", comingSoon: true },
@@ -94,6 +120,54 @@ const TEMPLATE_CARDS = [
   { key: "maintenance", title: "Maintenance", estimateType: "Maintenance", comingSoon: true },
   { key: "repair", title: "Repair / Service Estimate", estimateType: "Repair / Service", comingSoon: true },
 ];
+
+const FIELD_NOTE_TEMPLATE_OPTIONS = [
+  { key: "tpo", title: "TPO", estimateType: "TPO" },
+  { key: "shingle", title: "Shingles", estimateType: "Shingle" },
+  { key: "tile", title: "Tile", estimateType: "Tile" },
+  { key: "sprayFoam", title: "Spray Foam", estimateType: "Spray Foam" },
+  { key: "maintenance", title: "Maintenance", estimateType: "Maintenance" },
+];
+
+const DEFAULT_ADMIN_PRICING = {
+  tpoRollPrice: 360,
+  isoSheetPrice: 31.95,
+  denseDeckSheetPrice: 31.95,
+  fastenerCost: 0.12,
+  plateCost: 0.25,
+  laborPerSquare: 0,
+  tearOffPerSquare: 0,
+  wastePercent: 15,
+  taxPercent: 0,
+  overheadPercent: 17.5,
+  profitPercent: 30,
+};
+
+const ADMIN_PRICING_SECTIONS = {
+  materials: [
+    ["tpoRollPrice", "TPO roll price"],
+    ["isoSheetPrice", "ISO sheet price"],
+    ["denseDeckSheetPrice", "Dense deck sheet price"],
+    ["fastenerCost", "Fastener cost"],
+    ["plateCost", "Plate cost"],
+  ],
+  labor: [
+    ["laborPerSquare", "Labor per square"],
+    ["tearOffPerSquare", "Tear-off per square"],
+  ],
+  companyDefaults: [
+    ["wastePercent", "Waste %"],
+    ["taxPercent", "Tax %"],
+    ["overheadPercent", "Overhead %"],
+    ["profitPercent", "Profit %"],
+  ],
+};
+
+function normalizeAdminPricing(values = {}) {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_ADMIN_PRICING).map(([key, defaultValue]) => [key, Math.max(0, toNumber(values[key], defaultValue))]),
+  );
+}
 
 function createBlankSubcontractorAddOnItem() {
   return { description: "", quantity: 0, unitPrice: 0 };
@@ -170,6 +244,24 @@ const DEFAULT_INPUTS = {
 
   pitchPockets: 0,
   manualPitchPocketTotalCost: 0,
+
+  inspectionJobName: "",
+  inspectionCustomerName: "",
+  inspectionJobAddress: "",
+  inspectionDate: "",
+  inspectionTechnicianName: "",
+  inspectionRoofTypeObserved: "",
+  inspectionCustomerRequestedRoofPreference: "",
+  inspectionRoofConditionNotes: "",
+  inspectionAccessNotes: "",
+  inspectionSafetyConcerns: "",
+  inspectionExistingRoofLayers: "",
+  inspectionAcUnitsCount: "",
+  inspectionDrainsCount: "",
+  inspectionScuppersCount: "",
+  inspectionPenetrationsCount: "",
+  inspectionParapetNotes: "",
+  inspectionInternalNotes: "",
 
   maintenancePropertyAddress: "",
   maintenanceServiceType: "inspection",
@@ -584,6 +676,53 @@ function normalizeMaterialPrices(prices = {}) {
   return normalized;
 }
 
+function normalizeFieldNotes(notes = {}) {
+  return {
+    ...DEFAULT_FIELD_NOTES,
+    ...notes,
+    photos: Array.isArray(notes.photos)
+      ? notes.photos.map((photo) => {
+          if (typeof photo === "string") {
+            return { name: photo, type: "", dataUrl: "" };
+          }
+          return {
+            name: String(photo?.name || "Photo"),
+            type: String(photo?.type || ""),
+            dataUrl: String(photo?.dataUrl || ""),
+          };
+        })
+      : [],
+  };
+}
+
+function buildInspectionTransferInputs(notes = {}) {
+  const normalized = normalizeFieldNotes(notes);
+  return {
+    jobName: String(normalized.jobName || ""),
+    customerName: String(normalized.customerName || ""),
+    jobAddress: String(normalized.jobAddress || ""),
+    jobSiteAddress: String(normalized.jobAddress || ""),
+    inspectionJobName: String(normalized.jobName || ""),
+    inspectionCustomerName: String(normalized.customerName || ""),
+    inspectionJobAddress: String(normalized.jobAddress || ""),
+    inspectionDate: String(normalized.date || ""),
+    inspectionTechnicianName: String(normalized.technicianName || ""),
+    inspectionRoofTypeObserved: String(normalized.roofTypeObserved || ""),
+    inspectionCustomerRequestedRoofPreference: String(normalized.customerRequestedRoofPreference || ""),
+    inspectionRoofConditionNotes: String(normalized.roofConditionNotes || ""),
+    inspectionAccessNotes: String(normalized.accessNotes || ""),
+    inspectionSafetyConcerns: String(normalized.safetyConcerns || ""),
+    inspectionExistingRoofLayers: String(normalized.existingRoofLayers || ""),
+    inspectionAcUnitsCount: String(normalized.acUnitsCount || ""),
+    inspectionDrainsCount: String(normalized.drainsCount || ""),
+    inspectionScuppersCount: String(normalized.scuppersCount || ""),
+    inspectionPenetrationsCount: String(normalized.penetrationsCount || ""),
+    inspectionParapetNotes: String(normalized.parapetNotes || ""),
+    inspectionInternalNotes: String(normalized.internalNotes || ""),
+    maintenancePropertyAddress: String(normalized.jobAddress || ""),
+  };
+}
+
 function normalizeDraftInputs(inputs = {}) {
   const oneWayMiles = toNumber(inputs.oneWayMiles, toNumber(inputs.jobDistanceOneWayMiles, 0));
   const oneWayDriveTime = Math.max(
@@ -660,6 +799,27 @@ function normalizeUsername(value) {
 
 function estimateCode(n) {
   return `CRT-${String(Math.max(1, Math.floor(n || 1))).padStart(4, "0")}`;
+}
+
+function estimateTypeForTemplate(templateKey) {
+  switch (templateKey) {
+    case "tpo":
+      return "TPO";
+    case "sprayFoam":
+      return "Spray Foam";
+    case "tile":
+      return "Tile";
+    case "shingle":
+      return "Shingle";
+    case "coating":
+      return "Coating";
+    case "maintenance":
+      return "Maintenance";
+    case "repair":
+      return "Repair / Service";
+    default:
+      return "TPO";
+  }
 }
 
 function buildEstimateName(inputs) {
@@ -1213,6 +1373,246 @@ function calculateBidOptions(totalCostBeforeProfit, totalSquares, selectedMarkup
   };
 }
 
+async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName) {
+  try {
+    const doc = new jsPDF({
+      orientation: "portrait",
+      unit: "mm",
+      format: "a4",
+    });
+
+    // Page setup
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 10;
+    let yPosition = margin;
+
+    // Helper function to check if we need a new page
+    const checkNewPage = (heightNeeded) => {
+      if (yPosition + heightNeeded > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+      }
+    };
+
+    // Helper function to add text
+    const addText = (text, x, y, options = {}) => {
+      doc.setFontSize(options.size || 12);
+      doc.setFont(undefined, options.weight || "normal");
+      doc.text(text, x, y, options);
+      return y;
+    };
+
+    // Add Header with CRT Roofing branding
+    doc.setFillColor(10, 21, 29);
+    doc.rect(0, 0, pageWidth, 25, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(20);
+    doc.setFont(undefined, "bold");
+    doc.text("CRT ROOFING", margin, 12);
+    doc.setFontSize(10);
+    doc.setFont(undefined, "normal");
+    doc.text("Estimate Report", margin, 18);
+
+    doc.setTextColor(0, 0, 0);
+    yPosition = 32;
+
+    // Job Information Section
+    checkNewPage(30);
+    doc.setFontSize(12);
+    doc.setFont(undefined, "bold");
+    addText("JOB INFORMATION", margin, yPosition);
+    yPosition += 8;
+
+    doc.setFontSize(10);
+    doc.setFont(undefined, "normal");
+    const jobInfo = [
+      ["Job Name:", inputs.jobName || "N/A"],
+      ["Customer Name:", inputs.customerName || "N/A"],
+      ["Job Address:", inputs.jobAddress || "N/A"],
+      ["Estimate Type:", "TPO"],
+      ["Date:", new Date().toLocaleDateString()],
+    ];
+
+    jobInfo.forEach(([label, value]) => {
+      checkNewPage(5);
+      doc.setFont(undefined, "bold");
+      doc.text(label, margin, yPosition);
+      doc.setFont(undefined, "normal");
+      doc.text(value, margin + 50, yPosition);
+      yPosition += 6;
+    });
+
+    // Estimate Summary Section
+    yPosition += 4;
+    checkNewPage(25);
+    doc.setFontSize(12);
+    doc.setFont(undefined, "bold");
+    addText("ESTIMATE SUMMARY", margin, yPosition);
+    yPosition += 8;
+
+    doc.setFontSize(10);
+    doc.setFont(undefined, "normal");
+    const summaryInfo = [
+      ["Total Squares:", `${num(calculation.scope.totalSquares, 0)} SQ`],
+      ["Selected Bid Amount:", `$${num(calculation.selectedBidAmount, 2)}`],
+      ["Markup Percentage:", `${num(calculation.selectedMarkupPercent, 0)}%`],
+      ["Price Per Square:", `$${num(calculation.selectedPricePerSq, 2)}`],
+    ];
+
+    summaryInfo.forEach(([label, value]) => {
+      checkNewPage(5);
+      doc.setFont(undefined, "bold");
+      doc.text(label, margin, yPosition);
+      doc.setFont(undefined, "normal");
+      doc.text(value, margin + 50, yPosition);
+      yPosition += 6;
+    });
+
+    // Cost Breakdown Section
+    yPosition += 4;
+    checkNewPage(25);
+    doc.setFontSize(12);
+    doc.setFont(undefined, "bold");
+    addText("COST BREAKDOWN", margin, yPosition);
+    yPosition += 8;
+
+    doc.setFontSize(10);
+    doc.setFont(undefined, "normal");
+    const costBreakdown = [
+      ["Material Cost:", `$${num(calculation.materialCost, 2)}`],
+      ["Labor Cost:", `$${num(calculation.laborCost, 2)}`],
+      ["Travel & Overtime Cost:", `$${num(calculation.totalTravelCost, 2)}`],
+      ["Overhead / Operating Cost:", `$${num(calculation.overheadOperatingCost, 2)}`],
+      ["Total Cost Before Profit:", `$${num(calculation.totalCostBeforeProfit, 2)}`],
+    ];
+
+    costBreakdown.forEach(([label, value]) => {
+      checkNewPage(5);
+      doc.setFont(undefined, "bold");
+      doc.text(label, margin, yPosition);
+      doc.setFont(undefined, "normal");
+      doc.text(value, margin + 50, yPosition);
+      yPosition += 6;
+    });
+
+    // Material Cost Details
+    if (calculation.materialPricing && calculation.materialPricing.items && calculation.materialPricing.items.length > 0) {
+      yPosition += 4;
+      checkNewPage(10);
+      doc.setFontSize(12);
+      doc.setFont(undefined, "bold");
+      addText("MATERIAL COST DETAILS", margin, yPosition);
+      yPosition += 7;
+
+      doc.setFontSize(9);
+      doc.setFont(undefined, "normal");
+
+      calculation.materialPricing.items.forEach((item) => {
+        checkNewPage(4);
+        const qty = num(item.quantity, 0);
+        const unitPrice = num(item.unitPrice, 2);
+        const total = num(item.amount, 2);
+        const lineText = `${item.label} - Qty: ${qty} @ $${unitPrice} = $${total}`;
+        doc.text(lineText, margin, yPosition);
+        yPosition += 4;
+      });
+    }
+
+    // Field Notes / Inspection Notes Section
+    if (fieldNotes && (fieldNotes.jobName || fieldNotes.roofConditionNotes || fieldNotes.internalNotes)) {
+      yPosition += 4;
+      checkNewPage(15);
+      doc.setFontSize(12);
+      doc.setFont(undefined, "bold");
+      addText("FIELD NOTES / INSPECTION NOTES", margin, yPosition);
+      yPosition += 7;
+
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+
+      if (fieldNotes.roofConditionNotes) {
+        doc.setFont(undefined, "bold");
+        doc.text("Roof Condition:", margin, yPosition);
+        yPosition += 4;
+        doc.setFont(undefined, "normal");
+        const conditionText = doc.splitTextToSize(fieldNotes.roofConditionNotes, pageWidth - 2 * margin);
+        doc.text(conditionText, margin, yPosition);
+        yPosition += conditionText.length * 4 + 2;
+      }
+
+      if (fieldNotes.internalNotes) {
+        checkNewPage(5);
+        doc.setFont(undefined, "bold");
+        doc.text("Internal Notes:", margin, yPosition);
+        yPosition += 4;
+        doc.setFont(undefined, "normal");
+        const notesText = doc.splitTextToSize(fieldNotes.internalNotes, pageWidth - 2 * margin);
+        doc.text(notesText, margin, yPosition);
+        yPosition += notesText.length * 4 + 2;
+      }
+    }
+
+    // Photos Section
+    if (fieldNotes && fieldNotes.photos && fieldNotes.photos.length > 0) {
+      yPosition += 4;
+      checkNewPage(10);
+      doc.setFontSize(12);
+      doc.setFont(undefined, "bold");
+      addText("PHOTOS", margin, yPosition);
+      yPosition += 7;
+
+      const photosPerPage = 3;
+      const photoWidth = pageWidth - 2 * margin;
+      const photoHeight = 45;
+
+      for (let i = 0; i < fieldNotes.photos.length; i++) {
+        if (i % photosPerPage === 0 && i > 0) {
+          doc.addPage();
+          yPosition = margin;
+          doc.setFontSize(12);
+          doc.setFont(undefined, "bold");
+          addText("PHOTOS (continued)", margin, yPosition);
+          yPosition += 7;
+        }
+
+        checkNewPage(photoHeight + 10);
+
+        try {
+          const photoData = fieldNotes.photos[i];
+          if (typeof photoData === "string" && photoData.startsWith("data:image")) {
+            doc.addImage(photoData, "JPEG", margin, yPosition, photoWidth, photoHeight);
+            yPosition += photoHeight + 4;
+          }
+        } catch (error) {
+          console.error("Error adding photo to PDF:", error);
+          yPosition += 4;
+        }
+      }
+    }
+
+    // Footer
+    const pageCount = doc.internal.pages.length - 1;
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      doc.text(`Page ${i} of ${pageCount}`, pageWidth / 2, pageHeight - 5, { align: "center" });
+    }
+
+    // Generate filename
+    const fileName = `${estimateName.replace(/[^a-z0-9]/gi, "_").toLowerCase() || "estimate"}_${Date.now()}.pdf`;
+
+    // Save PDF
+    doc.save(fileName);
+    return true;
+  } catch (error) {
+    console.error("Error generating PDF:", error);
+    alert("Failed to generate PDF. Please check the console for details.");
+    return false;
+  }
+}
+
 function buildMissingScopeChecklist(inputs, prices, calculation) {
   const checklist = [];
   const addItem = (label, detail) => checklist.push({ label, detail });
@@ -1407,7 +1807,15 @@ function App() {
     if (!authUser?.key) return [];
     return readJson(SAVED_KEY(authUser.key), []);
   });
+  const [fieldNotes, setFieldNotes] = useState(() => normalizeFieldNotes(readJson(FIELD_NOTES_DRAFT_KEY(authUser?.key || "guest"), DEFAULT_FIELD_NOTES)));
+  const [savedInspections, setSavedInspections] = useState(() => {
+    if (!authUser?.key) return [];
+    return readJson(INSPECTIONS_KEY(authUser.key), []);
+  });
   const [activeTemplate, setActiveTemplate] = useState("dashboard");
+  const [adminPricing, setAdminPricing] = useState(() => normalizeAdminPricing(readJson(ADMIN_PRICING_KEY, DEFAULT_ADMIN_PRICING)));
+  const [inspectionTemplateChooserOpen, setInspectionTemplateChooserOpen] = useState(false);
+  const fieldNotesSyncInitializedRef = useRef(false);
 
   const [nextEstimateNumber, setNextEstimateNumber] = useState(() => {
     if (!authUser?.key) return 1;
@@ -1451,6 +1859,49 @@ function App() {
   }, [users, authUser]);
 
   useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(FIELD_NOTES_DRAFT_KEY(authUser.key), fieldNotes);
+  }, [authUser, fieldNotes]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(INSPECTIONS_KEY(authUser.key), savedInspections);
+  }, [authUser, savedInspections]);
+
+  useEffect(() => {
+    writeJson(ADMIN_PRICING_KEY, adminPricing);
+  }, [adminPricing]);
+
+  useEffect(() => {
+    if (!authUser?.key) {
+      setFieldNotes(DEFAULT_FIELD_NOTES);
+      setSavedInspections([]);
+      return;
+    }
+
+    setFieldNotes(normalizeFieldNotes(readJson(FIELD_NOTES_DRAFT_KEY(authUser.key), DEFAULT_FIELD_NOTES)));
+    setSavedInspections(readJson(INSPECTIONS_KEY(authUser.key), []));
+  }, [authUser?.key]);
+
+  useEffect(() => {
+    if (!fieldNotesSyncInitializedRef.current) {
+      fieldNotesSyncInitializedRef.current = true;
+      if (!fieldNotes.jobAddress) return;
+    }
+    setInputs((current) => {
+      if ((current.jobAddress || "") === fieldNotes.jobAddress && (current.jobSiteAddress || "") === fieldNotes.jobAddress) {
+        return current;
+      }
+      return {
+        ...current,
+        jobAddress: fieldNotes.jobAddress,
+        jobSiteAddress: fieldNotes.jobAddress,
+        travelDistanceSource: "manual",
+      };
+    });
+  }, [fieldNotes.jobAddress]);
+
+  useEffect(() => {
     if (!isLoaded) return;
     const apiKeyFound = Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY);
     const mapsJsLoaded = !!window.google?.maps;
@@ -1478,14 +1929,6 @@ function App() {
       };
     });
   }, [inputs.jobAddress]);
-
-  if (loadError) {
-    return <div>Google Maps failed to load: {loadError.message}</div>;
-  }
-
-  if (!isLoaded) {
-    return <div>Loading Google Maps...</div>;
-  }
 
   const setField = (key, value) => {
     setInputs((current) => ({
@@ -1778,6 +2221,13 @@ function App() {
     }));
   };
 
+  const setAdminPricingField = (key, value) => {
+    setAdminPricing((current) => ({
+      ...current,
+      [key]: toNumber(value, current[key]),
+    }));
+  };
+
   const setSubcontractorAddOnItem = (index, key, value) => {
     setInputs((current) => {
       const items = normalizeSubcontractorAddOnItems(current.subcontractorAddOnItems);
@@ -1848,8 +2298,11 @@ function App() {
     setPrices({ ...DEFAULT_MATERIAL_PRICES });
     setEstimateName("");
     setSavedEstimates([]);
+    setFieldNotes(DEFAULT_FIELD_NOTES);
+    setSavedInspections([]);
     setNextEstimateNumber(1);
     setActiveTemplate("dashboard");
+    setInspectionTemplateChooserOpen(false);
     setSessionMessage("Signed out.");
   };
 
@@ -1863,7 +2316,7 @@ function App() {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       estimateNumber,
       estimateCode: estimateCodeValue,
-      estimateType: "TPO",
+      estimateType: estimateTypeForTemplate(activeTemplate),
       name: currentEstimateName,
       savedAt: new Date().toISOString(),
       inputs,
@@ -1931,6 +2384,99 @@ function App() {
     setSessionMessage(`Loaded ${estimate.estimateCode || "estimate"}.`);
   };
 
+  const handleFieldNotesChange = (key, value) => {
+    setFieldNotes((current) => ({
+      ...current,
+      [key]: value,
+    }));
+    if (key === "jobAddress") {
+      setInputs((current) => ({
+        ...current,
+        jobAddress: String(value || ""),
+        jobSiteAddress: String(value || ""),
+        travelDistanceSource: "manual",
+      }));
+    }
+  };
+
+  const handleFieldNotesPhotosChange = async (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+
+    const nextPhotos = await Promise.all(
+      files.map(
+        (file) =>
+          new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () =>
+              resolve({
+                name: file.name,
+                type: file.type,
+                dataUrl: String(reader.result || ""),
+              });
+            reader.onerror = () =>
+              resolve({
+                name: file.name,
+                type: file.type,
+                dataUrl: "",
+              });
+            reader.readAsDataURL(file);
+          }),
+      ),
+    );
+
+    setFieldNotes((current) => ({
+      ...current,
+      photos: [...current.photos, ...nextPhotos].filter(Boolean),
+    }));
+    event.target.value = "";
+  };
+
+  const handleSaveInspection = () => {
+    if (!authUser?.key) return;
+
+    const inspection = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      savedAt: new Date().toISOString(),
+      ...normalizeFieldNotes(fieldNotes),
+    };
+
+    const nextInspections = [inspection, ...savedInspections];
+    setSavedInspections(nextInspections);
+    writeJson(INSPECTIONS_KEY(authUser.key), nextInspections);
+    setSessionMessage("Inspection saved.");
+  };
+
+  const handleLoadInspection = (inspection) => {
+    if (!inspection) return;
+    setFieldNotes(normalizeFieldNotes(inspection));
+    setInspectionTemplateChooserOpen(false);
+    setSessionMessage("Inspection loaded.");
+  };
+
+  const handleDeleteInspection = (inspectionId) => {
+    if (!authUser?.key) return;
+    const next = savedInspections.filter((item) => item.id !== inspectionId);
+    setSavedInspections(next);
+    writeJson(INSPECTIONS_KEY(authUser.key), next);
+    setSessionMessage("Inspection deleted.");
+  };
+
+  const handleCreateEstimateFromInspection = (templateKey, sourceInspection = fieldNotes) => {
+    const transfer = buildInspectionTransferInputs(sourceInspection);
+    const nextInputs = normalizeDraftInputs({
+      ...DEFAULT_INPUTS,
+      ...inputs,
+      ...transfer,
+    });
+
+    setInputs(nextInputs);
+    setEstimateName(String(sourceInspection.jobName || estimateName || ""));
+    setActiveTemplate(templateKey);
+    setInspectionTemplateChooserOpen(false);
+    setSessionMessage(`Created ${templateKey} estimate from inspection.`);
+  };
+
   const handleDeleteEstimate = (estimateId) => {
     if (!authUser?.key) return;
     const next = activeSavedEstimates.filter((item) => item.id !== estimateId);
@@ -1941,6 +2487,14 @@ function App() {
 
   const handleSelectedMarkup = (percent) => {
     setField("selectedMarkupPercent", percent);
+  };
+
+  const handleDownloadEstimatePDF = async () => {
+    if (!inputs.jobName && !inputs.customerName) {
+      alert("Please enter at least a job name or customer name before downloading the PDF.");
+      return;
+    }
+    await generateEstimatePDF(inputs, calculation, fieldNotes, currentEstimateName);
   };
 
   const priceFields = MATERIAL_PRICE_FIELDS;
@@ -2061,7 +2615,7 @@ function App() {
     </div>
   );
 
-  const renderDashboard = () => (
+  const renderFieldNotesScreen = () => (
     <div className="appShell">
       <style>{css}</style>
       <header className="hero">
@@ -2072,8 +2626,8 @@ function App() {
             </div>
             <div>
               <p className="eyebrow">CRT Roofing Estimating Platform</p>
-              <h1>Choose an estimate template</h1>
-              <p className="intro">Start a new estimate or open a saved one from this browser.</p>
+              <h1>Field Notes / Roof Inspection</h1>
+              <p className="intro">Capture the inspection details before you build an estimate.</p>
             </div>
           </div>
         </div>
@@ -2084,6 +2638,295 @@ function App() {
           <p>Local mode only</p>
         </div>
       </header>
+
+      <div className="actionRow" style={{ marginBottom: 16 }}>
+        <button
+          type="button"
+          className="secondaryButton"
+          onClick={() => {
+            setInspectionTemplateChooserOpen(false);
+            setActiveTemplate("dashboard");
+          }}
+        >
+          Back to dashboard
+        </button>
+      </div>
+
+      <Section title="Inspection details" subtitle="Use this to capture the roof walk and field notes.">
+        <div className="formGrid">
+          <Field label="Job name">
+            <input type="text" value={fieldNotes.jobName} onChange={(e) => handleFieldNotesChange("jobName", e.target.value)} />
+          </Field>
+          <Field label="Customer name">
+            <input type="text" value={fieldNotes.customerName} onChange={(e) => handleFieldNotesChange("customerName", e.target.value)} />
+          </Field>
+          <Field label="Job address">
+            <input type="text" value={fieldNotes.jobAddress} onChange={(e) => handleFieldNotesChange("jobAddress", e.target.value)} />
+          </Field>
+          <Field label="Date">
+            <input type="date" value={fieldNotes.date} onChange={(e) => handleFieldNotesChange("date", e.target.value)} />
+          </Field>
+          <Field label="Technician name">
+            <input
+              type="text"
+              value={fieldNotes.technicianName}
+              onChange={(e) => handleFieldNotesChange("technicianName", e.target.value)}
+            />
+          </Field>
+          <Field label="Roof type observed">
+            <input
+              type="text"
+              value={fieldNotes.roofTypeObserved}
+              onChange={(e) => handleFieldNotesChange("roofTypeObserved", e.target.value)}
+            />
+          </Field>
+          <Field label="Customer requested roof preference">
+            <input
+              type="text"
+              value={fieldNotes.customerRequestedRoofPreference}
+              onChange={(e) => handleFieldNotesChange("customerRequestedRoofPreference", e.target.value)}
+            />
+          </Field>
+          <Field label="Existing roof layers">
+            <input
+              type="text"
+              value={fieldNotes.existingRoofLayers}
+              onChange={(e) => handleFieldNotesChange("existingRoofLayers", e.target.value)}
+            />
+          </Field>
+          <Field label="A/C units count">
+            <input type="number" min="0" step="1" value={fieldNotes.acUnitsCount} onChange={(e) => handleFieldNotesChange("acUnitsCount", e.target.value)} />
+          </Field>
+          <Field label="Drains count">
+            <input type="number" min="0" step="1" value={fieldNotes.drainsCount} onChange={(e) => handleFieldNotesChange("drainsCount", e.target.value)} />
+          </Field>
+          <Field label="Scuppers count">
+            <input type="number" min="0" step="1" value={fieldNotes.scuppersCount} onChange={(e) => handleFieldNotesChange("scuppersCount", e.target.value)} />
+          </Field>
+          <Field label="Penetrations / vents count">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={fieldNotes.penetrationsCount}
+              onChange={(e) => handleFieldNotesChange("penetrationsCount", e.target.value)}
+            />
+          </Field>
+        </div>
+
+        <div className="formGrid" style={{ marginTop: 12 }}>
+          <Field label="Roof condition notes">
+            <textarea
+              rows="4"
+              value={fieldNotes.roofConditionNotes}
+              onChange={(e) => handleFieldNotesChange("roofConditionNotes", e.target.value)}
+            />
+          </Field>
+          <Field label="Access notes">
+            <textarea
+              rows="4"
+              value={fieldNotes.accessNotes}
+              onChange={(e) => handleFieldNotesChange("accessNotes", e.target.value)}
+            />
+          </Field>
+          <Field label="Safety concerns">
+            <textarea
+              rows="4"
+              value={fieldNotes.safetyConcerns}
+              onChange={(e) => handleFieldNotesChange("safetyConcerns", e.target.value)}
+            />
+          </Field>
+          <Field label="Parapet notes">
+            <textarea
+              rows="4"
+              value={fieldNotes.parapetNotes}
+              onChange={(e) => handleFieldNotesChange("parapetNotes", e.target.value)}
+            />
+          </Field>
+        </div>
+
+        <div className="formGrid" style={{ marginTop: 12 }}>
+          <Field label="Photos upload">
+            <input type="file" accept="image/*" multiple onChange={handleFieldNotesPhotosChange} />
+            <em>{fieldNotes.photos.length ? `${fieldNotes.photos.length} photo(s) attached.` : "Attach inspection photos for the record."}</em>
+          </Field>
+          <Field label="Internal notes">
+            <textarea
+              rows="4"
+              value={fieldNotes.internalNotes}
+              onChange={(e) => handleFieldNotesChange("internalNotes", e.target.value)}
+            />
+          </Field>
+        </div>
+
+        {fieldNotes.photos.length ? (
+          <div className="detailList" style={{ marginTop: 14 }}>
+            {fieldNotes.photos.map((photo, index) => (
+              <div className="detailRow" key={`${photo.name || "photo"}-${index}`}>
+                <span>Photo {index + 1}</span>
+                <strong>{photo.name || `Image ${index + 1}`}</strong>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="actionRow" style={{ marginTop: 16 }}>
+          <button type="button" className="primaryButton" onClick={handleSaveInspection}>
+            Save Inspection
+          </button>
+          <button type="button" className="secondaryButton" onClick={() => setInspectionTemplateChooserOpen((current) => !current)}>
+            Create Estimate From Inspection
+          </button>
+        </div>
+      </Section>
+
+      {inspectionTemplateChooserOpen ? (
+        <Section title="Create estimate from inspection" subtitle="Choose the template to transfer this inspection into.">
+          <div className="templateGrid">
+            {FIELD_NOTE_TEMPLATE_OPTIONS.map((template) => (
+              <button
+                type="button"
+                key={template.key}
+                className="templateCard"
+                onClick={() => handleCreateEstimateFromInspection(template.key)}
+              >
+                <span className="eyebrow">{template.estimateType}</span>
+                <strong>{template.title}</strong>
+                <p>Transfer the inspection details into this template.</p>
+              </button>
+            ))}
+          </div>
+          <div className="actionRow" style={{ marginTop: 16 }}>
+            <button type="button" className="secondaryButton" onClick={() => setInspectionTemplateChooserOpen(false)}>
+              Cancel
+            </button>
+          </div>
+        </Section>
+      ) : null}
+
+      <Section title="Saved inspections" subtitle="Recent inspections saved on this browser.">
+        <div className="savedList">
+          {savedInspections.length ? (
+            savedInspections.map((inspection) => (
+              <div className="savedCard" key={inspection.id}>
+                <div>
+                  <span className="eyebrow">{inspection.date || "No date"}</span>
+                  <strong>{inspection.jobName || "Untitled inspection"}</strong>
+                  <p>
+                    {inspection.customerName ? `${inspection.customerName} | ` : ""}
+                    {inspection.jobAddress ? `${inspection.jobAddress} | ` : ""}
+                    {inspection.technicianName ? `${inspection.technicianName}` : "No technician"}
+                  </p>
+                </div>
+                <div className="savedActions">
+                  <button type="button" className="secondaryButton" onClick={() => handleLoadInspection(inspection)}>
+                    Load
+                  </button>
+                  <button type="button" className="dangerButton" onClick={() => handleDeleteInspection(inspection.id)}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="emptyState">No saved inspections yet.</p>
+          )}
+        </div>
+      </Section>
+    </div>
+  );
+
+  const renderAdminPricingScreen = () => (
+    <div className="appShell">
+      <style>{css}</style>
+      <header className="hero">
+        <div>
+          <div className="brandRow">
+            <div className="brandMark">
+              <img src={LOGO_SRC} alt="CRT Roofing logo" />
+            </div>
+            <div>
+              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <h1>Admin Pricing &amp; Defaults</h1>
+              <p className="intro">Local settings only for now.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="heroCard">
+          <span>Signed in</span>
+          <strong>{authUser.displayName}</strong>
+          <p>Local mode only</p>
+        </div>
+      </header>
+
+      <div className="actionRow" style={{ marginBottom: 16 }}>
+        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+          Back to dashboard
+        </button>
+      </div>
+
+      <Section title="Materials" subtitle="Pricing foundation for material defaults.">
+        <div className="formGrid">
+          {ADMIN_PRICING_SECTIONS.materials.map(([key, label]) => (
+            <Field key={key} label={label}>
+              <input type="number" min="0" step="0.01" value={adminPricing[key]} onChange={(e) => setAdminPricingField(key, e.target.value)} />
+            </Field>
+          ))}
+        </div>
+      </Section>
+
+      <Section title="Labor" subtitle="Pricing foundation for labor defaults.">
+        <div className="formGrid">
+          {ADMIN_PRICING_SECTIONS.labor.map(([key, label]) => (
+            <Field key={key} label={label}>
+              <input type="number" min="0" step="0.01" value={adminPricing[key]} onChange={(e) => setAdminPricingField(key, e.target.value)} />
+            </Field>
+          ))}
+        </div>
+      </Section>
+
+      <Section title="Company Defaults" subtitle="General defaults for future estimate templates.">
+        <div className="formGrid">
+          {ADMIN_PRICING_SECTIONS.companyDefaults.map(([key, label]) => (
+            <Field key={key} label={label}>
+              <input type="number" min="0" step="0.01" value={adminPricing[key]} onChange={(e) => setAdminPricingField(key, e.target.value)} />
+            </Field>
+          ))}
+        </div>
+      </Section>
+    </div>
+  );
+
+  const renderEstimateTemplatesScreen = () => (
+    <div className="appShell">
+      <style>{css}</style>
+      <header className="hero">
+        <div>
+          <div className="brandRow">
+            <div className="brandMark">
+              <img src={LOGO_SRC} alt="CRT Roofing logo" />
+            </div>
+            <div>
+              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <h1>Estimate Templates</h1>
+              <p className="intro">Choose the estimate template you want to build.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="heroCard">
+          <span>Signed in</span>
+          <strong>{authUser.displayName}</strong>
+          <p>Local mode only</p>
+        </div>
+      </header>
+
+      <div className="actionRow" style={{ marginBottom: 16 }}>
+        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+          Back to dashboard
+        </button>
+      </div>
 
       <Section title="Templates" subtitle="Pick the estimate type you want to build.">
         <div className="templateGrid">
@@ -2099,6 +2942,94 @@ function App() {
               <p>{card.comingSoon ? "Coming Soon" : "Open template"}</p>
             </button>
           ))}
+        </div>
+        <div className="actionRow" style={{ marginTop: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
+            Admin Pricing
+          </button>
+        </div>
+      </Section>
+
+      <Section title="Saved estimates" subtitle="Recent estimates in this browser.">
+        <div className="savedList">
+          {activeSavedEstimates.length ? (
+            activeSavedEstimates.map((estimate) => (
+              <div className="savedCard" key={estimate.id}>
+                <div>
+                  <span className="eyebrow">{estimate.estimateCode || estimateCode(estimate.estimateNumber || 1)}</span>
+                  <strong>{estimate.name || "Untitled estimate"}</strong>
+                  <p>
+                    {estimate.estimateType ? `${estimate.estimateType} | ` : ""}
+                    {estimate.inputs?.jobName ? `${estimate.inputs.jobName} | ` : ""}
+                    {estimate.inputs?.customerName ? `${estimate.inputs.customerName} | ` : ""}
+                    {num(estimate.summary?.totalSquares ?? estimate.inputs?.totalSquares ?? 0, 0)} SQ |{" "}
+                    {money(estimate.summary?.selectedBidAmount ?? 0)} bid |{" "}
+                    {num(estimate.summary?.selectedMarkupPercent ?? 0, 0)}% markup
+                  </p>
+                </div>
+
+                <div className="savedActions">
+                  <button type="button" className="secondaryButton" onClick={() => handleLoadEstimate(estimate)}>
+                    Load
+                  </button>
+                  <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate.id)}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="emptyState">No saved estimates yet.</p>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Admin" subtitle="Pricing and default settings.">
+        <div className="actionRow">
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
+            Admin Pricing
+          </button>
+        </div>
+      </Section>
+    </div>
+  );
+
+  const renderDashboard = () => (
+    <div className="appShell">
+      <style>{css}</style>
+      <header className="hero">
+        <div>
+          <div className="brandRow">
+            <div className="brandMark">
+              <img src={LOGO_SRC} alt="CRT Roofing logo" />
+            </div>
+            <div>
+              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <h1>Dashboard</h1>
+              <p className="intro">Choose how you want to start your work.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="heroCard">
+          <span>Signed in</span>
+          <strong>{authUser.displayName}</strong>
+          <p>Local mode only</p>
+        </div>
+      </header>
+
+      <Section title="Workflows" subtitle="Pick a starting point.">
+        <div className="templateGrid">
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("fieldNotes")}>
+            <span className="eyebrow">Inspection</span>
+            <strong>Field Notes / Roof Inspection</strong>
+            <p>Capture the roof details before bidding.</p>
+          </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("estimateTemplates")}>
+            <span className="eyebrow">Templates</span>
+            <strong>Estimate Templates</strong>
+            <p>Open TPO and future estimate templates.</p>
+          </button>
         </div>
       </Section>
 
@@ -2194,12 +3125,15 @@ function App() {
     return renderDashboard();
   }
 
+  if (activeTemplate === "fieldNotes") return renderFieldNotesScreen();
+  if (activeTemplate === "estimateTemplates") return renderEstimateTemplatesScreen();
   if (activeTemplate === "sprayFoam") return renderTemplateScreen("Spray Foam Estimate");
   if (activeTemplate === "tile") return renderTemplateScreen("Tile Estimate");
   if (activeTemplate === "shingle") return renderTemplateScreen("Shingle Estimate");
   if (activeTemplate === "coating") return renderTemplateScreen("Coating Estimate");
   if (activeTemplate === "maintenance") return renderMaintenanceScreen();
   if (activeTemplate === "repair") return renderTemplateScreen("Repair / Service Estimate");
+  if (activeTemplate === "adminPricing") return renderAdminPricingScreen();
 
   return (
     <div className="appShell">
@@ -3024,6 +3958,12 @@ function App() {
           <DetailRow label="Selected price per SQ" value={money2(calculation.selectedPricePerSq)} />
           <DetailRow label="Selected profit dollars" value={money(calculation.selectedProfitDollars)} />
         </div>
+
+        <div className="actionRow" style={{ marginTop: 16 }}>
+          <button type="button" className="primaryButton" onClick={handleDownloadEstimatePDF}>
+            Download Estimate PDF
+          </button>
+        </div>
       </Section>
 
       <Section title="Saved estimates" subtitle="Load or delete anything you saved in this browser.">
@@ -3193,6 +4133,12 @@ function App() {
               {num(calculation.selectedMarkupPercent, 0)}% markup and {money2(calculation.selectedPricePerSq)} per SQ.
             </p>
           </div>
+        </div>
+
+        <div className="actionRow" style={{ marginTop: 16 }}>
+          <button type="button" className="primaryButton" onClick={handleDownloadEstimatePDF}>
+            Download Estimate PDF
+          </button>
         </div>
 
         {sessionMessage ? <p className="statusMessage">{sessionMessage}</p> : null}
