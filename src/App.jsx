@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLoadScript } from "@react-google-maps/api";
+import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
 
 const AUTH_KEY = "crt_roofing_auth_v1";
 const USERS_KEY = "crt_roofing_users_v1";
@@ -204,6 +204,10 @@ const MATERIAL_PRICE_FIELDS = [
 
 const LOGO_SRC = "/crt-logo-white-letters.png";
 
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 const DEFAULT_INPUTS = {
   totalSquares: 100,
   fieldSquares: 100,
@@ -309,6 +313,7 @@ const DEFAULT_INPUTS = {
   selectedMarkupPercent: 30,
   ...DEFAULT_MATERIAL_PRICES,
 
+  estimateStatus: "draft",
   estimateName: "",
 };
 
@@ -492,6 +497,11 @@ h1{
   color:#02111b;
 }
 .statusMessage{margin:10px 0 0; color:var(--good); font-weight:700}
+.statusTag{display:inline-flex; align-items:center; gap:6px; padding:.35em .75em; border-radius:999px; font-size:.76rem; letter-spacing:.08em; text-transform:uppercase; font-weight:800; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08); color:var(--ink)}
+.statusTag-draft{background:rgba(82,224,255,.12); border-color:rgba(82,224,255,.24); color:#7ad9ff}
+.statusTag-sent{background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.18); color:#adc8d4}
+.statusTag-approved{background:rgba(79,255,145,.12); border-color:rgba(79,255,145,.28); color:#9ef8a8}
+.statusTag-completed{background:rgba(142,110,255,.14); border-color:rgba(142,110,255,.32); color:#d1b9ff}
 .dangerMessage{color:#ff8f9e}
 .emptyState{margin:0; color:#9fc0cf}
 .savedList{display:grid; gap:12px}
@@ -599,6 +609,177 @@ function removeKey(key) {
   }
 }
 
+function buildEstimateRoofType(inputs = {}) {
+  if (inputs.substrateType) {
+    const option = SUBSTRATE_OPTIONS.find((item) => item.value === inputs.substrateType);
+    return option?.label || inputs.substrateType;
+  }
+  if (inputs.existingRoofAction) {
+    const option = EXISTING_ROOF_OPTIONS.find((item) => item.value === inputs.existingRoofAction);
+    return option?.label || inputs.existingRoofAction;
+  }
+  if (inputs.jobType) {
+    const option = JOB_TYPE_OPTIONS.find((item) => item.value === inputs.jobType);
+    return option?.label || inputs.jobType;
+  }
+  return "TPO";
+}
+
+function mapEstimateRow(row) {
+  if (!row) return null;
+  const estimateData = row.estimate_data || {};
+  return {
+    id: row.local_estimate_id || row.id,
+    estimateNumber: row.estimate_number,
+    estimateCode: row.estimate_code,
+    estimateType: row.estimate_type,
+    name: row.name,
+    savedAt: row.saved_at,
+    status: row.estimate_status || row.status || "draft",
+    inputs: estimateData.inputs || row.inputs || {},
+    prices: estimateData.prices || row.prices || {},
+    summary: estimateData.summary || row.summary || {},
+  };
+}
+
+function mapCompletedJobRow(row) {
+  if (!row) return null;
+  return {
+    id: row.local_estimate_id || row.id,
+    estimateId: row.estimate_id || row.local_estimate_id,
+    estimateCode: row.estimate_code,
+    customerName: row.customer_name,
+    jobAddress: row.job_address,
+    roofType: row.roof_type,
+    squareCount: row.square_count,
+    finalBid: row.final_bid,
+    laborCost: row.labor_cost,
+    materialsCost: row.materials_cost,
+    profit: row.profit,
+    status: row.status,
+    savedAt: row.saved_at,
+  };
+}
+
+async function fetchSavedEstimatesFromSupabase(userKey) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  return supabase
+    .from("estimates")
+    .select("*")
+    .eq("user_key", userKey)
+    .order("saved_at", { ascending: false });
+}
+
+async function fetchCompletedJobsFromSupabase(userKey) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  return supabase
+    .from("completed_jobs")
+    .select("*")
+    .eq("user_key", userKey)
+    .order("saved_at", { ascending: false });
+}
+
+function parseSupabaseMissingColumnError(error) {
+  if (!error?.message) return [];
+  const missing = [];
+  const regex1 = /column .*?\.(\w+) does not exist/i;
+  const regex2 = /Could not find the '(.+?)' column of '.*?' in the schema cache/i;
+  const match1 = regex1.exec(error.message);
+  const match2 = regex2.exec(error.message);
+  if (match1) missing.push(match1[1]);
+  if (match2) missing.push(match2[1]);
+  return missing;
+}
+
+async function insertOrUpdateEstimate(dbRow, userKey) {
+  if (!dbRow.local_estimate_id) return { data: null, error: new Error("Missing local_estimate_id") };
+  const { data: existing, error: queryError } = await supabase
+    .from("estimates")
+    .select("id")
+    .eq("user_key", userKey)
+    .eq("local_estimate_id", dbRow.local_estimate_id)
+    .limit(1);
+  if (queryError) return { data: null, error: queryError };
+  if (existing && existing.length > 0) {
+    const estimateId = existing[0].id;
+    return supabase.from("estimates").update(dbRow).eq("id", estimateId).select("*");
+  }
+  return supabase.from("estimates").insert([dbRow]).select("*");
+}
+
+async function upsertRowWithMissingColumnFallback(table, row, onConflict) {
+  let payload = { ...row };
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { data, error } = await supabase.from(table).upsert([payload], { onConflict }).select("*");
+    if (!error) return { data, error: null };
+
+    lastError = error;
+    const missingColumns = parseSupabaseMissingColumnError(error);
+    if (!missingColumns.length) return { data: null, error };
+
+    missingColumns.forEach((column) => {
+      delete payload[column];
+    });
+  }
+
+  return { data: null, error: lastError };
+}
+
+async function upsertEstimateToSupabase(savedEstimate, inputs, prices, summary, calculation, userKey) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: new Error("Supabase not configured") };
+  const dbRow = {
+    user_key: userKey,
+    local_estimate_id: savedEstimate.id,
+    estimate_number: savedEstimate.estimateNumber,
+    estimate_code: savedEstimate.estimateCode,
+    estimate_type: savedEstimate.estimateType,
+    name: savedEstimate.name,
+    saved_at: savedEstimate.savedAt,
+    updated_at: new Date().toISOString(),
+    final_bid: calculation.selectedBidAmount,
+    selected_bid: calculation.selectedBidAmount,
+    material_cost: calculation.materialCost,
+    labor_cost: calculation.laborCost,
+    travel_cost: calculation.travelCost,
+    overhead_cost: calculation.overheadOperatingCost,
+    total_squares: calculation.scope.totalSquares,
+    price_per_square: calculation.selectedPricePerSq,
+    roof_type: buildEstimateRoofType(inputs),
+    estimate_status: savedEstimate.status,
+    estimate_data: { inputs, prices, summary },
+  };
+  return insertOrUpdateEstimate(dbRow, userKey);
+}
+
+async function deleteEstimateFromSupabase(estimateId, userKey) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { error: null };
+  return supabase.from("estimates").delete().eq("user_key", userKey).eq("local_estimate_id", estimateId);
+}
+
+async function upsertCompletedJobToSupabase(savedEstimate, inputs, calculation, userKey) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || savedEstimate.status !== "completed") return { data: null, error: null };
+  const dbRow = {
+    id: savedEstimate.id,
+    user_key: userKey,
+    estimate_id: savedEstimate.id,
+    estimate_code: savedEstimate.estimateCode,
+    job_name: inputs.jobName || "",
+    customer_name: inputs.customerName || "",
+    job_address: inputs.jobAddress || "",
+    roof_type: buildEstimateRoofType(inputs),
+    square_count: calculation.scope.totalSquares,
+    final_bid: calculation.selectedBidAmount,
+    labor_cost: calculation.laborCost,
+    materials_cost: calculation.materialCost,
+    profit: calculation.selectedProfitDollars,
+    status: savedEstimate.status,
+    saved_at: savedEstimate.savedAt,
+  };
+  return upsertRowWithMissingColumnFallback("completed_jobs", dbRow, "estimate_id");
+}
+
 function toNumber(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -636,10 +817,6 @@ function formatHoursMinutes(value) {
   if (hours <= 0) return `${minutes} min`;
   if (minutes <= 0) return `${hours} hr`;
   return `${hours} hr ${minutes} min`;
-}
-
-function clamp(value, min = 0, max = Number.POSITIVE_INFINITY) {
-  return Math.min(max, Math.max(min, value));
 }
 
 function normalizeSubcontractorAddOnItems(items) {
@@ -1771,6 +1948,7 @@ function App() {
   const [loginSecret, setLoginSecret] = useState("");
   const [loginError, setLoginError] = useState("");
   const [sessionMessage, setSessionMessage] = useState("");
+  const [sessionMessageType, setSessionMessageType] = useState("");
   const [travelLookupMessage, setTravelLookupMessage] = useState("");
   const [isLookingUpDistance, setIsLookingUpDistance] = useState(false);
   const [googleDebug, setGoogleDebug] = useState({
@@ -1803,10 +1981,8 @@ function App() {
     return draft?.estimateName || "";
   });
 
-  const [savedEstimates, setSavedEstimates] = useState(() => {
-    if (!authUser?.key) return [];
-    return readJson(SAVED_KEY(authUser.key), []);
-  });
+  const [savedEstimates, setSavedEstimates] = useState([]);
+  const [completedJobs, setCompletedJobs] = useState([]);
   const [fieldNotes, setFieldNotes] = useState(() => normalizeFieldNotes(readJson(FIELD_NOTES_DRAFT_KEY(authUser?.key || "guest"), DEFAULT_FIELD_NOTES)));
   const [savedInspections, setSavedInspections] = useState(() => {
     if (!authUser?.key) return [];
@@ -1867,6 +2043,40 @@ function App() {
     if (!authUser?.key) return;
     writeJson(INSPECTIONS_KEY(authUser.key), savedInspections);
   }, [authUser, savedInspections]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    let active = true;
+
+    const loadRemoteEstimateData = async () => {
+      const { data: savedData, error: savedError } = await fetchSavedEstimatesFromSupabase(authUser.key);
+      if (!active) return;
+      if (!savedError && Array.isArray(savedData)) {
+        const estimates = savedData.map(mapEstimateRow).filter(Boolean);
+        setSavedEstimates(estimates);
+        const highest = Math.max(0, ...estimates.map((estimate) => Number(estimate.estimateNumber) || 0));
+        setNextEstimateNumber(Math.max(1, highest + 1));
+      } else {
+        const fallback = readJson(SAVED_KEY(authUser.key), []);
+        setSavedEstimates(fallback);
+        console.warn("Supabase estimates load failed:", savedError?.message || savedError);
+      }
+
+      const { data: completedData, error: completedError } = await fetchCompletedJobsFromSupabase(authUser.key);
+      if (!active) return;
+      if (!completedError && Array.isArray(completedData)) {
+        setCompletedJobs(completedData.map(mapCompletedJobRow).filter(Boolean));
+      } else {
+        setCompletedJobs([]);
+        if (completedError) console.warn("Supabase completed jobs load failed:", completedError?.message || completedError);
+      }
+    };
+
+    loadRemoteEstimateData();
+    return () => {
+      active = false;
+    };
+  }, [authUser?.key]);
 
   useEffect(() => {
     writeJson(ADMIN_PRICING_KEY, adminPricing);
@@ -2306,11 +2516,19 @@ function App() {
     setSessionMessage("Signed out.");
   };
 
-  const handleSaveEstimate = () => {
-    if (!authUser?.key) return;
+  const handleSaveEstimate = async () => {
+    if (!authUser?.key) {
+      setSessionMessageType("error");
+      setSessionMessage("Please sign in before saving an estimate.");
+      return;
+    }
+
+    setSessionMessageType("");
+    setSessionMessage("Saving estimate...");
 
     const estimateNumber = nextEstimateNumber;
     const estimateCodeValue = estimateCode(estimateNumber);
+    const status = String(inputs.estimateStatus || "draft").toLowerCase();
 
     const savedEstimate = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -2319,6 +2537,7 @@ function App() {
       estimateType: estimateTypeForTemplate(activeTemplate),
       name: currentEstimateName,
       savedAt: new Date().toISOString(),
+      status,
       inputs,
       prices,
       summary: {
@@ -2336,26 +2555,65 @@ function App() {
       },
     };
 
-    const nextSaved = [savedEstimate, ...activeSavedEstimates];
-    setSavedEstimates(nextSaved);
-    writeJson(SAVED_KEY(authUser.key), nextSaved);
+    try {
+          const { data, error } = await upsertEstimateToSupabase(
+        savedEstimate,
+        inputs,
+        prices,
+        savedEstimate.summary,
+        calculation,
+        authUser.key,
+      );
 
-    const updatedUsers = {
-      ...users,
-      [authUser.key]: {
-        ...(users[authUser.key] || {
-          key: authUser.key,
-          displayName: authUser.displayName,
-          secret: "",
-          nextEstimateNumber: 1,
-        }),
-        nextEstimateNumber: estimateNumber + 1,
-      },
-    };
-    setUsers(updatedUsers);
-    setNextEstimateNumber(estimateNumber + 1);
+      const savedRow = Array.isArray(data) ? mapEstimateRow(data[0]) : mapEstimateRow(data?.[0]);
+      const persistedEstimate = savedRow ?? savedEstimate;
+      const nextSaved = [persistedEstimate, ...activeSavedEstimates.filter((item) => item.id !== persistedEstimate.id)];
+      setSavedEstimates(nextSaved);
+      writeJson(SAVED_KEY(authUser.key), nextSaved);
 
-    setSessionMessage(`Saved ${estimateCodeValue}.`);
+      if (error) {
+        const cloudErrorMessage = error.message || String(error);
+        console.warn("Supabase save failed:", cloudErrorMessage);
+        setSessionMessageType("error");
+        setSessionMessage(`Save failed: ${cloudErrorMessage}. Saved ${estimateCodeValue} locally.`);
+      } else {
+        setSessionMessageType("success");
+        setSessionMessage(`Saved to cloud: ${estimateCodeValue}.`);
+      }
+
+      if (persistedEstimate.status === "completed") {
+        const { error: completedError, data: completedData } = await upsertCompletedJobToSupabase(
+          persistedEstimate,
+          inputs,
+          calculation,
+          authUser.key,
+        );
+        if (!completedError && Array.isArray(completedData)) {
+          setCompletedJobs(completedData.map(mapCompletedJobRow).filter(Boolean));
+        }
+        if (completedError) {
+          console.warn("Completed job sync failed:", completedError.message || completedError);
+        }
+      }
+
+      const updatedUsers = {
+        ...users,
+        [authUser.key]: {
+          ...(users[authUser.key] || {
+            key: authUser.key,
+            displayName: authUser.displayName,
+            secret: "",
+            nextEstimateNumber: 1,
+          }),
+          nextEstimateNumber: estimateNumber + 1,
+        },
+      };
+      setUsers(updatedUsers);
+      setNextEstimateNumber(estimateNumber + 1);
+    } catch (error) {
+      console.error("handleSaveEstimate failed:", error);
+      setSessionMessage(`Save failed: ${error?.message || String(error)}`);
+    }
   };
 
   const handleLoadEstimate = (estimate) => {
@@ -2477,11 +2735,17 @@ function App() {
     setSessionMessage(`Created ${templateKey} estimate from inspection.`);
   };
 
-  const handleDeleteEstimate = (estimateId) => {
+  const handleDeleteEstimate = async (estimateId) => {
     if (!authUser?.key) return;
     const next = activeSavedEstimates.filter((item) => item.id !== estimateId);
     setSavedEstimates(next);
-    writeJson(SAVED_KEY(authUser.key), next);
+    setCompletedJobs((current) => current.filter((job) => job.estimateId !== estimateId));
+
+    const { error } = await deleteEstimateFromSupabase(estimateId, authUser.key);
+    if (error) {
+      console.warn("Supabase delete failed:", error.message || error);
+    }
+
     setSessionMessage("Saved estimate deleted.");
   };
 
@@ -3966,13 +4230,18 @@ function App() {
         </div>
       </Section>
 
-      <Section title="Saved estimates" subtitle="Load or delete anything you saved in this browser.">
+      <Section title="Saved estimates" subtitle="Load or delete anything you saved in Supabase.">
         <div className="savedList">
           {activeSavedEstimates.length ? (
             activeSavedEstimates.map((estimate) => (
               <div className="savedCard" key={estimate.id}>
                 <div>
-                  <span className="eyebrow">{estimate.estimateCode || estimateCode(estimate.estimateNumber || 1)}</span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                    <span className="eyebrow">{estimate.estimateCode || estimateCode(estimate.estimateNumber || 1)}</span>
+                    <span className={`statusTag statusTag-${(estimate.status || "draft").toLowerCase()}`}>
+                      {String(estimate.status || "draft").toUpperCase()}
+                    </span>
+                  </div>
                   <strong>{estimate.name || "Untitled estimate"}</strong>
                   <p>
                     {estimate.estimateType ? `${estimate.estimateType} | ` : ""}
@@ -3996,6 +4265,33 @@ function App() {
             ))
           ) : (
             <p className="emptyState">No saved estimates yet.</p>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Completed jobs" subtitle="Track jobs marked completed in Supabase.">
+        <div className="savedList">
+          {completedJobs.length ? (
+            completedJobs.map((job) => (
+              <div className="savedCard" key={job.id}>
+                <div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                    <span className="eyebrow">{job.estimateCode || "Completed Job"}</span>
+                    <span className={`statusTag statusTag-${(job.status || "completed").toLowerCase()}`}>
+                      {String(job.status || "completed").toUpperCase()}
+                    </span>
+                  </div>
+                  <strong>{job.customerName || "Unknown customer"}</strong>
+                  <p>
+                    {job.jobAddress ? `${job.jobAddress} | ` : ""}
+                    {job.roofType ? `${job.roofType} | ` : ""}
+                    {num(job.squareCount ?? 0, 0)} SQ | {money(job.finalBid ?? 0)} bid
+                  </p>
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="emptyState">No completed jobs yet.</p>
           )}
         </div>
       </Section>
@@ -4098,7 +4394,7 @@ function App() {
 
       <Section
         title="Save Estimate"
-        subtitle="Local save/load/delete. The current estimate stays in this browser profile."
+        subtitle="Save and load estimates through Supabase for cross-device persistence."
         right={
           <div className="actionRow">
             <button type="button" className="primaryButton" onClick={handleSaveEstimate}>
@@ -4118,6 +4414,18 @@ function App() {
               onChange={(e) => setEstimateName(e.target.value)}
               placeholder={buildEstimateName(inputs)}
             />
+          </Field>
+
+          <Field label="Estimate status">
+            <select
+              value={inputs.estimateStatus || "draft"}
+              onChange={(e) => setField("estimateStatus", e.target.value)}
+            >
+              <option value="draft">Draft</option>
+              <option value="sent">Sent</option>
+              <option value="approved">Approved</option>
+              <option value="completed">Completed</option>
+            </select>
           </Field>
 
           <div className="summaryCard">
@@ -4141,7 +4449,11 @@ function App() {
           </button>
         </div>
 
-        {sessionMessage ? <p className="statusMessage">{sessionMessage}</p> : null}
+        {sessionMessage ? (
+          <p className={`statusMessage ${sessionMessageType === "error" ? "dangerMessage" : ""}`}>
+            {sessionMessage}
+          </p>
+        ) : null}
       </Section>
 
       <Section title="Missing Scope Checklist" subtitle="Clear these items before you treat the bid as final.">
