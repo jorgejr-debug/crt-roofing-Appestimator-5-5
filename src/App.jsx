@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import React from "react";
 import { useLoadScript } from "@react-google-maps/api";
 import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
+import { getDocument, GlobalWorkerOptions } from "pdfjs-dist/build/pdf.mjs";
+import pdfWorkerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+
+GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
 const AUTH_KEY = "crt_roofing_auth_v1";
 const USERS_KEY = "crt_roofing_users_v1";
@@ -9,7 +14,33 @@ const DRAFT_KEY = (userKey) => `crt_roofing_draft_v1:${userKey}`;
 const SAVED_KEY = (userKey) => `crt_roofing_saved_v1:${userKey}`;
 const FIELD_NOTES_DRAFT_KEY = (userKey) => `crt_roofing_field_notes_draft_v1:${userKey}`;
 const INSPECTIONS_KEY = (userKey) => `crt_roofing_inspections_v1:${userKey}`;
+const FIELD_DAILY_LOG_DRAFT_KEY = (userKey) => `crt_roofing_field_daily_log_draft_v1:${userKey}`;
+const FIELD_DAILY_LOGS_KEY = (userKey) => `crt_roofing_field_daily_logs_v1:${userKey}`;
+const FIELD_DAILY_LOG_DEVICE_KEY = "crt_roofing_field_daily_log_device_identifier_v1";
+const FIELD_DAILY_LOG_PHOTO_BUCKET = "field-daily-log-photos";
+const FIELD_OPERATION_EMPLOYEES_KEY = (userKey) => `crt_roofing_field_operation_employees_v1:${userKey}`;
+const FIELD_OPERATION_COMPANY_VEHICLES_KEY = (userKey) => `crt_roofing_field_operation_company_vehicles_v1:${userKey}`;
+const FIELD_DAILY_LOG_HIGH_MILEAGE_THRESHOLD = 300;
 const ADMIN_PRICING_KEY = "crt_roofing_admin_pricing_v1";
+const COMPLETED_JOBS_KEY = (userKey) => `crt_roofing_completed_jobs_v1:${userKey}`;
+const PROPOSALS_KEY = (userKey) => `crt_roofing_proposals_v1:${userKey}`;
+const PROPOSAL_TEMPLATE_KEY = (userKey) => `crt_roofing_proposal_template_v1:${userKey}`;
+const CFO_LIQUID_CASH_KEY = (userKey) => `crt_roofing_cfo_liquid_cash_v1:${userKey}`;
+const CFO_RECEIVABLES_KEY = (userKey) => `crt_roofing_cfo_receivables_v1:${userKey}`;
+const CFO_MANUAL_ENTRIES_KEY = (userKey) => `crt_roofing_cfo_manual_entries_v1:${userKey}`;
+const CRM_LEADS_KEY = (userKey) => `crt_roofing_crm_leads_v1:${userKey}`;
+const CRM_CUSTOMERS_KEY = (userKey) => `crt_roofing_crm_customers_v1:${userKey}`;
+const CRM_FOLLOWUPS_KEY = (userKey) => `crt_roofing_crm_followups_v1:${userKey}`;
+const CFO_MANUAL_CARD_KEYS = [
+  "proposalsSent",
+  "approvedJobs",
+  "customerOverdue",
+  "supplierTotalsPayable",
+  "supplierOverdue",
+  "subcontractorPayables",
+  "grossProfit",
+  "accountsPayable",
+];
 
 const JOB_TYPE_OPTIONS = [
   { value: "existingRoof", label: "Existing Roof" },
@@ -53,6 +84,17 @@ const LICENSE_OPTIONS = [
 
 const MARKUP_OPTIONS = [30, 35, 40, 45, 50, 55, 60];
 const OVERHEAD_OPERATING_RATE = 17.5;
+const FUEL_COST_PER_GALLON = 6.25;
+const DEFAULT_TRAVEL_VEHICLE_KEY = "isuzu2020FoamTruck";
+const TRAVEL_VEHICLE_OPTIONS = [
+  { value: "isuzu2020FoamTruck", label: "Isuzu 2020 Foam Truck", mpg: 12 },
+  { value: "f250ServiceTruck", label: "F-250 Service Truck", mpg: 14 },
+  { value: "f150Sales", label: "F-150 Sales", mpg: 17 },
+  { value: "silverado2020", label: "Silverado 2020", mpg: 16.5 },
+  { value: "f450Flatbed", label: "F-450 Flatbed", mpg: 15 },
+  { value: "tacomaSales", label: "Tacoma Sales", mpg: 19 },
+  { value: "ford2015FoamTruck", label: "Ford 2015 Foam Truck", mpg: 12 },
+];
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 
 const DEFAULT_MATERIAL_PRICES = {
@@ -113,9 +155,9 @@ const DEFAULT_FIELD_NOTES = {
 
 const TEMPLATE_CARDS = [
   { key: "tpo", title: "TPO Estimate", estimateType: "TPO", comingSoon: false },
-  { key: "sprayFoam", title: "Spray Foam Estimate", estimateType: "Spray Foam", comingSoon: true },
-  { key: "tile", title: "Tile Estimate", estimateType: "Tile", comingSoon: true },
-  { key: "shingle", title: "Shingle Estimate", estimateType: "Shingle", comingSoon: true },
+  { key: "sprayFoam", title: "Spray Foam Estimate", estimateType: "Spray Foam", comingSoon: false },
+  { key: "tile", title: "Tile Estimate", estimateType: "Tile", comingSoon: false },
+  { key: "shingle", title: "Shingle Estimate", estimateType: "Shingle", comingSoon: false },
   { key: "coating", title: "Coating Estimate", estimateType: "Coating", comingSoon: true },
   { key: "maintenance", title: "Maintenance", estimateType: "Maintenance", comingSoon: true },
   { key: "repair", title: "Repair / Service Estimate", estimateType: "Repair / Service", comingSoon: true },
@@ -128,6 +170,198 @@ const FIELD_NOTE_TEMPLATE_OPTIONS = [
   { key: "sprayFoam", title: "Spray Foam", estimateType: "Spray Foam" },
   { key: "maintenance", title: "Maintenance", estimateType: "Maintenance" },
 ];
+
+const FIELD_DAILY_LOG_PHOTO_CATEGORIES = [
+  { value: "before", label: "Before-work photos" },
+  { value: "progress", label: "Progress photos" },
+  { value: "completed", label: "Completed-work photos" },
+  { value: "problem", label: "Problem / damage photos" },
+];
+
+const ACTIVE_JOB_STATUS_OPTIONS = [
+  "Scheduled",
+  "Pre-construction",
+  "Active",
+  "Punch list",
+  "On hold",
+  "Warranty",
+  "Completed",
+  "Closed",
+];
+
+const ACTIVE_JOB_RISK_LEVELS = ["Normal", "Needs attention", "Critical"];
+
+const ACTIVE_JOB_ISSUE_CATEGORIES = [
+  "Leak",
+  "Overspray",
+  "Vehicle damage",
+  "Property damage",
+  "Noise",
+  "Parking",
+  "Access",
+  "Dust or debris",
+  "Scheduling",
+  "Safety",
+  "Warranty",
+  "Billing",
+  "Other",
+];
+
+const ACTIVE_JOB_ISSUE_PRIORITIES = ["Low", "Normal", "High", "Emergency"];
+
+const ACTIVE_JOB_ISSUE_STATUSES = [
+  "New",
+  "Acknowledged",
+  "Assigned",
+  "In progress",
+  "Waiting on customer",
+  "Waiting on third party",
+  "Resolved",
+  "Closed",
+];
+
+const APPROVED_JOB_STATUS_OPTIONS = [
+  "Approved",
+  "Pre-construction",
+  "Permit pending",
+  "Materials pending",
+  "Subcontractor coordination",
+  "Ready to schedule",
+  "Scheduled",
+  "Mobilizing",
+  "Active",
+  "On hold",
+  "Completed",
+  "Closed",
+];
+
+const PROPOSAL_STATUS_OPTIONS = [
+  "Draft",
+  "Needs review",
+  "Approved to send",
+  "Sent",
+  "Viewed",
+  "Customer requested revision",
+  "Accepted",
+  "Declined",
+  "Expired",
+  "Superseded",
+];
+
+const PROPOSAL_ACCEPTANCE_STATUS_OPTIONS = ["Pending", "Viewed", "Accepted", "Declined", "Needs revision", "Expired"];
+const PROPOSAL_SIGNATURE_STATUS_OPTIONS = ["Unsigned", "Requested", "Signed", "Declined"];
+const PROPOSAL_VIEW_STATUS_OPTIONS = ["Not viewed", "Viewed"];
+
+const DEFAULT_PROPOSAL_TEMPLATE = {
+  id: "crt-proposal-baseline-template",
+  templateName: "CRT Proposal Baseline",
+  brandName: "CRT Roofing",
+  coverPageTitle: "CRT Roofing Proposal",
+  coverPageSubtitle: "Prepared from the current estimate and linked to the source job until finalized.",
+  executiveSummaryTitle: "Executive Summary",
+  executiveSummaryBody:
+    "This proposal is assembled from the active estimate. Pricing stays linked to the source estimate until the proposal is finalized.",
+  scopeOfWorkTitle: "Scope of Work",
+  scopeOfWorkIntro: "The estimate scope is summarized below for customer review.",
+  photoTitle: "Photo Documentation",
+  upgradeOptionsTitle: "Upgrade Options",
+  productInformationTitle: "Product Information",
+  warrantyComparisonTitle: "Warranty Comparison",
+  pricingTitle: "Pricing Summary",
+  signatureTitle: "Authorization & Signature",
+  legalTitle: "Legal Pages",
+  paymentTermsTitle: "Payment Terms",
+  paymentTerms:
+    "Payment terms follow the current CRT proposal standard and may be updated centrally.",
+  contractLanguage:
+    "This proposal uses the current CRT Roofing contract language and remains editable from the template manager.",
+  signatureLineLabel: "Customer Signature",
+  signatureDateLabel: "Date",
+  legalNotice:
+    "Legal and contract language are centrally managed so future edits can flow into newly generated proposals.",
+  footerText: "Generated from the live estimate data.",
+  sectionOrder: [
+    "coverPage",
+    "executiveSummary",
+    "scopeOfWork",
+    "photos",
+    "upgradeOptions",
+    "productInformation",
+    "warrantyComparison",
+    "pricing",
+    "signature",
+    "legal",
+  ],
+};
+
+const DEFAULT_PROPOSAL_TEMPLATE_ID = DEFAULT_PROPOSAL_TEMPLATE.id;
+
+const CRM_LEAD_SOURCE_OPTIONS = [
+  "Existing customer",
+  "Referral",
+  "Google",
+  "Website",
+  "Yelp",
+  "HOA / Property Manager",
+  "General Contractor",
+  "Manufacturer",
+  "Supplier",
+  "Walk-in",
+  "Repeat customer",
+  "Other",
+];
+
+const CRM_LEAD_SERVICE_OPTIONS = [
+  "Roof inspection",
+  "Repair",
+  "Maintenance",
+  "Leak investigation",
+  "TPO",
+  "Spray Foam",
+  "Shingle",
+  "Tile",
+  "Coating",
+  "New construction",
+  "Re-roof",
+  "Emergency service",
+  "Other",
+];
+
+const CRM_LEAD_STATUS_OPTIONS = [
+  "New",
+  "Contacted",
+  "Appointment Scheduled",
+  "Inspection Completed",
+  "Estimate in Progress",
+  "Proposal Sent",
+  "Follow-Up",
+  "Approved",
+  "Lost",
+  "Not Qualified",
+];
+
+const CRM_PIPELINE_STATUS_OPTIONS = [
+  "New",
+  "Contacted",
+  "Appointment Scheduled",
+  "Inspection Completed",
+  "Estimate in Progress",
+  "Proposal Sent",
+  "Follow-Up",
+  "Approved",
+  "Lost",
+];
+
+const CRM_PROPERTY_TYPE_OPTIONS = ["Residential", "Commercial", "HOA", "Multi-family", "Industrial", "Other"];
+const CRM_URGENCY_OPTIONS = ["Low", "Normal", "High", "Emergency"];
+const CRM_FOLLOWUP_STATUS_OPTIONS = ["Open", "Scheduled", "Waiting on customer", "Completed", "Canceled"];
+const CRM_FOLLOWUP_TYPE_OPTIONS = ["Call", "Text", "Email", "Site visit", "Office review", "Estimate follow-up", "Other"];
+const CRM_TIMELINE_TYPE_OPTIONS = ["Lead", "Call", "Visit", "Estimate", "Follow-up", "Note", "File", "Job", "Customer update"];
+const CRM_FILE_CATEGORY_OPTIONS = ["Estimate", "Photos", "Contract", "Invoice", "Permit", "Warranty", "Other"];
+
+const ACTIVE_JOBS_KEY = (userKey) => `crt_roofing_active_jobs_v1:${userKey}`;
+
+const ACTIVE_JOB_ACTIVE_STATUSES = new Set(["scheduled", "pre-construction", "active", "punch list", "on hold", "warranty"]);
 
 const DEFAULT_ADMIN_PRICING = {
   tpoRollPrice: 360,
@@ -142,6 +376,915 @@ const DEFAULT_ADMIN_PRICING = {
   overheadPercent: 17.5,
   profitPercent: 30,
 };
+
+const DEFAULT_SPF_RATES = {
+  fieldThicknessUnitCost: 3.25,
+  wallThicknessUnitCost: 2.75,
+  foamKitCost: 2600,
+  wallFoamSetCost: 2800,
+  wallFoamYieldAtOneInch: 45,
+  primerUnitCost: 1165,
+  baseCoatUnitCost: 1165,
+  intermediateCoat1UnitCost: 1165,
+  intermediateCoat2UnitCost: 1165,
+  topCoatUnitCost: 1165,
+  granulesUnitCost: 15.5,
+  detailMaterialsUnitCost: 25,
+  laborCostPerLaborerPerDay: 320,
+};
+
+const DEFAULT_SPF_LAYER_CONFIG = {
+  primer: { applicable: true, coverageRate: 220, unitCost: DEFAULT_SPF_RATES.primerUnitCost },
+  baseCoat: { applicable: false, coverageRate: 37, unitCost: DEFAULT_SPF_RATES.baseCoatUnitCost },
+  intermediateCoat1: { applicable: false, coverageRate: 37, unitCost: DEFAULT_SPF_RATES.intermediateCoat1UnitCost },
+  intermediateCoat2: { applicable: false, coverageRate: 37, unitCost: DEFAULT_SPF_RATES.intermediateCoat2UnitCost },
+  topCoat: { applicable: false, coverageRate: 37, unitCost: DEFAULT_SPF_RATES.topCoatUnitCost },
+  granules: { applicable: true, coverageRate: 1.75, unitCost: DEFAULT_SPF_RATES.granulesUnitCost },
+};
+
+const DEFAULT_SPF_DETAIL_MATERIALS = {
+  scuppers: { quantity: 0, unitCost: 65 },
+  castIronDrain: { quantity: 0, unitCost: 450 },
+  ventedLouveredSkylights: { quantity: 0, unitCost: 800 },
+  nonVentedLouveredSkylights: { quantity: 0, unitCost: 635 },
+  acCurbs: { quantity: 0, unitCost: 100 },
+  acPans: { quantity: 0, unitCost: 165 },
+  skylightCurbs: { quantity: 0, unitCost: 100 },
+  tTops: { quantity: 0, unitCost: 55 },
+  roofHatch: { quantity: 0, unitCost: 1800 },
+  whirlyBird16: { quantity: 0, unitCost: 125 },
+  corrugatedMetalSheets: { quantity: 0, unitCost: 38 },
+  pbrMetalSheets: { quantity: 0, unitCost: 105 },
+  secureRockDenseDeck: { quantity: 0, unitCost: 30, useAutoQuantity: false },
+};
+
+function createBlankSprayFoamParapetMeasurement() {
+  return { label: "", linearFeet: "", height: "" };
+}
+
+function createBlankSprayFoamRoofArea() {
+  return {
+    label: "",
+    fieldRoofSquares: "",
+    foamThicknessInches: 2,
+    hasParapetWalls: false,
+    parapetWallSquares: "",
+  };
+}
+
+function createBlankSprayFoamSubcontractorItem(type = "") {
+  return {
+    type,
+    quantity: 0,
+    unitPrice: 0,
+    licensed: true,
+  };
+}
+
+function createBlankSprayFoamAdditionalDetailMaterial() {
+  return {
+    name: "",
+    quantity: 1,
+    unitCost: 0,
+    unit: "each",
+  };
+}
+
+function createBlankSprayFoamEquipmentRental() {
+  return {
+    name: "",
+    rateType: "perDay",
+    rateAmount: 0,
+    quantity: 1,
+    days: 0,
+    hours: 0,
+  };
+}
+
+function createBlankShingleTearOffSection(index = 0) {
+  return {
+    id: `tear-off-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+    label: `Section ${index + 1}`,
+    squares: "",
+    layers: 1,
+    tearOffCostPerSquare: "",
+    disposalFee: "",
+    dryRotAllowance: "",
+  };
+}
+
+function createBlankShingleLaborSection(index = 0) {
+  return {
+    id: `labor-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+    label: `Section ${index + 1}`,
+    installSquares: "",
+    costPerInstallSq: "",
+    licensed: true,
+    workersComp: true,
+  };
+}
+
+function createBlankTileTearOffSection(index = 0) {
+  return {
+    id: `tile-tear-off-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+    label: `Section ${index + 1}`,
+    squares: "",
+    layers: 1,
+    tearOffCostPerSquare: "",
+    disposalFee: "",
+    dryRotAllowance: "",
+  };
+}
+
+function createBlankTileLaborSection(index = 0) {
+  return {
+    id: `tile-labor-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+    label: `Section ${index + 1}`,
+    installSquares: "",
+    costPerInstallSq: "",
+    licensed: true,
+    workersComp: true,
+  };
+}
+
+function createSeedActiveJobs() {
+  return [
+    {
+      id: "active-job-11671-sterling",
+      jobNumber: "11671",
+      projectName: "Sterling",
+      address: "11671 Sterling Avenue, Bloomington, CA",
+      customer: "Sterling Property Group",
+      propertyOwner: "Sterling Property Group",
+      propertyManager: "Todd",
+      contractAmount: 325000,
+      status: "Pre-construction",
+      currentPhase: "Pre-construction",
+      statusTone: "green",
+      riskLevel: "Normal",
+      riskTone: "green",
+      riskReason: "",
+      startDate: "2026-07-24",
+      expectedCompletionDate: "2026-08-29",
+      percentComplete: 5,
+      projectDescription: "Replace and coordinate rooftop work with HVAC and electrical access on an occupied commercial property.",
+      projectContact: "Jorge",
+      projectManager: "Jorge Rodriguez",
+      fieldSupervisor: "Jorge's father",
+      foreman: "Jorge's father",
+      salesperson: "Chris",
+      officeCoordinator: "Natalia",
+      openIssuesCount: 0,
+      amountBilled: 0,
+      amountCollected: 0,
+      remainingContractValue: 325000,
+      isActive: true,
+      issues: [],
+      team: [
+        { role: "Project contact", name: "Jorge", company: "CRT Roofing", phone: "(555) 101-2001", email: "jorge@crtroofing.com", preferredContactMethod: "Phone" },
+        { role: "Field supervisor", name: "Jorge's father", company: "CRT Roofing", phone: "(555) 101-2002", email: "supervisor@crtroofing.com", preferredContactMethod: "Phone" },
+      ],
+      outsideContacts: [
+        { role: "Property manager", name: "Todd", company: "Sterling Property Group", phone: "(555) 101-4001", email: "todd@sterling.com", preferredContactMethod: "Email" },
+        { role: "HVAC contractor", name: "HVAC Team", company: "Sterling Mechanical", phone: "(555) 101-4002", email: "hvac@sterlingmechanical.com", preferredContactMethod: "Phone" },
+        { role: "Electrical contractor", name: "Electrical Team", company: "Sterling Electric", phone: "(555) 101-4003", email: "electrical@sterlingelectric.com", preferredContactMethod: "Phone" },
+      ],
+      operations: {
+        schedule: "Permit coordination and pre-construction walkthroughs in progress.",
+        dailyJobLogs: 0,
+        crewHours: 0,
+        photos: 0,
+        materials: "Pending final takeoff",
+        subcontractorCoordination: "HVAC and electrical coordination confirmed.",
+        permitStatus: "In progress",
+        inspections: "Not yet scheduled",
+        punchList: "None",
+        changeOrders: "None",
+      },
+      communication: {
+        projectNotes: ["Coordinate access with property manager before mobilization."],
+        customerComplaints: [],
+        callHistory: ["Initial project handoff completed."],
+        emailSummaries: ["Pre-construction notice sent to stakeholders."],
+        internalComments: ["Proceed once permit date is confirmed."],
+        followUpDeadlines: ["Permit follow-up due next week."],
+      },
+      actionItems: [
+        { id: "sterling-permit", title: "Confirm permit timing", dueDate: "2026-07-21", status: "Open", assignedEmployeeId: "", assignedEmployeeName: "Office" },
+      ],
+      activityLog: [
+        { id: "sterling-activity-1", summary: "Project created and pre-construction started.", changedBy: "Office", createdAt: "2026-07-14T09:00:00-07:00" },
+      ],
+    },
+    {
+      id: "active-job-180-fuller-institute",
+      jobNumber: "180",
+      projectName: "Fuller Institute",
+      address: "Fuller Institute, 123 Main Street, Riverside, CA",
+      customer: "Fuller Institute",
+      propertyOwner: "Fuller Institute",
+      propertyManager: "Daniela",
+      contractAmount: 180000,
+      status: "Scheduled",
+      currentPhase: "Permit pending",
+      statusTone: "yellow",
+      riskLevel: "Needs attention",
+      riskTone: "yellow",
+      riskReason: "Permit still needs to be pulled in person before mobilization.",
+      startDate: "2026-08-04",
+      expectedCompletionDate: "2026-09-12",
+      percentComplete: 0,
+      projectDescription: "Scheduled commercial reroof awaiting permit coordination and subcontractor scheduling.",
+      projectContact: "Daniela",
+      projectManager: "Maria Lopez",
+      fieldSupervisor: "Pending assignment",
+      foreman: "TBD",
+      salesperson: "Chris",
+      officeCoordinator: "Natalia",
+      openIssuesCount: 1,
+      amountBilled: 0,
+      amountCollected: 0,
+      remainingContractValue: 180000,
+      isActive: true,
+      issues: [
+        {
+          id: "issue-fuller-permit",
+          issueNumber: "ISS-0001",
+          category: "Scheduling",
+          description: "Permit still needs to be pulled in person.",
+          priority: "High",
+          status: "New",
+          callerName: "Daniela",
+          callerCompany: "Fuller Institute",
+          phone: "(555) 202-3001",
+          email: "daniela@fullerinstitute.edu",
+          assignedEmployeeName: "Jorge",
+          followUpDeadline: "2026-07-18",
+          createdAt: "2026-07-14T11:15:00-07:00",
+        },
+      ],
+      team: [
+        { role: "Project contact", name: "Daniela", company: "Fuller Institute", phone: "(555) 202-3001", email: "daniela@fullerinstitute.edu", preferredContactMethod: "Email" },
+        { role: "Office coordinator", name: "Natalia", company: "CRT Roofing", phone: "(555) 101-2004", email: "natalia@crtroofing.com", preferredContactMethod: "Email" },
+      ],
+      outsideContacts: [
+        { role: "Property manager", name: "Daniela", company: "Fuller Institute", phone: "(555) 202-3001", email: "daniela@fullerinstitute.edu", preferredContactMethod: "Email" },
+      ],
+      operations: {
+        schedule: "Schedule sent to subcontractors and ownership.",
+        dailyJobLogs: 0,
+        crewHours: 0,
+        photos: 0,
+        materials: "Permit and access coordination only",
+        subcontractorCoordination: "No field work started yet.",
+        permitStatus: "Permit pending",
+        inspections: "Pending permit issuance",
+        punchList: "None",
+        changeOrders: "None",
+      },
+      communication: {
+        projectNotes: ["Permit still needs to be pulled in person."],
+        customerComplaints: ["No complaints logged yet."],
+        callHistory: ["Schedule reviewed with ownership and subcontractors."],
+        emailSummaries: ["Schedule sent to subcontractors and ownership."],
+        internalComments: ["Escalate if permit is delayed past the start date."],
+        followUpDeadlines: ["Permit follow-up due before start date."],
+      },
+      actionItems: [
+        { id: "fuller-permit", title: "Pull permit in person", dueDate: "2026-07-17", status: "Open", assignedEmployeeId: "", assignedEmployeeName: "Office" },
+      ],
+      activityLog: [
+        { id: "fuller-activity-1", summary: "Project scheduled and permit follow-up created.", changedBy: "Office", createdAt: "2026-07-14T10:30:00-07:00" },
+      ],
+    },
+  ];
+}
+
+function createSeedApprovedJobs() {
+  return [
+    {
+      id: "approved-job-11671-sterling",
+      jobNumber: "11671",
+      customerName: "Sterling Property Management",
+      projectName: "11671 Sterling Avenue",
+      projectAddress: "11671 Sterling Ave., Bloomington, CA",
+      contractAmount: 82000,
+      approvalDate: "2026-07-11",
+      anticipatedStartDate: "2026-07-24",
+      projectStatus: "Pre-construction",
+      projectContact: "Jorge",
+      fieldSupervisor: "Jorge's father",
+      permitStatus: "Pending",
+      documentsIncomplete: true,
+      subcontractorIncomplete: false,
+      materialOrderIncomplete: true,
+      customerDocumentIncomplete: false,
+      warningText: "Permit and material order still need confirmation.",
+      salesperson: "Chris",
+      estimatedStartDays: 9,
+      actionButtonLabel: "Open",
+      isActive: true,
+    },
+    {
+      id: "approved-job-180-fuller-institute",
+      jobNumber: "180",
+      customerName: "Fuller Institute",
+      projectName: "Fuller Institute Roof",
+      projectAddress: "180 N. Oakland Ave., Pasadena, CA",
+      contractAmount: 98000,
+      approvalDate: "2026-07-08",
+      anticipatedStartDate: "2026-08-04",
+      projectStatus: "Permit pending",
+      projectContact: "Daniela",
+      fieldSupervisor: "TBD",
+      permitStatus: "Pending",
+      documentsIncomplete: true,
+      subcontractorIncomplete: true,
+      materialOrderIncomplete: false,
+      customerDocumentIncomplete: false,
+      warningText: "Permit not yet issued.",
+      salesperson: "Natalia",
+      estimatedStartDays: 20,
+      actionButtonLabel: "Open",
+      isActive: true,
+    },
+    {
+      id: "approved-job-217-laguna-hills",
+      jobNumber: "217",
+      customerName: "Laguna Hills HOA",
+      projectName: "Clubhouse Re-roof",
+      projectAddress: "217 Palm Blvd., Irvine, CA",
+      contractAmount: 154500,
+      approvalDate: "2026-07-01",
+      anticipatedStartDate: "2026-07-18",
+      projectStatus: "Materials pending",
+      projectContact: "Megan",
+      fieldSupervisor: "Carlos",
+      permitStatus: "Issued",
+      documentsIncomplete: false,
+      subcontractorIncomplete: false,
+      materialOrderIncomplete: true,
+      customerDocumentIncomplete: false,
+      warningText: "Material order still pending.",
+      salesperson: "Chris",
+      estimatedStartDays: 2,
+      actionButtonLabel: "Open",
+      isActive: true,
+    },
+    {
+      id: "approved-job-244-riverside-medical",
+      jobNumber: "244",
+      customerName: "Riverside Medical Center",
+      projectName: "ER Wing Roof",
+      projectAddress: "244 Hospital Way, Riverside, CA",
+      contractAmount: 224000,
+      approvalDate: "2026-06-29",
+      anticipatedStartDate: "2026-07-17",
+      projectStatus: "Ready to schedule",
+      projectContact: "Tanya",
+      fieldSupervisor: "Jorge",
+      permitStatus: "Issued",
+      documentsIncomplete: false,
+      subcontractorIncomplete: false,
+      materialOrderIncomplete: false,
+      customerDocumentIncomplete: true,
+      warningText: "Customer document signature pending.",
+      salesperson: "Natalia",
+      estimatedStartDays: 1,
+      actionButtonLabel: "Open",
+      isActive: true,
+    },
+    {
+      id: "approved-job-301-oak-terrace",
+      jobNumber: "301",
+      customerName: "Oak Terrace Apartments",
+      projectName: "Tower C",
+      projectAddress: "301 Oak Terrace Dr., Ontario, CA",
+      contractAmount: 132000,
+      approvalDate: "2026-06-27",
+      anticipatedStartDate: "2026-07-29",
+      projectStatus: "Scheduled",
+      projectContact: "Ramon",
+      fieldSupervisor: "Miguel",
+      permitStatus: "Issued",
+      documentsIncomplete: false,
+      subcontractorIncomplete: false,
+      materialOrderIncomplete: false,
+      customerDocumentIncomplete: false,
+      warningText: "",
+      salesperson: "Chris",
+      estimatedStartDays: 13,
+      actionButtonLabel: "Open",
+      isActive: true,
+    },
+    {
+      id: "approved-job-412-sierra-trade-center",
+      jobNumber: "412",
+      customerName: "Sierra Trade Center",
+      projectName: "Building B",
+      projectAddress: "412 Sierra Way, Fontana, CA",
+      contractAmount: 111500,
+      approvalDate: "2026-06-20",
+      anticipatedStartDate: "",
+      projectStatus: "Start Date Needed",
+      projectContact: "Marco",
+      fieldSupervisor: "TBD",
+      permitStatus: "Waiting",
+      documentsIncomplete: true,
+      subcontractorIncomplete: true,
+      materialOrderIncomplete: true,
+      customerDocumentIncomplete: true,
+      warningText: "Start date, permit, and order checklist still need attention.",
+      salesperson: "Natalia",
+      estimatedStartDays: 999,
+      actionButtonLabel: "Open",
+      isActive: true,
+    },
+  ];
+}
+
+function createBlankProposal() {
+  const now = new Date().toISOString();
+  return {
+    id: `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    templateId: DEFAULT_PROPOSAL_TEMPLATE_ID,
+    proposalNumber: 1,
+    version: 1,
+    status: "Draft",
+    proposalTitle: "",
+    customerName: "",
+    customerContact: "",
+    projectName: "",
+    projectAddress: "",
+    estimateNumber: "",
+    estimateCode: "",
+    estimateDate: "",
+    roofSystem: "",
+    scopeItems: [],
+    quantities: [],
+    unitPrices: [],
+    alternates: [],
+    exclusions: [],
+    allowances: [],
+    taxes: [],
+    totalPrice: 0,
+    salesperson: "",
+    internalJobNotes: "",
+    warranty: "",
+    paymentSchedule: "",
+    estimatedSchedule: "",
+    termsAndConditions: "",
+    expirationDate: "",
+    attachments: [],
+    photos: [],
+    supportingReports: [],
+    approvalRequired: true,
+    approvalThreshold: 10000,
+    approvalReviewLevel: "Estimator",
+    sentAt: "",
+    sentBy: "",
+    sentTo: "",
+    ccRecipients: "",
+    message: "",
+    customerAcceptance: null,
+    acceptanceStatus: "Pending",
+    signatureStatus: "Unsigned",
+    viewedAt: "",
+    finalizedAt: "",
+    isFinalized: false,
+    pdfArchiveName: "",
+    pdfArchiveDataUrl: "",
+    pdfArchiveUpdatedAt: "",
+    templateSnapshot: { ...DEFAULT_PROPOSAL_TEMPLATE },
+    sourceEstimateSnapshot: null,
+    proposalSections: [],
+    proposalHistory: [],
+    sourceEstimateId: "",
+    sourceEstimateCode: "",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function createBlankProposalTemplate() {
+  const now = new Date().toISOString();
+  return {
+    ...DEFAULT_PROPOSAL_TEMPLATE,
+    id: DEFAULT_PROPOSAL_TEMPLATE_ID,
+    templateName: DEFAULT_PROPOSAL_TEMPLATE.templateName,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function normalizeProposalTemplate(template = {}) {
+  const now = new Date().toISOString();
+  const merged = {
+    ...createBlankProposalTemplate(),
+    ...template,
+    sectionOrder: Array.isArray(template.sectionOrder) && template.sectionOrder.length ? template.sectionOrder : [...DEFAULT_PROPOSAL_TEMPLATE.sectionOrder],
+  };
+  return {
+    ...merged,
+    id: String(template.id || merged.id || DEFAULT_PROPOSAL_TEMPLATE_ID),
+    templateName: String(template.templateName || merged.templateName || "CRT Proposal Baseline"),
+    brandName: String(template.brandName || merged.brandName || "CRT Roofing"),
+    coverPageTitle: String(template.coverPageTitle || merged.coverPageTitle || DEFAULT_PROPOSAL_TEMPLATE.coverPageTitle),
+    coverPageSubtitle: String(template.coverPageSubtitle || merged.coverPageSubtitle || DEFAULT_PROPOSAL_TEMPLATE.coverPageSubtitle),
+    executiveSummaryTitle: String(template.executiveSummaryTitle || merged.executiveSummaryTitle || DEFAULT_PROPOSAL_TEMPLATE.executiveSummaryTitle),
+    executiveSummaryBody: String(template.executiveSummaryBody || merged.executiveSummaryBody || DEFAULT_PROPOSAL_TEMPLATE.executiveSummaryBody),
+    scopeOfWorkTitle: String(template.scopeOfWorkTitle || merged.scopeOfWorkTitle || DEFAULT_PROPOSAL_TEMPLATE.scopeOfWorkTitle),
+    scopeOfWorkIntro: String(template.scopeOfWorkIntro || merged.scopeOfWorkIntro || DEFAULT_PROPOSAL_TEMPLATE.scopeOfWorkIntro),
+    photoTitle: String(template.photoTitle || merged.photoTitle || DEFAULT_PROPOSAL_TEMPLATE.photoTitle),
+    upgradeOptionsTitle: String(template.upgradeOptionsTitle || merged.upgradeOptionsTitle || DEFAULT_PROPOSAL_TEMPLATE.upgradeOptionsTitle),
+    productInformationTitle: String(template.productInformationTitle || merged.productInformationTitle || DEFAULT_PROPOSAL_TEMPLATE.productInformationTitle),
+    warrantyComparisonTitle: String(template.warrantyComparisonTitle || merged.warrantyComparisonTitle || DEFAULT_PROPOSAL_TEMPLATE.warrantyComparisonTitle),
+    pricingTitle: String(template.pricingTitle || merged.pricingTitle || DEFAULT_PROPOSAL_TEMPLATE.pricingTitle),
+    signatureTitle: String(template.signatureTitle || merged.signatureTitle || DEFAULT_PROPOSAL_TEMPLATE.signatureTitle),
+    legalTitle: String(template.legalTitle || merged.legalTitle || DEFAULT_PROPOSAL_TEMPLATE.legalTitle),
+    paymentTermsTitle: String(template.paymentTermsTitle || merged.paymentTermsTitle || DEFAULT_PROPOSAL_TEMPLATE.paymentTermsTitle),
+    paymentTerms: String(template.paymentTerms || merged.paymentTerms || DEFAULT_PROPOSAL_TEMPLATE.paymentTerms),
+    contractLanguage: String(template.contractLanguage || merged.contractLanguage || DEFAULT_PROPOSAL_TEMPLATE.contractLanguage),
+    signatureLineLabel: String(template.signatureLineLabel || merged.signatureLineLabel || DEFAULT_PROPOSAL_TEMPLATE.signatureLineLabel),
+    signatureDateLabel: String(template.signatureDateLabel || merged.signatureDateLabel || DEFAULT_PROPOSAL_TEMPLATE.signatureDateLabel),
+    legalNotice: String(template.legalNotice || merged.legalNotice || DEFAULT_PROPOSAL_TEMPLATE.legalNotice),
+    footerText: String(template.footerText || merged.footerText || DEFAULT_PROPOSAL_TEMPLATE.footerText),
+    createdAt: String(template.createdAt || merged.createdAt || now),
+    updatedAt: String(template.updatedAt || merged.updatedAt || now),
+  };
+}
+
+function proposalIsFinalized(proposal = {}) {
+  return Boolean(
+    proposal.isFinalized ||
+      proposal.finalizedAt ||
+      [proposal.status, proposal.acceptanceStatus, proposal.signatureStatus].some((value) => ["accepted", "declined", "expired"].includes(String(value || "").toLowerCase())),
+  );
+}
+
+function buildProposalScopeItemsFromEstimate(estimate = {}) {
+  const roofSystem = estimate?.summary?.roofType || buildEstimateRoofType(estimate?.inputs || {});
+  return [
+    estimate?.inputs?.jobName ? { label: "Project name", value: estimate.inputs.jobName } : null,
+    estimate?.inputs?.jobAddress ? { label: "Project address", value: estimate.inputs.jobAddress } : null,
+    estimate?.inputs?.customerName ? { label: "Customer", value: estimate.inputs.customerName } : null,
+    estimate?.inputs?.customerContact ? { label: "Customer contact", value: estimate.inputs.customerContact } : null,
+    estimate?.inputs?.totalSquares != null ? { label: "Total squares", value: `${num(estimate.inputs.totalSquares, 0)} SQ` } : null,
+    roofSystem ? { label: "Roof system", value: roofSystem } : null,
+    estimate?.summary?.selectedBidAmount != null ? { label: "Proposal price", value: money(estimate.summary.selectedBidAmount) } : null,
+  ].filter(Boolean);
+}
+
+function buildProposalSections(proposal = {}, estimate = null, template = DEFAULT_PROPOSAL_TEMPLATE) {
+  const activeTemplate = normalizeProposalTemplate(template);
+  const sourceEstimate = estimate || proposal?.sourceEstimateSnapshot || null;
+  const scopeItems = Array.isArray(proposal.scopeItems) && proposal.scopeItems.length ? proposal.scopeItems : buildProposalScopeItemsFromEstimate(sourceEstimate || {});
+  const photoItems = Array.isArray(proposal.photos) ? proposal.photos : [];
+  const supportingReports = Array.isArray(proposal.supportingReports) ? proposal.supportingReports : [];
+  const alternates = Array.isArray(proposal.alternates) ? proposal.alternates : [];
+  const exclusions = Array.isArray(proposal.exclusions) ? proposal.exclusions : [];
+  const allowances = Array.isArray(proposal.allowances) ? proposal.allowances : [];
+  const taxes = Array.isArray(proposal.taxes) ? proposal.taxes : [];
+
+  const sectionMap = {
+    coverPage: {
+      key: "coverPage",
+      title: activeTemplate.coverPageTitle,
+      subtitle: activeTemplate.coverPageSubtitle,
+      lines: [
+        ["Proposal number", proposal.proposalNumber || "—"],
+        ["Version", proposal.version || 1],
+        ["Customer", proposal.customerName || sourceEstimate?.inputs?.customerName || "—"],
+        ["Project", proposal.projectName || sourceEstimate?.inputs?.jobName || "—"],
+        ["Address", proposal.projectAddress || sourceEstimate?.inputs?.jobAddress || "—"],
+        ["Estimate code", proposal.estimateCode || sourceEstimate?.estimateCode || "—"],
+        ["Salesperson", proposal.salesperson || sourceEstimate?.inputs?.salesperson || "—"],
+        ["Status", proposal.status || "Draft"],
+      ],
+    },
+    executiveSummary: {
+      key: "executiveSummary",
+      title: activeTemplate.executiveSummaryTitle,
+      paragraphs: [
+        activeTemplate.executiveSummaryBody,
+        proposal.message ? `Customer message: ${proposal.message}` : "",
+      ].filter(Boolean),
+      lines: [
+        ["Current total", money(proposal.totalPrice || 0)],
+        ["Sent date", proposal.sentAt ? String(proposal.sentAt).slice(0, 10) : "Not sent"],
+        ["Viewed date", proposal.viewedAt ? String(proposal.viewedAt).slice(0, 10) : "Not viewed"],
+        ["Acceptance", proposal.acceptanceStatus || "Pending"],
+        ["Signature", proposal.signatureStatus || "Unsigned"],
+      ],
+    },
+    scopeOfWork: {
+      key: "scopeOfWork",
+      title: activeTemplate.scopeOfWorkTitle,
+      subtitle: activeTemplate.scopeOfWorkIntro,
+      items: scopeItems,
+    },
+    photos: {
+      key: "photos",
+      title: activeTemplate.photoTitle,
+      lines: [
+        ["Attached photos", num(photoItems.length, 0)],
+        ["Supporting reports", num(supportingReports.length, 0)],
+      ],
+      items: photoItems.map((photo, index) => ({ label: `Photo ${index + 1}`, value: photo.fileName || photo.name || photo.label || "Attached photo" })),
+    },
+    upgradeOptions: {
+      key: "upgradeOptions",
+      title: activeTemplate.upgradeOptionsTitle,
+      items: alternates.length ? alternates.map((item, index) => ({ label: `Alternate ${index + 1}`, value: item })) : [{ label: "Alternates", value: "None listed" }],
+    },
+    productInformation: {
+      key: "productInformation",
+      title: activeTemplate.productInformationTitle,
+      items: supportingReports.length
+        ? supportingReports.map((item, index) => ({ label: `Report ${index + 1}`, value: item.fileName || item.name || item.label || "Supporting report" }))
+        : [{ label: "Product information", value: "No supporting product information attached" }],
+    },
+    warrantyComparison: {
+      key: "warrantyComparison",
+      title: activeTemplate.warrantyComparisonTitle,
+      paragraphs: [proposal.warranty || "No warranty language has been entered yet."],
+    },
+    pricing: {
+      key: "pricing",
+      title: activeTemplate.pricingTitle,
+      lines: [
+        ["Proposal price", money(proposal.totalPrice || 0)],
+        ["Allowances", num(allowances.length, 0)],
+        ["Taxes", num(taxes.length, 0)],
+      ],
+      items: [
+        ...allowances.map((item, index) => ({ label: `Allowance ${index + 1}`, value: item })),
+        ...taxes.map((item, index) => ({ label: `Tax ${index + 1}`, value: item })),
+      ],
+    },
+    signature: {
+      key: "signature",
+      title: activeTemplate.signatureTitle,
+      lines: [
+        ["Signature line", activeTemplate.signatureLineLabel],
+        ["Date line", activeTemplate.signatureDateLabel],
+        ["Acceptance status", proposal.acceptanceStatus || "Pending"],
+        ["Signature status", proposal.signatureStatus || "Unsigned"],
+      ],
+      paragraphs: [proposal.paymentSchedule || activeTemplate.paymentTerms || ""].filter(Boolean),
+    },
+    legal: {
+      key: "legal",
+      title: activeTemplate.legalTitle,
+      paragraphs: [activeTemplate.contractLanguage, activeTemplate.legalNotice, proposal.termsAndConditions || ""].filter(Boolean),
+      items: [
+        { label: activeTemplate.paymentTermsTitle, value: proposal.paymentSchedule || activeTemplate.paymentTerms || "" },
+        { label: "Expiration date", value: proposal.expirationDate || "Not set" },
+      ],
+    },
+  };
+
+  const orderedKeys = Array.isArray(activeTemplate.sectionOrder) && activeTemplate.sectionOrder.length ? activeTemplate.sectionOrder : [...DEFAULT_PROPOSAL_TEMPLATE.sectionOrder];
+  const orderedSections = orderedKeys.map((key) => sectionMap[key]).filter(Boolean);
+  const remainingSections = Object.keys(sectionMap)
+    .filter((key) => !orderedKeys.includes(key))
+    .map((key) => sectionMap[key]);
+
+  return [...orderedSections, ...remainingSections];
+}
+
+function createProposalPdfFileName(proposal = {}) {
+  const baseName = String(proposal.proposalTitle || proposal.projectName || proposal.customerName || proposal.estimateCode || "proposal")
+    .replace(/[^a-z0-9]/gi, "_")
+    .toLowerCase();
+  const version = num(proposal.version || 1, 0);
+  return `${baseName || "proposal"}_v${version}_${Date.now()}.pdf`;
+}
+
+function createProposalFromEstimate(estimate, template = DEFAULT_PROPOSAL_TEMPLATE) {
+  const now = new Date().toISOString();
+  const proposalDate = String(estimate?.savedAt || estimate?.createdAt || now).slice(0, 10);
+  const roofSystem = estimate?.summary?.roofType || buildEstimateRoofType(estimate?.inputs || {});
+  const normalizedTemplate = normalizeProposalTemplate(template);
+  const scopeItems = buildProposalScopeItemsFromEstimate(estimate);
+  const sourceEstimateSnapshot = estimate
+    ? {
+        id: estimate.id || "",
+        estimateNumber: estimate.estimateNumber || 0,
+        estimateCode: estimate.estimateCode || "",
+        estimateType: estimate.estimateType || "",
+        name: estimate.name || "",
+        savedAt: estimate.savedAt || estimate.createdAt || now,
+        inputs: estimate.inputs || {},
+        summary: estimate.summary || {},
+      }
+    : null;
+
+  return {
+    ...createBlankProposal(),
+    id: `proposal-${estimate?.id || Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    templateId: normalizedTemplate.id,
+    proposalNumber: Number(estimate?.estimateNumber || 1),
+    version: 1,
+    proposalTitle: `${estimate?.name || estimate?.estimateCode || "Proposal"}`,
+    customerName: estimate?.inputs?.customerName || "",
+    customerContact: estimate?.inputs?.customerContact || "",
+    projectName: estimate?.inputs?.jobName || "",
+    projectAddress: estimate?.inputs?.jobAddress || "",
+    estimateNumber: estimate?.estimateNumber || "",
+    estimateCode: estimate?.estimateCode || "",
+    estimateDate: proposalDate,
+    roofSystem,
+    scopeItems,
+    quantities: [],
+    unitPrices: [],
+    alternates: estimate?.inputs?.proposalAlternates || [],
+    exclusions: estimate?.inputs?.proposalExclusions || [],
+    allowances: estimate?.inputs?.proposalAllowances || [],
+    taxes: estimate?.inputs?.proposalTaxes || [],
+    totalPrice: toNumber(estimate?.summary?.selectedBidAmount || 0),
+    salesperson: estimate?.inputs?.salesperson || "",
+    warranty: estimate?.inputs?.proposalWarranty || "",
+    paymentSchedule: estimate?.inputs?.proposalPaymentSchedule || "",
+    estimatedSchedule: estimate?.inputs?.proposalSchedule || "",
+    termsAndConditions: estimate?.inputs?.proposalTerms || "",
+    expirationDate: estimate?.inputs?.proposalExpirationDate || "",
+    sourceEstimateId: estimate?.id || "",
+    sourceEstimateCode: estimate?.estimateCode || "",
+    acceptanceStatus: "Pending",
+    signatureStatus: "Unsigned",
+    viewedAt: "",
+    finalizedAt: "",
+    isFinalized: false,
+    pdfArchiveName: "",
+    pdfArchiveDataUrl: "",
+    pdfArchiveUpdatedAt: "",
+    templateSnapshot: normalizedTemplate,
+    sourceEstimateSnapshot,
+    proposalSections: buildProposalSections({}, estimate, normalizedTemplate),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function normalizeProposalRecord(proposal = {}) {
+  const base = createBlankProposal();
+  const templateSnapshot = normalizeProposalTemplate(proposal.templateSnapshot || proposal.template || DEFAULT_PROPOSAL_TEMPLATE);
+  const sourceEstimateSnapshot = proposal.sourceEstimateSnapshot && typeof proposal.sourceEstimateSnapshot === "object" ? proposal.sourceEstimateSnapshot : null;
+  return {
+    ...base,
+    ...proposal,
+    templateId: String(proposal.templateId || templateSnapshot.id || DEFAULT_PROPOSAL_TEMPLATE_ID),
+    templateSnapshot,
+    sourceEstimateSnapshot,
+    proposalSections: Array.isArray(proposal.proposalSections) ? proposal.proposalSections : [],
+    customerAcceptance: proposal.customerAcceptance && typeof proposal.customerAcceptance === "object" ? proposal.customerAcceptance : null,
+    acceptanceStatus: String(proposal.acceptanceStatus || proposal.customerAcceptance?.status || "Pending"),
+    signatureStatus: String(proposal.signatureStatus || "Unsigned"),
+    viewedAt: String(proposal.viewedAt || ""),
+    finalizedAt: String(proposal.finalizedAt || ""),
+    isFinalized: Boolean(proposal.isFinalized || proposal.finalizedAt),
+    pdfArchiveName: String(proposal.pdfArchiveName || ""),
+    pdfArchiveDataUrl: String(proposal.pdfArchiveDataUrl || ""),
+    pdfArchiveUpdatedAt: String(proposal.pdfArchiveUpdatedAt || ""),
+    sentAt: String(proposal.sentAt || ""),
+    sentBy: String(proposal.sentBy || ""),
+    sentTo: String(proposal.sentTo || ""),
+    ccRecipients: String(proposal.ccRecipients || ""),
+    updatedAt: String(proposal.updatedAt || proposal.createdAt || new Date().toISOString()),
+    createdAt: String(proposal.createdAt || new Date().toISOString()),
+  };
+}
+
+function syncProposalWithEstimate(proposal = {}, estimate = null, template = DEFAULT_PROPOSAL_TEMPLATE) {
+  const normalizedProposal = normalizeProposalRecord(proposal);
+  if (proposalIsFinalized(normalizedProposal)) {
+    return normalizedProposal;
+  }
+
+  const normalizedTemplate = normalizeProposalTemplate(template || normalizedProposal.templateSnapshot || DEFAULT_PROPOSAL_TEMPLATE);
+  const sourceEstimate = estimate || normalizedProposal.sourceEstimateSnapshot || null;
+  if (!sourceEstimate) {
+    return {
+      ...normalizedProposal,
+      templateId: normalizedTemplate.id,
+      templateSnapshot: normalizedTemplate,
+      proposalSections: buildProposalSections(normalizedProposal, null, normalizedTemplate),
+    };
+  }
+
+  const currentScopeItems = buildProposalScopeItemsFromEstimate(sourceEstimate);
+  const synced = {
+    ...normalizedProposal,
+    templateId: normalizedTemplate.id,
+    templateSnapshot: normalizedTemplate,
+    customerName: sourceEstimate?.inputs?.customerName || normalizedProposal.customerName || "",
+    customerContact: sourceEstimate?.inputs?.customerContact || normalizedProposal.customerContact || "",
+    projectName: sourceEstimate?.inputs?.jobName || normalizedProposal.projectName || "",
+    projectAddress: sourceEstimate?.inputs?.jobAddress || normalizedProposal.projectAddress || "",
+    estimateNumber: sourceEstimate?.estimateNumber || normalizedProposal.estimateNumber || "",
+    estimateCode: sourceEstimate?.estimateCode || normalizedProposal.estimateCode || "",
+    estimateDate: String(sourceEstimate?.savedAt || sourceEstimate?.createdAt || normalizedProposal.estimateDate || new Date().toISOString()).slice(0, 10),
+    roofSystem: sourceEstimate?.summary?.roofType || normalizedProposal.roofSystem || "",
+    scopeItems: currentScopeItems,
+    alternates: sourceEstimate?.inputs?.proposalAlternates || normalizedProposal.alternates || [],
+    exclusions: sourceEstimate?.inputs?.proposalExclusions || normalizedProposal.exclusions || [],
+    allowances: sourceEstimate?.inputs?.proposalAllowances || normalizedProposal.allowances || [],
+    taxes: sourceEstimate?.inputs?.proposalTaxes || normalizedProposal.taxes || [],
+    totalPrice: toNumber(sourceEstimate?.summary?.selectedBidAmount ?? normalizedProposal.totalPrice ?? 0),
+    salesperson: sourceEstimate?.inputs?.salesperson || normalizedProposal.salesperson || "",
+    warranty: sourceEstimate?.inputs?.proposalWarranty || normalizedProposal.warranty || normalizedTemplate.contractLanguage,
+    paymentSchedule: sourceEstimate?.inputs?.proposalPaymentSchedule || normalizedProposal.paymentSchedule || normalizedTemplate.paymentTerms,
+    estimatedSchedule: sourceEstimate?.inputs?.proposalSchedule || normalizedProposal.estimatedSchedule || "",
+    termsAndConditions: sourceEstimate?.inputs?.proposalTerms || normalizedProposal.termsAndConditions || normalizedTemplate.contractLanguage,
+    expirationDate: sourceEstimate?.inputs?.proposalExpirationDate || normalizedProposal.expirationDate || "",
+    sourceEstimateId: sourceEstimate?.id || normalizedProposal.sourceEstimateId || "",
+    sourceEstimateCode: sourceEstimate?.estimateCode || normalizedProposal.sourceEstimateCode || "",
+    sourceEstimateSnapshot: {
+      id: sourceEstimate?.id || normalizedProposal.sourceEstimateSnapshot?.id || "",
+      estimateNumber: sourceEstimate?.estimateNumber || normalizedProposal.sourceEstimateSnapshot?.estimateNumber || 0,
+      estimateCode: sourceEstimate?.estimateCode || normalizedProposal.sourceEstimateSnapshot?.estimateCode || "",
+      estimateType: sourceEstimate?.estimateType || normalizedProposal.sourceEstimateSnapshot?.estimateType || "",
+      name: sourceEstimate?.name || normalizedProposal.sourceEstimateSnapshot?.name || "",
+      savedAt: sourceEstimate?.savedAt || sourceEstimate?.createdAt || normalizedProposal.sourceEstimateSnapshot?.savedAt || new Date().toISOString(),
+      inputs: sourceEstimate?.inputs || normalizedProposal.sourceEstimateSnapshot?.inputs || {},
+      summary: sourceEstimate?.summary || normalizedProposal.sourceEstimateSnapshot?.summary || {},
+    },
+    proposalSections: buildProposalSections(
+      {
+        ...normalizedProposal,
+        ...proposal,
+        scopeItems: currentScopeItems,
+      },
+      sourceEstimate,
+      normalizedTemplate,
+    ),
+    updatedAt: new Date().toISOString(),
+  };
+
+  return synced;
+}
+
+function createBlankActiveJobIssue(project = null) {
+  return {
+    id: createFieldDailyLogId(),
+    projectId: project?.id || "",
+    projectName: project?.projectName || "",
+    jobNumber: project?.jobNumber || "",
+    dateTime: new Date().toISOString().slice(0, 16),
+    callerName: "",
+    callerCompany: "",
+    phone: "",
+    email: "",
+    issueCategory: "Other",
+    description: "",
+    priority: "Normal",
+    assignedEmployeeId: "",
+    assignedEmployeeName: "",
+    followUpDeadline: "",
+    currentStatus: "New",
+    reason: "",
+    response: "",
+  };
+}
+
+function isActiveJobStatus(status) {
+  return ACTIVE_JOB_ACTIVE_STATUSES.has(String(status || "").toLowerCase());
+}
+
+function getActiveJobSearchText(job) {
+  return [
+    job.jobNumber,
+    job.projectName,
+    job.customer,
+    job.propertyOwner,
+    job.propertyManager,
+    job.address,
+    job.currentPhase,
+    job.projectContact,
+    job.fieldSupervisor,
+    job.salesperson,
+    job.officeCoordinator,
+    job.riskLevel,
+    job.status,
+    job.riskReason,
+    ...(job.issues || []).flatMap((issue) => [issue.issueNumber, issue.category, issue.description, issue.priority, issue.status]),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function getActiveJobOpenIssuesCount(job) {
+  return (job.issues || []).filter((issue) => !["resolved", "closed"].includes(String(issue.status || "").toLowerCase())).length;
+}
+
+function buildActiveJobSuggestedResponse(project) {
+  if (!project) {
+    return "Thanks for the update. We are reviewing it now and will follow up shortly.";
+  }
+  return `Thanks for reporting this on ${project.projectName || "the job"}. We received the issue, are reviewing the details, and will follow up with the next step shortly.`;
+}
 
 const ADMIN_PRICING_SECTIONS = {
   materials: [
@@ -224,6 +1367,9 @@ const DEFAULT_INPUTS = {
   denseDeckExtraSheets: 0,
 
   terminationMethod: "",
+  multiTerminationRows: [
+    // { type: '', linearFeet: 0 }
+  ],
   copingLinearFeet: 0,
   copingCleatRequired: false,
   dripEdgeLinearFeet: 0,
@@ -258,6 +1404,7 @@ const DEFAULT_INPUTS = {
   inspectionCustomerRequestedRoofPreference: "",
   inspectionRoofConditionNotes: "",
   inspectionAccessNotes: "",
+  customMaterials: [],
   inspectionSafetyConcerns: "",
   inspectionExistingRoofLayers: "",
   inspectionAcUnitsCount: "",
@@ -282,9 +1429,266 @@ const DEFAULT_INPUTS = {
   jobName: "",
   customerName: "",
   jobAddress: "",
+  sprayFoamSalesperson: "",
+  sprayFoamEstimateType: "roof",
+  wallFoamChargeMethod: "prorated",
+  sprayFoamFieldRoofSquares: 0,
+  sprayFoamSeparateRoofAreas: false,
+  sprayFoamRoofAreas: [createBlankSprayFoamRoofArea()],
+  sprayFoamMilesToLocation: 0,
+  sprayFoamEstimatedCompletionDays: 0,
+  sprayFoamTotalFieldSquares: 0,
+  sprayFoamTotalRoofSquares: 0,
+  sprayFoamParapetWallSquares: 0,
+  sprayFoamUseMultipleParapetMeasurements: false,
+  sprayFoamParapetMeasurements: [createBlankSprayFoamParapetMeasurement()],
+  sprayFoamParapetLinearFeet: 0,
+  sprayFoamParapetAverageHeight: 4,
+  sprayFoamIncludeParapetsInProduction: false,
+  sprayFoamLinearFeet: 0,
+  sprayFoamDripEdgeRequired: false,
+  sprayFoamCityPermitFee: 0,
+  sprayFoamUrgency: "normal",
+  sprayFoamFieldThickness: 2,
+  sprayFoamWallThickness: 1,
+  sprayFoamLaborersNeededPerDay: 0,
+  sprayFoamPrevailingWageJob: false,
+  sprayFoamPrevailingWageHourlyRate: 0,
+  sprayFoamPrevailingWageCrewSize: 0,
+  sprayFoamPrevailingWageHoursPerDay: 0,
+  sprayFoamPrevailingWageJobDays: 0,
+  sprayFoamTotalLaborers: 0,
+  sprayFoamCustomBidAmount: "",
+  sprayFoamCustomBidSelected: false,
+  sprayFoamSkylightsRoofLoaded: false,
+  sprayFoamRooftopDeliveryFee: 750,
+  sprayFoamLodgingNeeded: false,
+  sprayFoamLodgingName: "",
+  sprayFoamNightlyLodgingCost: 0,
+  sprayFoamLodgingNights: 0,
+  sprayFoamSkylightCurbLumberBoardLengthFt: 16,
+  sprayFoamSkylightCurbLumberBoardQuantity: "",
+  sprayFoamSkylightCurbLumberBoardUnitCost: 0,
+  sprayFoamHasSubcontractors: false,
+  sprayFoamSubcontractorItems: [
+    { ...createBlankSprayFoamSubcontractorItem("tear-off subcontractor"), quantity: 0, unitPrice: 0 },
+    { ...createBlankSprayFoamSubcontractorItem("gravel vacuum subcontractor"), quantity: 0, unitPrice: 0 },
+    { ...createBlankSprayFoamSubcontractorItem("hvac subcontractor"), quantity: 0, unitPrice: 0 },
+    { ...createBlankSprayFoamSubcontractorItem("other sub-contractor"), quantity: 0, unitPrice: 0 },
+  ],
+  sprayFoamLayerConfig: DEFAULT_SPF_LAYER_CONFIG,
+  sprayFoamDetailMaterials: DEFAULT_SPF_DETAIL_MATERIALS,
+  sprayFoamAdditionalDetailMaterials: [],
+  sprayFoamEquipmentRentals: [createBlankSprayFoamEquipmentRental()],
 
-  companyHqAddress: "Fontana, CA",
+  shingleJobName: "",
+  shingleCustomerName: "",
+  shingleJobAddress: "",
+  shingleSalesperson: "",
+  shingleCityPermitFee: 0,
+  shingleTotalRoofSquares: 0,
+  shingleProductionSquares: 0,
+  shingleHdzBundlesNeeded: 0,
+  shingleStarterQuantity: 0,
+  shingleDripEdgePieces: 0,
+  shingleRapidRidgeBoxes: 0,
+  shingleSyntheticUnderlaymentRolls: 0,
+  shingleSyntheticUnderlaymentSuggestedRolls: 0,
+  shingleSyntheticUnderlaymentCalculatedRolls: 0,
+  shingleCoilNails125Quantity: 0,
+  shingleCoilNails78Quantity: 0,
+  shingleMarkingPaintQuantity: 0,
+  shingleTinShinglesQuantity: 0,
+  shingleRoofJack2Quantity: 0,
+  shingleRoofJack15Quantity: 0,
+  shingleRoofJack3Quantity: 0,
+  shingleRoofJack4Quantity: 0,
+  shingleAmericapOvalQuantity: 0,
+  shingleAmericapRoundQuantity: 0,
+  shingleOvalRoofJackQuantity: 0,
+  shingleWastePercent: 15,
+  shinglePerimeterLinearFeet: 0,
+  shingleRidgeLinearFeet: 0,
+  shingleHipLinearFeet: 0,
+  shingleRidgeHipLinearFeet: 0,
+  shingleValleyLinearFeet: 0,
+  shingleRakeLinearFeet: 0,
+  shingleEaveLinearFeet: 0,
+  shingleDripEdgeLinearFeet: 0,
+  shingleStarterLinearFeet: 0,
+  shingleRidgeLf: 0,
+  shingleHipLf: 0,
+  shingleValleyLf: 0,
+  shingleRakeLf: 0,
+  shingleEaveLf: 0,
+  shingleStarterLf: 0,
+  shingleDripEdgeLf: 0,
+  shinglePipeJacksCount: 0,
+  shingleVentsCount: 0,
+  shingleSkylightsCount: 0,
+  shingleChimneyCount: 0,
+  shingleShinglesPerSquareCost: 45,
+  shingleSyntheticUnderlaymentRollCost: 90,
+  shingleSyntheticUnderlaymentRollCoverageSq: 9.6,
+  shingleStarterCost: 50,
+  shingleStarterRollCoverageLf: 115,
+  shingleRidgeCapCost: 80,
+  shingleDripEdgeCost: 8,
+  shingleCoilNails125Cost: 55,
+  shingleCoilNails78Cost: 52,
+  shingleMarkingPaintCost: 7,
+  shingleTinShinglesCost: 36,
+  shingleRoofJack2Cost: 8,
+  shingleRoofJack15Cost: 8,
+  shingleRoofJack3Cost: 14,
+  shingleRoofJack4Cost: 15,
+  shingleAmericapOvalCost: 25,
+  shingleAmericapRoundCost: 25,
+  shingleOvalRoofJackCost: 25,
+  shingleValleyMetalCost: 60,
+  shingleValleyMetalQuantity: 0,
+  shingleOHaginVentCost: 65,
+  shingleDormerVentCost: 65,
+  shingleCaulkingSealantTubeCost: 12,
+  shingleOHaginVentQuantity: 0,
+  shingleDormerVentQuantity: 0,
+  shingleCaulkingSealantTubeQuantity: 0,
+  shingleVentCost: 65,
+  shingleNailsCostPerSquare: 55,
+  shingleCaulkingSealantCost: 0,
+  shinglePlywoodSheets: 0,
+  shinglePlywoodSheetCost: 30,
+  shingleSprayPaintCost: 7,
+  shingleRoofConveyorDeliveryChargeQuantity: 1,
+  shingleRoofConveyorDeliveryCharge: 75,
+  shingleFuelSurchargeQuantity: 1,
+  shingleFuelSurcharge: 75,
+  shingleExistingLayers: 1,
+  shingleTearOffCostPerSquare: 0,
+  shingleDumpTrailerFee: 0,
+  shingleDryRotAllowance: 0,
+  shingleTearOffSections: [createBlankShingleTearOffSection()],
+  shingleLaborType: "inHouse",
+  shingleLaborersPerDay: 0,
+  shingleTotalDaysOnJob: 0,
+  shingleLaborHourlyRate: 0,
+  shingleHoursPerDay: 0,
+  shingleSubcontractorLicensed: true,
+  shingleSubcontractorWorkersComp: true,
+  shingleSubcontractorSections: [createBlankShingleLaborSection()],
+  shingleInstallLaborPerSquare: 0,
+  shingleTearOffLaborPerSquare: 0,
+  shingleAdditionalLabor: 0,
+  shingleJobDays: 0,
+  shingleCrewSize: 0,
+  shingleCustomBidAmount: "",
+  shingleCustomBidSelected: false,
+  tileProjectType: "raiseReset",
+  tileTotalRoofSquares: 0,
+  tileWastePercent: 10,
+  tileBrokenTileAllowancePercent: 3,
+  tilePalletYieldSqPerPallet: 0,
+  tileOrderReplacementTile: false,
+  tileOrderingVerifiedPalletYield: false,
+  tileOrderingVerifiedRoofLoadCost: false,
+  tileOrderingVerifiedMaterialDeliveryCost: false,
+  tileOrderingVerifiedColorProfileAvailability: false,
+  tileOrderingVerifiedBrokenAllowance: false,
+  tileFieldTileQuantityManual: "",
+  tileUnderlaymentType: "syntheticTitanium50",
+  tileProfile: "flat",
+  tileValleyLf: 0,
+  tileRidgeLf: 0,
+  tileHipLf: 0,
+  tileDripEdgeLf: 0,
+  tileLeftRakeLf: 0,
+  tileRightRakeLf: 0,
+  tileBirdStopLf: 0,
+  tileTileRaiserLf: 0,
+  tilePipeJacksCount: 0,
+  tileOneHalfPipePenetrations: 0,
+  tileTwoInchPipePenetrations: 0,
+  tileThreeInchPipePenetrations: 0,
+  tileFourInchPipePenetrations: 0,
+  tileOvalPipePenetrations: 0,
+  tileAmericapQuantity: 0,
+  tileOvalCapQuantity: 0,
+  tileOneHalfBaseJackCost: 8,
+  tileOneHalfRoofJackCost: 8,
+  tileTwoInchBaseJackCost: 8,
+  tileTwoInchRoofJackCost: 8,
+  tileThreeInchBaseJackCost: 14,
+  tileThreeInchRoofJackCost: 14,
+  tileFourInchBaseJackCost: 15,
+  tileFourInchRoofJackCost: 15,
+  tileOvalBaseJackCost: 25,
+  tileOvalRoofJackCost: 25,
+  tileAmericapCost: 25,
+  tileOvalCapCost: 25,
+  tileVentsCount: 0,
+  tileSkylightsCount: 0,
+  tileChimneyCount: 0,
+  tileTearOffSections: [createBlankTileTearOffSection()],
+  tileLaborType: "inHouse",
+  tileLaborersPerDay: 0,
+  tileTotalDaysOnJob: 0,
+  tileLaborHourlyRate: 50,
+  tileHoursPerDay: 0,
+  tileSubcontractorLicensed: true,
+  tileSubcontractorWorkersComp: true,
+  tileSubcontractorSections: [createBlankTileLaborSection()],
+  tileCustomBidAmount: "",
+  tileCustomBidSelected: false,
+  tileCustomMaterials: [],
+  tileFieldTileQuantity: 0,
+  tileFieldTileCost: 0,
+  tileUnderlaymentType: "syntheticTitanium50",
+  tileFlatTileNailsQuantityManual: "",
+  tileSTileNailsQuantityManual: "",
+  tileUnderlaymentQuantity: 0,
+  tileUnderlaymentCost: 180,
+  tileUnderlaymentQuantityManual: "",
+  tileUnderlayment30QuantityManual: "",
+  tileUnderlayment30Cost: 30,
+  tileBattensLf: 0,
+  tileBattensQuantity: 0,
+  tileBattensQuantityManual: "",
+  tileBattensCost: 6,
+  tileFlatTileNailsCost: 85,
+  tileSTileNailsCost: 85,
+  tileValleyMetalQuantity: 0,
+  tileValleyMetalQuantityManual: "",
+  tileValleyMetalCost: 70,
+  tileFlashingMetalQuantity: 0,
+  tileDripEdgeQuantityManual: "",
+  tileFlashingMetalCost: 11.5,
+  tileRidgeHipQuantity: 0,
+  tileRidgeHipCost: 0,
+  tileMortarAdhesiveQuantity: 0,
+  tileMortarAdhesiveCost: 0,
+  tilePipeJacksQuantity: 0,
+  tilePipeJacksCost: 0,
+  tileOHaginVentsQuantity: 0,
+  tileOHaginVentsCost: 55,
+  tileDormerVentsQuantity: 0,
+  tileDormerVentsCost: 80,
+  tileCDXPlywoodQuantity: 0,
+  tileCDXPlywoodCost: 27,
+  tileMortarMixQuantityManual: "",
+  tileMortarMixCost: 12.5,
+  tileMaterialDeliveryChargeQuantity: 1,
+  tileMaterialDeliveryCharge: 0,
+  tileRoofLoadCostQuantity: 1,
+  tileRoofLoadCost: 0,
+  tileRoofLoadingDeliveryChargeQuantity: 1,
+  tileRoofLoadingDeliveryCharge: 0,
+  tileFuelSurchargeQuantity: 1,
+  tileFuelSurcharge: 0,
+
+  companyHqAddress: "18551 Orange Street, Bloomington, CA 92316",
   jobSiteAddress: "",
+  travelVehicle: DEFAULT_TRAVEL_VEHICLE_KEY,
+  travelVehicles: [DEFAULT_TRAVEL_VEHICLE_KEY],
   oneWayMiles: 0,
   oneWayDriveTime: 0,
   oneWayDriveTimeHours: 0,
@@ -316,6 +1720,15 @@ const DEFAULT_INPUTS = {
   estimateStatus: "draft",
   estimateName: "",
 };
+
+function createBlankTerminationRow() {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    terminationType: "",
+    type: "",
+    linearFeet: "",
+  };
+}
 
 const defaultUserState = {
   key: "",
@@ -412,6 +1825,7 @@ h1{
 }
 .panel > *{position:relative; z-index:1}
 .sectionHead,.panelHead{display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:16px}
+.sectionHead h2,.panelHead h2{color:#fff; font-weight:800}
 .sectionHead p,.panelHead p{color:#a6c8d8; line-height:1.5}
 .formStack{display:grid; gap:16px}
 .inputSection{
@@ -450,6 +1864,7 @@ h1{
 }
 .detailRow span{color:var(--muted); font-size:.8rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase}
 .detailRow strong{font-size:1rem; color:var(--brand2)}
+.detailNote{margin-top:4px; color:var(--muted); font-size:.78rem; text-transform:none; letter-spacing:0; font-weight:600}
 .smallNote{color:#9fc0cf; font-size:.92rem}
 .sectionTitle{
   display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;
@@ -479,6 +1894,17 @@ h1{
 .bidCard span{color:var(--muted); font-size:.8rem; font-weight:700}
 .bidCard strong{font-size:1rem; color:var(--brand2)}
 .bidCardTitle{font-size:.9rem; color:var(--ink)!important}
+.markupTableRow{
+  cursor:pointer;
+  transition:background .15s ease, border-color .15s ease, transform .15s ease;
+}
+.markupTableRow:hover{background:rgba(18,166,245,.05)}
+.markupTableRow.active{
+  background:rgba(18,166,245,.12);
+}
+.markupTableRow.active td{
+  color:#e9fbff;
+}
 .actionRow{display:flex; flex-wrap:wrap; gap:10px}
 .primaryButton,.secondaryButton,.dangerButton,.loginButton{
   min-height:44px; padding:0 15px; border-radius:12px; border:1px solid var(--line2);
@@ -512,6 +1938,80 @@ h1{
 .savedCard strong{display:block; margin-bottom:4px}
 .savedCard p{margin-bottom:0; color:#a7c7d6}
 .savedActions{display:flex; flex-wrap:wrap; gap:8px}
+.dashboardTabBar{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:10px;
+  margin-bottom:12px;
+}
+.dashboardTabButton{
+  min-height:40px;
+  padding:0 16px;
+  border-radius:999px;
+  border:1px solid rgba(18,166,245,.22);
+  background:rgba(18,166,245,.08);
+  color:#e9fbff;
+  font-weight:800;
+  cursor:pointer;
+}
+.dashboardTabButton.active{
+  border-color:rgba(18,166,245,.45);
+  background:linear-gradient(180deg, rgba(18,166,245,.22), rgba(18,166,245,.10));
+}
+.dashboardTabHint{color:#9fc0cf; font-size:.92rem}
+.crmBoard{
+  display:grid;
+  gap:14px;
+}
+.crmKanban{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:12px;
+}
+.crmKanbanColumn{
+  display:grid;
+  gap:10px;
+  padding:14px;
+  border-radius:16px;
+  border:1px solid rgba(18,166,245,.18);
+  background:rgba(255,255,255,.02);
+  min-height:220px;
+}
+.crmKanbanColumn h4{margin:0; color:var(--brand2); font-size:.98rem}
+.crmKanbanCard{
+  display:grid;
+  gap:6px;
+  padding:12px;
+  border-radius:14px;
+  border:1px solid rgba(18,166,245,.16);
+  background:rgba(11,18,26,.72);
+}
+.crmKanbanCard strong{font-size:.98rem}
+.crmTimelineList{
+  display:grid;
+  gap:10px;
+}
+.crmTimelineItem{
+  display:grid;
+  gap:4px;
+  padding:12px 14px;
+  border-radius:14px;
+  border:1px solid rgba(18,166,245,.16);
+  background:rgba(255,255,255,.02);
+}
+.crmTimelineItem strong{font-size:.96rem}
+.crmTimelineItem p{margin:0; color:#a7c7d6}
+.crmFileRow{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  align-items:flex-start;
+}
+.crmCustomerSections{
+  display:grid;
+  gap:14px;
+}
 .templateGrid{
   display:grid;
   grid-template-columns:repeat(3,minmax(0,1fr));
@@ -549,6 +2049,203 @@ h1{
 }
 .summaryCard span{display:block; margin-bottom:6px; color:var(--muted); font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em}
 .summaryCard strong{font-size:1.2rem; color:var(--brand2)}
+.summaryCard p{margin:8px 0 0; color:#a7c7d6; line-height:1.45}
+.dashboardStatusDot{
+  display:inline-block;
+  width:10px;
+  height:10px;
+  border-radius:999px;
+  background:rgba(255,255,255,.26);
+  box-shadow:0 0 0 0 rgba(79,255,145,.4);
+  vertical-align:middle;
+}
+.dashboardStatusDot.active{
+  background:#4fff91;
+  animation: activePulse 1.8s infinite;
+}
+@keyframes activePulse{
+  0%{box-shadow:0 0 0 0 rgba(79,255,145,.35)}
+  70%{box-shadow:0 0 0 12px rgba(79,255,145,0)}
+  100%{box-shadow:0 0 0 0 rgba(79,255,145,0)}
+}
+.cfoKpiCard{
+  appearance:none;
+  width:100%;
+  text-align:left;
+  cursor:pointer;
+  transition:transform .15s ease, border-color .15s ease, background .15s ease;
+}
+.cfoKpiCard:hover{
+  transform:translateY(-1px);
+  border-color:rgba(18,166,245,.35);
+  background:rgba(18,166,245,.06);
+}
+.cfoKpiCard:focus-visible{
+  outline:2px solid rgba(122,217,255,.55);
+  outline-offset:2px;
+}
+.cfoDetailOverlay{
+  position:fixed;
+  inset:0;
+  z-index:60;
+  display:grid;
+  place-items:center;
+  padding:20px;
+  background:rgba(2,10,18,.82);
+  backdrop-filter:blur(10px);
+}
+.cfoDetailPanel{
+  width:min(1180px,100%);
+  max-height:min(92vh,980px);
+  overflow:auto;
+  border-radius:22px;
+  border:1px solid rgba(18,166,245,.24);
+  background:linear-gradient(180deg, rgba(12,17,24,.98), rgba(8,12,18,.98));
+  box-shadow:0 36px 120px rgba(0,0,0,.5);
+  padding:22px;
+}
+.cfoDetailHeader{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:14px;
+  margin-bottom:16px;
+}
+.cfoDetailHeader h2{margin:0; color:#fff}
+.cfoDetailHeader p{margin:6px 0 0; color:#a7c7d6; line-height:1.45}
+.cfoDetailMeta{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  margin-top:12px;
+}
+.cfoDetailChip{
+  display:inline-flex;
+  align-items:center;
+  min-height:30px;
+  padding:0 12px;
+  border-radius:999px;
+  border:1px solid rgba(18,166,245,.18);
+  background:rgba(18,166,245,.07);
+  color:#dff7ff;
+  font-size:.78rem;
+  font-weight:700;
+}
+.cfoDetailGrid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+  gap:12px;
+  margin-bottom:16px;
+}
+.cfoDetailFilters{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+  gap:12px;
+  margin-bottom:16px;
+}
+.cfoDetailBody{
+  display:grid;
+  gap:16px;
+}
+.cfoDetailTableWrap{
+  overflow-x:auto;
+}
+.cfoDetailTable{
+  width:100%;
+  border-collapse:collapse;
+  min-width:920px;
+}
+.cfoDetailTable th,
+.cfoDetailTable td{
+  padding:10px 8px;
+  border-bottom:1px solid rgba(18,166,245,.14);
+  text-align:left;
+  vertical-align:top;
+}
+.cfoDetailTable th{
+  color:var(--muted);
+  font-size:.75rem;
+  text-transform:uppercase;
+  letter-spacing:.11em;
+}
+.cfoDetailEmpty{
+  padding:16px;
+  border-radius:14px;
+  border:1px dashed rgba(18,166,245,.22);
+  background:rgba(255,255,255,.02);
+  color:#a7c7d6;
+  line-height:1.45;
+}
+.activeJobsTableWrap{overflow-x:auto}
+.activeJobsTable{
+  width:100%;
+  border-collapse:collapse;
+  min-width:1280px;
+}
+.activeJobsTable th,
+.activeJobsTable td{
+  padding:10px 8px;
+  border-bottom:1px solid rgba(18,166,245,.14);
+  text-align:left;
+  vertical-align:top;
+}
+.activeJobsTable th{
+  color:var(--muted);
+  font-size:.75rem;
+  text-transform:uppercase;
+  letter-spacing:.11em;
+}
+.activeJobsRow{
+  cursor:pointer;
+}
+.activeJobsRow:hover{
+  background:rgba(18,166,245,.05);
+}
+.activeJobsStatusDot{
+  display:inline-block;
+  width:10px;
+  height:10px;
+  border-radius:999px;
+  margin-right:8px;
+  background:#8da2b5;
+  vertical-align:middle;
+}
+.activeJobsStatusDot.green{background:#4fff91}
+.activeJobsStatusDot.yellow{background:#ffd76b}
+.activeJobsStatusDot.red{background:#ff7e8c}
+.activeJobsStatusDot.blue{background:#7ad9ff}
+.activeJobHeaderCards{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+  gap:12px;
+  margin-bottom:16px;
+}
+.activeJobOverlay{
+  position:fixed;
+  inset:0;
+  z-index:61;
+  display:grid;
+  place-items:center;
+  padding:20px;
+  background:rgba(2,10,18,.78);
+  backdrop-filter:blur(10px);
+}
+.activeJobPanel{
+  width:min(1280px,100%);
+  max-height:min(92vh,980px);
+  overflow:auto;
+  border-radius:22px;
+  border:1px solid rgba(18,166,245,.24);
+  background:linear-gradient(180deg, rgba(12,17,24,.98), rgba(8,12,18,.98));
+  box-shadow:0 36px 120px rgba(0,0,0,.5);
+  padding:22px;
+}
+.activeJobModalGrid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
+  gap:12px;
+}
 .statusPill{
   display:inline-flex; align-items:center; justify-content:center; width:fit-content;
   min-height:28px; padding:0 10px; border-radius:999px; border:1px solid rgba(18,166,245,.22);
@@ -601,6 +2298,103 @@ function writeJson(key, value) {
   }
 }
 
+function createBlankCfoLiquidCashEntry() {
+  return {
+    id: createFieldDailyLogId(),
+    bankAccountName: "",
+    currentLiquidBalance: "",
+    lastUpdatedDate: "",
+    includedInTotal: "Yes",
+  };
+}
+
+function normalizeCfoLiquidCashEntry(entry = {}) {
+  return {
+    id: String(entry.id || createFieldDailyLogId()),
+    bankAccountName: String(entry.bankAccountName || entry.bank_account_name || ""),
+    currentLiquidBalance: String(entry.currentLiquidBalance ?? entry.current_liquid_balance ?? ""),
+    lastUpdatedDate: String(entry.lastUpdatedDate || entry.last_updated_date || ""),
+    includedInTotal: String(entry.includedInTotal || entry.included_in_total || "Yes"),
+  };
+}
+
+function createBlankCfoReceivableEntry() {
+  return {
+    id: createFieldDailyLogId(),
+    customerName: "",
+    periodFromDate: "",
+    periodToDate: "",
+    amountOwed: "",
+    paymentStatus: "Current",
+    note: "",
+  };
+}
+
+function normalizeCfoReceivableEntry(entry = {}) {
+  return {
+    id: String(entry.id || createFieldDailyLogId()),
+    customerName: String(entry.customerName || entry.customer_name || ""),
+    periodFromDate: String(entry.periodFromDate || entry.period_from_date || ""),
+    periodToDate: String(entry.periodToDate || entry.period_to_date || ""),
+    amountOwed: String(entry.amountOwed ?? entry.amount_owed ?? ""),
+    paymentStatus: String(entry.paymentStatus || entry.payment_status || "Current"),
+    note: String(entry.note || ""),
+  };
+}
+
+function createBlankCfoManualEntry(cardKey = "") {
+  return {
+    id: createFieldDailyLogId(),
+    recordName: "",
+    amount: "",
+    count: cardKey === "proposalsSent" ? "1" : "",
+    recordDate: "",
+    status: "",
+    note: "",
+  };
+}
+
+function normalizeCfoManualEntry(entry = {}, cardKey = "") {
+  return {
+    id: String(entry.id || createFieldDailyLogId()),
+    recordName: String(entry.recordName || entry.record_name || entry.label || ""),
+    amount: String(entry.amount ?? entry.dollarAmount ?? entry.dollar_amount ?? ""),
+    count: cardKey === "proposalsSent" ? String(entry.count ?? entry.proposalCount ?? entry.proposal_count ?? "") : String(entry.count ?? entry.proposalCount ?? entry.proposal_count ?? ""),
+    recordDate: String(entry.recordDate || entry.record_date || entry.date || ""),
+    status: String(entry.status || entry.paymentStatus || entry.payment_status || ""),
+    note: String(entry.note || ""),
+  };
+}
+
+function createBlankCfoManualEntriesByCard() {
+  return CFO_MANUAL_CARD_KEYS.reduce((acc, cardKey) => {
+    acc[cardKey] = [];
+    return acc;
+  }, {});
+}
+
+function normalizeCfoManualEntriesByCard(entriesByCard = {}) {
+  return CFO_MANUAL_CARD_KEYS.reduce((acc, cardKey) => {
+    const entries = Array.isArray(entriesByCard?.[cardKey]) ? entriesByCard[cardKey] : [];
+    acc[cardKey] = entries.map((entry) => normalizeCfoManualEntry(entry, cardKey));
+    return acc;
+  }, {});
+}
+
+function createBlankCfoManualDraftsByCard() {
+  return CFO_MANUAL_CARD_KEYS.reduce((acc, cardKey) => {
+    acc[cardKey] = createBlankCfoManualEntry(cardKey);
+    return acc;
+  }, {});
+}
+
+function createBlankCfoManualEditingByCard() {
+  return CFO_MANUAL_CARD_KEYS.reduce((acc, cardKey) => {
+    acc[cardKey] = "";
+    return acc;
+  }, {});
+}
+
 function removeKey(key) {
   try {
     window.localStorage.removeItem(key);
@@ -610,6 +2404,9 @@ function removeKey(key) {
 }
 
 function buildEstimateRoofType(inputs = {}) {
+  if (inputs.estimateType && String(inputs.estimateType).trim() && String(inputs.estimateType).trim() !== "TPO") {
+    return String(inputs.estimateType);
+  }
   if (inputs.substrateType) {
     const option = SUBSTRATE_OPTIONS.find((item) => item.value === inputs.substrateType);
     return option?.label || inputs.substrateType;
@@ -654,10 +2451,421 @@ function mapCompletedJobRow(row) {
     squareCount: row.square_count,
     finalBid: row.final_bid,
     laborCost: row.labor_cost,
-    materialsCost: row.materials_cost,
+    materialsCost: row.materials_cost || row.actual_material_cost,
     profit: row.profit,
     status: row.status,
     savedAt: row.saved_at,
+    dailyProgressLog: row.daily_progress_log || [],
+    laborLog: row.labor_log || [],
+    materialUsageLog: row.material_usage_log || [],
+    actualLaborHours: row.actual_labor_hours,
+    actualLaborCost: row.actual_labor_cost,
+    actualCost: row.actual_cost,
+  };
+}
+
+function createFieldDailyLogId() {
+  if (typeof window !== "undefined" && window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createBlankFieldDailyLogCrewRow() {
+  return {
+    id: createFieldDailyLogId(),
+    employeeLookupId: "",
+    employeeName: "",
+    employeeId: "",
+    startTime: "",
+    endTime: "",
+    lunchDurationHours: 0,
+    regularHours: 0,
+    overtimeHours: 0,
+    doubleTimeHours: 0,
+    role: "",
+  };
+}
+
+function createBlankFieldDailyLogMaterialRow() {
+  return {
+    id: createFieldDailyLogId(),
+    materialName: "",
+    quantity: 0,
+    unit: "",
+    notes: "",
+  };
+}
+
+function createBlankFieldDailyLogPhotoRow(category = "progress") {
+  return {
+    id: createFieldDailyLogId(),
+    photoCategory: category,
+    fileName: "",
+    storagePath: "",
+    photoUrl: "",
+    uploadedAt: "",
+    uploadedBy: "",
+    deviceIdentifier: "",
+  };
+}
+
+function createBlankFieldDailyLogVehicleRow() {
+  return {
+    id: createFieldDailyLogId(),
+    vehicleId: "",
+    driverEmployeeId: "",
+    driverEmployeeName: "",
+    truckName: "",
+    unitNumber: "",
+    licensePlate: "",
+    vehicleType: "",
+    startingMileage: 0,
+    endingMileage: 0,
+    milesDriven: 0,
+    mileageFlag: false,
+    otherDescription: "",
+  };
+}
+
+function createBlankFieldDailyLogFuelReceiptRow() {
+  return {
+    id: createFieldDailyLogId(),
+    vehicleRowId: "",
+    gallonsPumped: 0,
+    totalReceiptAmount: 0,
+    pricePerGallon: 0,
+    fuelStation: "",
+    receiptDateTime: "",
+    receiptPhoto: null,
+    receiptPhotoUrl: "",
+    receiptPhotoPath: "",
+    receiptPhotoName: "",
+    fuelPurchased: true,
+  };
+}
+
+function createBlankEmployeeRecord() {
+  return {
+    id: createFieldDailyLogId(),
+    firstName: "",
+    lastName: "",
+    displayName: "",
+    occupation: "",
+    department: "Field Operations",
+    isActive: true,
+    isForeman: false,
+    isDriver: false,
+    employeeNumber: "",
+    phone: "",
+    email: "",
+    hireDate: "",
+    hourlyRate: 0,
+    payrollId: "",
+    notes: "",
+    displayOrder: 0,
+  };
+}
+
+function createBlankFieldDailyLog(userDisplayName = "") {
+  return {
+    id: createFieldDailyLogId(),
+    jobNumber: "",
+    jobName: "",
+    jobAddress: "",
+    workDate: new Date().toISOString().slice(0, 10),
+    foreman: userDisplayName || "",
+    weatherConditions: "",
+    jobStartTime: "",
+    lunchStartTime: "",
+    lunchEndTime: "",
+    jobEndTime: "",
+    fuelPurchased: false,
+    crewRows: [createBlankFieldDailyLogCrewRow()],
+    workCompleted: "",
+    materialsUsedText: "",
+    materialsRows: [createBlankFieldDailyLogMaterialRow()],
+    equipmentUsed: "",
+    delaysOrProblems: "",
+    safetyIncidents: false,
+    additionalNotes: "",
+    vehicleRows: [createBlankFieldDailyLogVehicleRow()],
+    fuelReceipts: [],
+    photos: [],
+    status: "draft",
+    submittedAt: "",
+    submittedBy: "",
+    deviceIdentifier: "",
+    correctionOfLogId: "",
+    correctionReason: "",
+    revisions: [],
+  };
+}
+
+function normalizeTimeInputValue(value) {
+  return String(value || "").trim();
+}
+
+function calculateMinutesBetweenTimes(startTime, endTime) {
+  const start = normalizeTimeInputValue(startTime);
+  const end = normalizeTimeInputValue(endTime);
+  if (!start || !end) return 0;
+  const [startHours, startMinutes] = start.split(":").map((item) => Number(item));
+  const [endHours, endMinutes] = end.split(":").map((item) => Number(item));
+  if (![startHours, startMinutes, endHours, endMinutes].every((item) => Number.isFinite(item))) return 0;
+  const startTotal = startHours * 60 + startMinutes;
+  let endTotal = endHours * 60 + endMinutes;
+  if (endTotal < startTotal) endTotal += 24 * 60;
+  return Math.max(0, endTotal - startTotal);
+}
+
+function calculateHoursBetweenTimes(startTime, endTime) {
+  return calculateMinutesBetweenTimes(startTime, endTime) / 60;
+}
+
+function normalizeFieldDailyLogCrewRow(row = {}) {
+  return {
+    id: String(row.id || createFieldDailyLogId()),
+    employeeLookupId: String(row.employeeLookupId || row.employee_lookup_id || ""),
+    employeeName: String(row.employeeName || row.employee_name || ""),
+    employeeId: String(row.employeeId || row.employee_id || ""),
+    startTime: normalizeTimeInputValue(row.startTime || row.start_time || ""),
+    endTime: normalizeTimeInputValue(row.endTime || row.end_time || ""),
+    lunchDurationHours: Math.max(0, toNumber(row.lunchDurationHours ?? row.lunch_duration_hours, 0)),
+    regularHours: Math.max(0, toNumber(row.regularHours ?? row.regular_hours, 0)),
+    overtimeHours: Math.max(0, toNumber(row.overtimeHours ?? row.overtime_hours, 0)),
+    doubleTimeHours: Math.max(0, toNumber(row.doubleTimeHours ?? row.double_time_hours, 0)),
+    role: String(row.role || ""),
+  };
+}
+
+function normalizeFieldDailyLogMaterialRow(row = {}) {
+  return {
+    id: String(row.id || createFieldDailyLogId()),
+    materialName: String(row.materialName || row.material_name || ""),
+    quantity: Math.max(0, toNumber(row.quantity, 0)),
+    unit: String(row.unit || ""),
+    notes: String(row.notes || ""),
+  };
+}
+
+function normalizeFieldDailyLogPhotoRow(row = {}) {
+  return {
+    id: String(row.id || createFieldDailyLogId()),
+    photoCategory: String(row.photoCategory || row.photo_category || "progress"),
+    fileName: String(row.fileName || row.file_name || ""),
+    storagePath: String(row.storagePath || row.storage_path || ""),
+    photoUrl: String(row.photoUrl || row.photo_url || ""),
+    uploadedAt: String(row.uploadedAt || row.uploaded_at || ""),
+    uploadedBy: String(row.uploadedBy || row.uploaded_by || ""),
+    deviceIdentifier: String(row.deviceIdentifier || row.device_identifier || ""),
+  };
+}
+
+function normalizeFieldDailyLogVehicleRow(row = {}) {
+  return {
+    id: String(row.id || createFieldDailyLogId()),
+    vehicleId: String(row.vehicleId || row.vehicle_id || ""),
+    driverEmployeeId: String(row.driverEmployeeId || row.driver_employee_id || ""),
+    driverEmployeeName: String(row.driverEmployeeName || row.driver_employee_name || ""),
+    truckName: String(row.truckName || row.truck_name || row.vehicle_name || ""),
+    unitNumber: String(row.unitNumber || row.unit_number || ""),
+    licensePlate: String(row.licensePlate || row.license_plate || ""),
+    vehicleType: String(row.vehicleType || row.vehicle_type || ""),
+    startingMileage: Math.max(0, toNumber(row.startingMileage ?? row.starting_mileage, 0)),
+    endingMileage: Math.max(0, toNumber(row.endingMileage ?? row.ending_mileage, 0)),
+    milesDriven: Math.max(0, toNumber(row.milesDriven ?? row.miles_driven, 0)),
+    mileageFlag: Boolean(row.mileageFlag ?? row.mileage_flag ?? false),
+    otherDescription: String(row.otherDescription || row.other_description || ""),
+  };
+}
+
+function normalizeFieldDailyLogFuelReceiptRow(row = {}) {
+  return {
+    id: String(row.id || createFieldDailyLogId()),
+    vehicleRowId: String(row.vehicleRowId || row.vehicle_row_id || ""),
+    gallonsPumped: Math.max(0, toNumber(row.gallonsPumped ?? row.gallons_pumped, 0)),
+    totalReceiptAmount: Math.max(0, toNumber(row.totalReceiptAmount ?? row.total_receipt_amount, 0)),
+    pricePerGallon: Math.max(0, toNumber(row.pricePerGallon ?? row.price_per_gallon, 0)),
+    fuelStation: String(row.fuelStation || row.fuel_station || ""),
+    receiptDateTime: String(row.receiptDateTime || row.receipt_date_time || ""),
+    receiptPhoto: null,
+    receiptPhotoUrl: String(row.receiptPhotoUrl || row.receipt_photo_url || ""),
+    receiptPhotoPath: String(row.receiptPhotoPath || row.receipt_photo_path || ""),
+    receiptPhotoName: String(row.receiptPhotoName || row.receipt_photo_name || ""),
+    fuelPurchased: Boolean(row.fuelPurchased ?? row.fuel_purchased ?? true),
+  };
+}
+
+function normalizeFieldDailyLogRevisionRow(row = {}) {
+  return {
+    id: String(row.id || createFieldDailyLogId()),
+    fieldName: String(row.fieldName || row.field_name || ""),
+    originalValue: String(row.originalValue || row.original_value || ""),
+    updatedValue: String(row.updatedValue || row.updated_value || ""),
+    changedBy: String(row.changedBy || row.changed_by || ""),
+    reason: String(row.reason || ""),
+    changedAt: String(row.changedAt || row.changed_at || row.changed_at || new Date().toISOString()),
+  };
+}
+
+function normalizeFieldDailyLogDraft(log = {}, userDisplayName = "") {
+  const crewRowsSource = Array.isArray(log.crewRows)
+    ? log.crewRows
+    : Array.isArray(log.crew_rows)
+      ? log.crew_rows
+      : [createBlankFieldDailyLogCrewRow()];
+  const materialRowsSource = Array.isArray(log.materialsRows)
+    ? log.materialsRows
+    : Array.isArray(log.material_rows)
+      ? log.material_rows
+      : [createBlankFieldDailyLogMaterialRow()];
+  const photosSource = Array.isArray(log.photos) ? log.photos : Array.isArray(log.photo_rows) ? log.photo_rows : [];
+  const vehicleRowsSource = Array.isArray(log.vehicleRows)
+    ? log.vehicleRows
+    : Array.isArray(log.vehicle_rows)
+      ? log.vehicle_rows
+      : [createBlankFieldDailyLogVehicleRow()];
+  const fuelReceiptsSource = Array.isArray(log.fuelReceipts)
+    ? log.fuelReceipts
+    : Array.isArray(log.fuel_receipts)
+      ? log.fuel_receipts
+      : [];
+  const revisionsSource = Array.isArray(log.revisions) ? log.revisions : Array.isArray(log.revision_rows) ? log.revision_rows : [];
+
+  return {
+    id: String(log.id || createFieldDailyLogId()),
+    jobNumber: String(log.jobNumber || log.job_number || ""),
+    jobName: String(log.jobName || log.job_name || ""),
+    jobAddress: String(log.jobAddress || log.job_address || ""),
+    workDate: String(log.workDate || log.work_date || new Date().toISOString().slice(0, 10)),
+    foreman: String(log.foreman || ""),
+    weatherConditions: String(log.weatherConditions || log.weather_conditions || ""),
+    jobStartTime: normalizeTimeInputValue(log.jobStartTime || log.job_start_time || ""),
+    lunchStartTime: normalizeTimeInputValue(log.lunchStartTime || log.lunch_start_time || ""),
+    lunchEndTime: normalizeTimeInputValue(log.lunchEndTime || log.lunch_end_time || ""),
+    jobEndTime: normalizeTimeInputValue(log.jobEndTime || log.job_end_time || ""),
+    fuelPurchased: Boolean(log.fuelPurchased ?? log.fuel_purchased ?? false),
+    crewRows: crewRowsSource.map(normalizeFieldDailyLogCrewRow),
+    workCompleted: String(log.workCompleted || log.work_completed || ""),
+    materialsUsedText: String(log.materialsUsedText || log.materials_used || ""),
+    materialsRows: materialRowsSource.map(normalizeFieldDailyLogMaterialRow),
+    equipmentUsed: String(log.equipmentUsed || log.equipment_used || ""),
+    delaysOrProblems: String(log.delaysOrProblems || log.delays_or_problems || ""),
+    safetyIncidents: Boolean(log.safetyIncidents ?? log.safety_incident ?? log.safety_incidents ?? false),
+    additionalNotes: String(log.additionalNotes || log.additional_notes || ""),
+    vehicleRows: vehicleRowsSource.map(normalizeFieldDailyLogVehicleRow),
+    fuelReceipts: fuelReceiptsSource.map(normalizeFieldDailyLogFuelReceiptRow),
+    photos: photosSource.map(normalizeFieldDailyLogPhotoRow),
+    status: String(log.status || "draft").toLowerCase() === "submitted" ? "submitted" : "draft",
+    submittedAt: String(log.submittedAt || log.submitted_at || ""),
+    submittedBy: String(log.submittedBy || log.submitted_by || userDisplayName || ""),
+    deviceIdentifier: String(log.deviceIdentifier || log.device_identifier || ""),
+    correctionOfLogId: String(log.correctionOfLogId || log.correction_of_log_id || ""),
+    correctionReason: String(log.correctionReason || log.correction_reason || ""),
+    revisions: revisionsSource.map(normalizeFieldDailyLogRevisionRow),
+  };
+}
+
+function calculateFieldDailyLogTotals(log = {}) {
+  const crewRows = Array.isArray(log.crewRows) ? log.crewRows : [];
+  const materialsRows = Array.isArray(log.materialsRows) ? log.materialsRows : [];
+  const vehicleRows = Array.isArray(log.vehicleRows) ? log.vehicleRows : [];
+  const fuelReceipts = Array.isArray(log.fuelReceipts) ? log.fuelReceipts : [];
+  const photos = Array.isArray(log.photos) ? log.photos : [];
+
+  const totalRegularHours = crewRows.reduce((sum, row) => sum + Math.max(0, toNumber(row.regularHours, 0)), 0);
+  const totalOvertimeHours = crewRows.reduce((sum, row) => sum + Math.max(0, toNumber(row.overtimeHours, 0)), 0);
+  const totalDoubleTimeHours = crewRows.reduce((sum, row) => sum + Math.max(0, toNumber(row.doubleTimeHours, 0)), 0);
+  const totalCrewHours = totalRegularHours + totalOvertimeHours + totalDoubleTimeHours;
+  const totalMaterialItems = materialsRows.reduce((sum, row) => sum + Math.max(0, toNumber(row.quantity, 0) * 1), 0);
+  const vehicleMilesDriven = vehicleRows.reduce((sum, row) => sum + Math.max(0, toNumber(row.milesDriven, 0)), 0);
+  const totalFuelReceipts = fuelReceipts.reduce((sum, row) => sum + Math.max(0, toNumber(row.totalReceiptAmount, 0)), 0);
+  const totalFuelGallons = fuelReceipts.reduce((sum, row) => sum + Math.max(0, toNumber(row.gallonsPumped, 0)), 0);
+  const calculatedLunchDurationHours = Math.max(0, calculateHoursBetweenTimes(log.lunchStartTime, log.lunchEndTime));
+  const calculatedTimeOnSiteHours = Math.max(
+    0,
+    calculateHoursBetweenTimes(log.jobStartTime, log.jobEndTime) - calculatedLunchDurationHours,
+  );
+  const highMileageCount = vehicleRows.filter((row) => Math.max(0, toNumber(row.milesDriven, 0)) >= FIELD_DAILY_LOG_HIGH_MILEAGE_THRESHOLD).length;
+  const photoCount = photos.length;
+
+  return {
+    totalRegularHours,
+    totalOvertimeHours,
+    totalDoubleTimeHours,
+    totalCrewHours,
+    totalMaterialItems,
+    vehicleMilesDriven,
+    totalFuelReceipts,
+    totalFuelGallons,
+    calculatedLunchDurationHours,
+    calculatedTimeOnSiteHours,
+    highMileageCount,
+    photoCount,
+  };
+}
+
+function fieldDailyLogHasProgressOrCompletedPhoto(log = {}) {
+  return Array.isArray(log.photos) && log.photos.some((photo) => {
+    const category = String(photo.photoCategory || photo.photo_category || "").toLowerCase();
+    return category === "progress" || category === "completed";
+  });
+}
+
+function mapFieldDailyLogRow(row, crewRows = [], materialsRows = [], vehicleRows = [], fuelReceipts = [], photos = [], revisions = []) {
+  if (!row) return null;
+  const draft = normalizeFieldDailyLogDraft(
+    {
+      id: row.id,
+      jobNumber: row.job_number,
+      jobName: row.job_name,
+      jobAddress: row.job_address,
+      workDate: row.work_date,
+      foreman: row.foreman,
+      weatherConditions: row.weather_conditions,
+      workCompleted: row.work_completed,
+      materialsUsedText: row.materials_used,
+      equipmentUsed: row.equipment_used,
+      delaysOrProblems: row.delays_or_problems,
+      safetyIncidents: row.safety_incidents,
+      additionalNotes: row.additional_notes,
+      jobStartTime: row.job_start_time,
+      lunchStartTime: row.lunch_start_time,
+      lunchEndTime: row.lunch_end_time,
+      jobEndTime: row.job_end_time,
+      fuelPurchased: row.fuel_purchased,
+      vehicleRows,
+      fuelReceipts,
+      photos,
+      status: row.status,
+      submittedAt: row.submitted_at,
+      submittedBy: row.submitted_by,
+      deviceIdentifier: row.device_identifier,
+      correctionOfLogId: row.correction_of_log_id,
+      correctionReason: row.correction_reason,
+      revisions,
+      crewRows,
+      materialsRows,
+    },
+    row.submitted_by || "",
+  );
+  const totals = calculateFieldDailyLogTotals(draft);
+  return {
+    ...draft,
+    totalRegularHours: toNumber(row.total_regular_hours, totals.totalRegularHours),
+    totalOvertimeHours: toNumber(row.total_overtime_hours, totals.totalOvertimeHours),
+    totalDoubleTimeHours: toNumber(row.total_double_time_hours, totals.totalDoubleTimeHours),
+    totalCrewHours: toNumber(row.total_crew_hours, totals.totalCrewHours),
+    vehicleMilesDriven: toNumber(row.vehicle_miles_driven, totals.vehicleMilesDriven),
+    totalFuelReceipts: toNumber(row.total_fuel_receipts, totals.totalFuelReceipts),
+    totalFuelGallons: toNumber(row.total_fuel_gallons, totals.totalFuelGallons),
+    calculatedLunchDurationHours: toNumber(row.calculated_lunch_duration_hours, totals.calculatedLunchDurationHours),
+    calculatedTimeOnSiteHours: toNumber(row.calculated_time_on_site_hours, totals.calculatedTimeOnSiteHours),
+    highMileageCount: toNumber(row.high_mileage_count, totals.highMileageCount),
+    photoCount: toNumber(row.photo_count, totals.photoCount),
+    createdAt: row.created_at || "",
+    updatedAt: row.updated_at || "",
   };
 }
 
@@ -677,6 +2885,929 @@ async function fetchCompletedJobsFromSupabase(userKey) {
     .select("*")
     .eq("user_key", userKey)
     .order("saved_at", { ascending: false });
+}
+
+async function fetchFieldDailyLogsFromSupabase(userKey) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+
+  const [logsRes, crewRes, materialsRes, vehiclesRes, receiptsRes, photosRes, revisionsRes] = await Promise.all([
+    supabase.from("field_daily_logs").select("*").eq("user_key", userKey).order("work_date", { ascending: false }),
+    supabase.from("field_daily_log_crew").select("*").eq("user_key", userKey),
+    supabase.from("field_daily_log_materials").select("*").eq("user_key", userKey),
+    supabase.from("daily_log_vehicles").select("*").eq("user_key", userKey),
+    supabase.from("daily_log_fuel_receipts").select("*").eq("user_key", userKey),
+    supabase.from("field_daily_log_photos").select("*").eq("user_key", userKey),
+    supabase.from("field_daily_log_revisions").select("*").eq("user_key", userKey),
+  ]);
+
+  if (logsRes.error) return { data: [], error: logsRes.error };
+
+  const crewByLog = new Map();
+  (crewRes.data || []).forEach((row) => {
+    const key = row.log_id;
+    if (!crewByLog.has(key)) crewByLog.set(key, []);
+    crewByLog.get(key).push(row);
+  });
+
+  const materialsByLog = new Map();
+  (materialsRes.data || []).forEach((row) => {
+    const key = row.log_id;
+    if (!materialsByLog.has(key)) materialsByLog.set(key, []);
+    materialsByLog.get(key).push(row);
+  });
+
+  const vehiclesByLog = new Map();
+  (vehiclesRes.data || []).forEach((row) => {
+    const key = row.log_id;
+    if (!vehiclesByLog.has(key)) vehiclesByLog.set(key, []);
+    vehiclesByLog.get(key).push(row);
+  });
+
+  const receiptsByLog = new Map();
+  (receiptsRes.data || []).forEach((row) => {
+    const key = row.log_id;
+    if (!receiptsByLog.has(key)) receiptsByLog.set(key, []);
+    receiptsByLog.get(key).push(row);
+  });
+
+  const photosByLog = new Map();
+  (photosRes.data || []).forEach((row) => {
+    const key = row.log_id;
+    if (!photosByLog.has(key)) photosByLog.set(key, []);
+    photosByLog.get(key).push(row);
+  });
+
+  const revisionsByLog = new Map();
+  (revisionsRes.data || []).forEach((row) => {
+    const key = row.log_id;
+    if (!revisionsByLog.has(key)) revisionsByLog.set(key, []);
+    revisionsByLog.get(key).push(row);
+  });
+
+  return {
+    data: (logsRes.data || [])
+      .map((row) =>
+        mapFieldDailyLogRow(
+          row,
+          crewByLog.get(row.id) || [],
+          materialsByLog.get(row.id) || [],
+          vehiclesByLog.get(row.id) || [],
+          receiptsByLog.get(row.id) || [],
+          photosByLog.get(row.id) || [],
+          revisionsByLog.get(row.id) || [],
+        ),
+      )
+      .filter(Boolean),
+    error: null,
+  };
+}
+
+function mapFieldOperationEmployeeRow(row = {}) {
+  const firstName = String(row.first_name || row.firstName || "");
+  const lastName = String(row.last_name || row.lastName || "");
+  const displayName = String(
+    row.display_name ||
+      row.displayName ||
+      row.employee_name ||
+      row.name ||
+      [firstName, lastName].filter(Boolean).join(" ").trim(),
+  );
+  return {
+    id: String(row.id || row.employee_id || createFieldDailyLogId()),
+    firstName,
+    lastName,
+    displayName,
+    occupation: String(row.occupation || row.role || row.title || ""),
+    department: String(row.department || row.dept || row.team || ""),
+    isActive: row.is_active !== false && row.is_active !== "false" && row.active !== false && row.active !== "false",
+    isForeman: row.is_foreman === true || row.is_foreman === "true" || row.foreman === true || row.foreman === "true",
+    isDriver: row.is_driver === true || row.is_driver === "true" || row.driver === true || row.driver === "true",
+    employeeNumber: String(row.employee_number || row.employeeNumber || row.employee_code || row.employee_id || ""),
+    phone: String(row.phone || ""),
+    email: String(row.email || ""),
+    hireDate: String(row.hire_date || row.hireDate || ""),
+    payrollId: String(row.payroll_id || row.payrollId || ""),
+    notes: String(row.notes || ""),
+    hourlyRate: Math.max(0, toNumber(row.hourly_rate ?? row.hourlyRate, 0)),
+    displayOrder: toNumber(row.display_order, 0),
+  };
+}
+
+function mapCompanyVehicleRow(row = {}) {
+  return {
+    id: String(row.id || createFieldDailyLogId()),
+    vehicleName: String(row.vehicle_name || row.name || ""),
+    unitNumber: String(row.unit_number || row.unit || ""),
+    licensePlate: String(row.license_plate || row.plate || ""),
+    mpg: Math.max(0, toNumber(row.mpg, 0)),
+    active: row.active !== false && row.active !== "false",
+    vehicleType: String(row.vehicle_type || ""),
+  };
+}
+
+function buildEmployeeDisplayName(employee = {}) {
+  return (
+    String(employee.displayName || "")
+      .trim() ||
+    [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim() ||
+    String(employee.employeeName || "").trim() ||
+    ""
+  );
+}
+
+function normalizeEmployeeRecord(employee = {}) {
+  const mapped = mapFieldOperationEmployeeRow(employee);
+  return {
+    ...mapped,
+    firstName: String(employee.firstName || employee.first_name || mapped.firstName || ""),
+    lastName: String(employee.lastName || employee.last_name || mapped.lastName || ""),
+    displayName: buildEmployeeDisplayName({
+      displayName: employee.displayName || employee.display_name || mapped.displayName,
+      firstName: employee.firstName || employee.first_name || mapped.firstName,
+      lastName: employee.lastName || employee.last_name || mapped.lastName,
+      employeeName: employee.employeeName || employee.employee_name || mapped.displayName,
+    }),
+    occupation: String(employee.occupation || employee.role || mapped.occupation || ""),
+    department: String(employee.department || mapped.department || "Field Operations"),
+    isActive: employee.isActive ?? employee.is_active ?? mapped.isActive ?? true,
+    isForeman: employee.isForeman ?? employee.is_foreman ?? mapped.isForeman ?? false,
+    isDriver: employee.isDriver ?? employee.is_driver ?? mapped.isDriver ?? false,
+    employeeNumber: String(employee.employeeNumber || employee.employee_number || mapped.employeeNumber || ""),
+    phone: String(employee.phone || mapped.phone || ""),
+    email: String(employee.email || mapped.email || ""),
+    hireDate: String(employee.hireDate || employee.hire_date || mapped.hireDate || ""),
+    payrollId: String(employee.payrollId || employee.payroll_id || mapped.payrollId || ""),
+    notes: String(employee.notes || mapped.notes || ""),
+    hourlyRate: Math.max(0, toNumber(employee.hourlyRate ?? employee.hourly_rate ?? mapped.hourlyRate, 0)),
+    displayOrder: toNumber(employee.displayOrder ?? employee.display_order ?? mapped.displayOrder, 0),
+  };
+}
+
+function createBlankCrmLead() {
+  const now = new Date().toISOString();
+  return {
+    id: createFieldDailyLogId(),
+    firstName: "",
+    lastName: "",
+    phone: "",
+    email: "",
+    propertyAddress: "",
+    city: "",
+    zipCode: "",
+    leadSource: "",
+    roofingServiceNeeded: "",
+    description: "",
+    assignedStaffId: "",
+    leadStatus: "New",
+    companyName: "",
+    bestTimeToCall: "",
+    secondaryPhone: "",
+    propertyType: "",
+    roofType: "",
+    approximateRoofSize: "",
+    urgency: "Normal",
+    insuranceClaim: false,
+    referredBy: "",
+    internalNotes: "",
+    estimatedValue: "",
+    nextFollowUpDate: "",
+    appointmentDate: "",
+    lastActivityDate: now,
+    convertedCustomerId: "",
+    history: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function normalizeCrmLead(lead = {}) {
+  const now = new Date().toISOString();
+  const historySource = Array.isArray(lead.history) ? lead.history : Array.isArray(lead.leadHistory) ? lead.leadHistory : [];
+  return {
+    ...createBlankCrmLead(),
+    id: String(lead.id || createFieldDailyLogId()),
+    firstName: String(lead.firstName || lead.first_name || ""),
+    lastName: String(lead.lastName || lead.last_name || ""),
+    phone: String(lead.phone || ""),
+    email: String(lead.email || ""),
+    propertyAddress: String(lead.propertyAddress || lead.property_address || ""),
+    city: String(lead.city || ""),
+    zipCode: String(lead.zipCode || lead.zip_code || ""),
+    leadSource: String(lead.leadSource || lead.lead_source || ""),
+    roofingServiceNeeded: String(lead.roofingServiceNeeded || lead.roofing_service_needed || ""),
+    description: String(lead.description || lead.requestDescription || lead.notes || ""),
+    assignedStaffId: String(lead.assignedStaffId || lead.assigned_staff_id || ""),
+    leadStatus: String(lead.leadStatus || lead.lead_status || "New") || "New",
+    companyName: String(lead.companyName || lead.company_name || ""),
+    bestTimeToCall: String(lead.bestTimeToCall || lead.best_time_to_call || ""),
+    secondaryPhone: String(lead.secondaryPhone || lead.secondary_phone || ""),
+    propertyType: String(lead.propertyType || lead.property_type || ""),
+    roofType: String(lead.roofType || lead.roof_type || ""),
+    approximateRoofSize: String(lead.approximateRoofSize || lead.approximate_roof_size || ""),
+    urgency: String(lead.urgency || "Normal"),
+    insuranceClaim: lead.insuranceClaim ?? lead.insurance_claim ?? false,
+    referredBy: String(lead.referredBy || lead.referred_by || ""),
+    internalNotes: String(lead.internalNotes || lead.internal_notes || ""),
+    estimatedValue: String(lead.estimatedValue ?? lead.estimated_value ?? ""),
+    nextFollowUpDate: String(lead.nextFollowUpDate || lead.next_follow_up_date || ""),
+    appointmentDate: String(lead.appointmentDate || lead.appointment_date || ""),
+    lastActivityDate: String(lead.lastActivityDate || lead.last_activity_date || now),
+    convertedCustomerId: String(lead.convertedCustomerId || lead.converted_customer_id || ""),
+    history: historySource.map((item) => ({
+      id: String(item.id || createFieldDailyLogId()),
+      label: String(item.label || item.type || "Activity"),
+      note: String(item.note || item.summary || ""),
+      createdAt: String(item.createdAt || item.created_at || now),
+      createdBy: String(item.createdBy || item.created_by || ""),
+    })),
+    createdAt: String(lead.createdAt || lead.created_at || now),
+    updatedAt: String(lead.updatedAt || lead.updated_at || now),
+  };
+}
+
+function createBlankCrmProperty() {
+  return {
+    id: createFieldDailyLogId(),
+    propertyName: "",
+    propertyAddress: "",
+    city: "",
+    zipCode: "",
+    propertyType: "",
+    roofType: "",
+    approximateRoofSize: "",
+    notes: "",
+  };
+}
+
+function normalizeCrmProperty(property = {}) {
+  return {
+    ...createBlankCrmProperty(),
+    id: String(property.id || createFieldDailyLogId()),
+    propertyName: String(property.propertyName || property.property_name || ""),
+    propertyAddress: String(property.propertyAddress || property.property_address || ""),
+    city: String(property.city || ""),
+    zipCode: String(property.zipCode || property.zip_code || ""),
+    propertyType: String(property.propertyType || property.property_type || ""),
+    roofType: String(property.roofType || property.roof_type || ""),
+    approximateRoofSize: String(property.approximateRoofSize || property.approximate_roof_size || ""),
+    notes: String(property.notes || ""),
+  };
+}
+
+function createBlankCrmContact() {
+  return {
+    id: createFieldDailyLogId(),
+    name: "",
+    role: "",
+    phone: "",
+    email: "",
+    isPrimary: false,
+    notes: "",
+  };
+}
+
+function normalizeCrmContact(contact = {}) {
+  return {
+    ...createBlankCrmContact(),
+    id: String(contact.id || createFieldDailyLogId()),
+    name: String(contact.name || contact.fullName || ""),
+    role: String(contact.role || ""),
+    phone: String(contact.phone || ""),
+    email: String(contact.email || ""),
+    isPrimary: Boolean(contact.isPrimary ?? contact.is_primary ?? false),
+    notes: String(contact.notes || ""),
+  };
+}
+
+function createBlankCrmJob() {
+  return {
+    id: createFieldDailyLogId(),
+    jobNumber: "",
+    projectName: "",
+    status: "Approved",
+    contractAmount: "",
+    amountBilled: "",
+    amountCollected: "",
+    startDate: "",
+    completionDate: "",
+    notes: "",
+  };
+}
+
+function normalizeCrmJob(job = {}) {
+  return {
+    ...createBlankCrmJob(),
+    id: String(job.id || createFieldDailyLogId()),
+    jobNumber: String(job.jobNumber || job.job_number || ""),
+    projectName: String(job.projectName || job.project_name || ""),
+    status: String(job.status || "Approved"),
+    contractAmount: String(job.contractAmount ?? job.contract_amount ?? ""),
+    amountBilled: String(job.amountBilled ?? job.amount_billed ?? ""),
+    amountCollected: String(job.amountCollected ?? job.amount_collected ?? ""),
+    startDate: String(job.startDate || job.start_date || ""),
+    completionDate: String(job.completionDate || job.completion_date || ""),
+    notes: String(job.notes || ""),
+  };
+}
+
+function createBlankCrmTimelineEntry() {
+  return {
+    id: createFieldDailyLogId(),
+    label: "Note",
+    summary: "",
+    details: "",
+    createdAt: new Date().toISOString(),
+    createdBy: "",
+  };
+}
+
+function normalizeCrmTimelineEntry(entry = {}) {
+  return {
+    ...createBlankCrmTimelineEntry(),
+    id: String(entry.id || createFieldDailyLogId()),
+    label: String(entry.label || entry.type || "Note"),
+    summary: String(entry.summary || entry.note || ""),
+    details: String(entry.details || ""),
+    createdAt: String(entry.createdAt || entry.created_at || new Date().toISOString()),
+    createdBy: String(entry.createdBy || entry.created_by || ""),
+  };
+}
+
+function createBlankCrmFile() {
+  return {
+    id: createFieldDailyLogId(),
+    fileName: "",
+    category: "Other",
+    notes: "",
+    uploadedAt: "",
+    uploadedBy: "",
+    storagePath: "",
+    fileUrl: "",
+  };
+}
+
+function normalizeCrmFile(file = {}) {
+  return {
+    ...createBlankCrmFile(),
+    id: String(file.id || createFieldDailyLogId()),
+    fileName: String(file.fileName || file.file_name || file.name || ""),
+    category: String(file.category || "Other"),
+    notes: String(file.notes || ""),
+    uploadedAt: String(file.uploadedAt || file.uploaded_at || new Date().toISOString()),
+    uploadedBy: String(file.uploadedBy || file.uploaded_by || ""),
+    storagePath: String(file.storagePath || file.storage_path || ""),
+    fileUrl: String(file.fileUrl || file.file_url || ""),
+  };
+}
+
+function createBlankCrmCustomer() {
+  const now = new Date().toISOString();
+  return {
+    id: createFieldDailyLogId(),
+    customerName: "",
+    firstName: "",
+    lastName: "",
+    companyName: "",
+    phone: "",
+    email: "",
+    secondaryPhone: "",
+    billingAddress: "",
+    city: "",
+    zipCode: "",
+    customerType: "",
+    propertyType: "",
+    sourceLeadId: "",
+    assignedStaffId: "",
+    assignedStaffName: "",
+    nextFollowUpDate: "",
+    properties: [],
+    contacts: [],
+    jobs: [],
+    timeline: [],
+    files: [],
+    notes: "",
+    proposalArchive: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function normalizeCrmCustomer(customer = {}) {
+  const now = new Date().toISOString();
+  const propertiesSource = Array.isArray(customer.properties) ? customer.properties : Array.isArray(customer.propertiesList) ? customer.propertiesList : [];
+  const contactsSource = Array.isArray(customer.contacts) ? customer.contacts : Array.isArray(customer.contactList) ? customer.contactList : [];
+  const jobsSource = Array.isArray(customer.jobs) ? customer.jobs : Array.isArray(customer.jobList) ? customer.jobList : [];
+  const timelineSource = Array.isArray(customer.timeline) ? customer.timeline : Array.isArray(customer.history) ? customer.history : [];
+  const filesSource = Array.isArray(customer.files) ? customer.files : Array.isArray(customer.documents) ? customer.documents : [];
+  const proposalArchiveSource = Array.isArray(customer.proposalArchive)
+    ? customer.proposalArchive
+    : Array.isArray(customer.proposalArchiveEntries)
+      ? customer.proposalArchiveEntries
+      : [];
+  return {
+    ...createBlankCrmCustomer(),
+    id: String(customer.id || createFieldDailyLogId()),
+    customerName: String(customer.customerName || customer.customer_name || ""),
+    firstName: String(customer.firstName || customer.first_name || ""),
+    lastName: String(customer.lastName || customer.last_name || ""),
+    companyName: String(customer.companyName || customer.company_name || ""),
+    phone: String(customer.phone || ""),
+    email: String(customer.email || ""),
+    secondaryPhone: String(customer.secondaryPhone || customer.secondary_phone || ""),
+    billingAddress: String(customer.billingAddress || customer.billing_address || ""),
+    city: String(customer.city || ""),
+    zipCode: String(customer.zipCode || customer.zip_code || ""),
+    customerType: String(customer.customerType || customer.customer_type || ""),
+    propertyType: String(customer.propertyType || customer.property_type || ""),
+    sourceLeadId: String(customer.sourceLeadId || customer.source_lead_id || ""),
+    assignedStaffId: String(customer.assignedStaffId || customer.assigned_staff_id || ""),
+    assignedStaffName: String(customer.assignedStaffName || customer.assigned_staff_name || ""),
+    nextFollowUpDate: String(customer.nextFollowUpDate || customer.next_follow_up_date || ""),
+    properties: propertiesSource.map(normalizeCrmProperty),
+    contacts: contactsSource.map(normalizeCrmContact),
+    jobs: jobsSource.map(normalizeCrmJob),
+    timeline: timelineSource.map(normalizeCrmTimelineEntry),
+    files: filesSource.map(normalizeCrmFile),
+    notes: String(customer.notes || ""),
+    proposalArchive: proposalArchiveSource.map(normalizeProposalArchiveEntry),
+    createdAt: String(customer.createdAt || customer.created_at || now),
+    updatedAt: String(customer.updatedAt || customer.updated_at || now),
+  };
+}
+
+function normalizeProposalArchiveEntry(entry = {}) {
+  const now = new Date().toISOString();
+  return {
+    id: String(entry.id || `proposal-archive-${Date.now()}`),
+    proposalId: String(entry.proposalId || ""),
+    proposalNumber: toNumber(entry.proposalNumber || 0, 0),
+    version: toNumber(entry.version || 1, 1),
+    proposalTitle: String(entry.proposalTitle || ""),
+    estimateCode: String(entry.estimateCode || ""),
+    sourceEstimateId: String(entry.sourceEstimateId || ""),
+    sourceEstimateCode: String(entry.sourceEstimateCode || ""),
+    customerName: String(entry.customerName || ""),
+    projectName: String(entry.projectName || ""),
+    projectAddress: String(entry.projectAddress || ""),
+    status: String(entry.status || "Draft"),
+    acceptanceStatus: String(entry.acceptanceStatus || "Pending"),
+    signatureStatus: String(entry.signatureStatus || "Unsigned"),
+    sentAt: String(entry.sentAt || ""),
+    viewedAt: String(entry.viewedAt || ""),
+    finalizedAt: String(entry.finalizedAt || ""),
+    pdfArchiveName: String(entry.pdfArchiveName || ""),
+    pdfArchiveDataUrl: String(entry.pdfArchiveDataUrl || ""),
+    pdfArchiveUpdatedAt: String(entry.pdfArchiveUpdatedAt || ""),
+    proposalHistory: Array.isArray(entry.proposalHistory) ? entry.proposalHistory : [],
+    templateId: String(entry.templateId || ""),
+    isFinalized: Boolean(entry.isFinalized),
+    archivedAt: String(entry.archivedAt || now),
+    updatedAt: String(entry.updatedAt || now),
+    createdAt: String(entry.createdAt || now),
+  };
+}
+
+function buildProposalArchiveEntryFromProposal(proposal = {}, extras = {}) {
+  const now = new Date().toISOString();
+  return normalizeProposalArchiveEntry({
+    ...proposal,
+    ...extras,
+    id: extras.id || proposal.id || `proposal-archive-${Date.now()}`,
+    proposalId: proposal.id || extras.proposalId || "",
+    proposalNumber: proposal.proposalNumber || extras.proposalNumber || 0,
+    version: proposal.version || extras.version || 1,
+    proposalTitle: proposal.proposalTitle || extras.proposalTitle || "",
+    estimateCode: proposal.estimateCode || extras.estimateCode || "",
+    sourceEstimateId: proposal.sourceEstimateId || extras.sourceEstimateId || "",
+    sourceEstimateCode: proposal.sourceEstimateCode || extras.sourceEstimateCode || "",
+    customerName: proposal.customerName || extras.customerName || "",
+    projectName: proposal.projectName || extras.projectName || "",
+    projectAddress: proposal.projectAddress || extras.projectAddress || "",
+    status: proposal.status || extras.status || "Draft",
+    acceptanceStatus: proposal.acceptanceStatus || extras.acceptanceStatus || "Pending",
+    signatureStatus: proposal.signatureStatus || extras.signatureStatus || "Unsigned",
+    sentAt: proposal.sentAt || extras.sentAt || "",
+    viewedAt: proposal.viewedAt || extras.viewedAt || "",
+    finalizedAt: proposal.finalizedAt || extras.finalizedAt || "",
+    pdfArchiveName: proposal.pdfArchiveName || extras.pdfArchiveName || "",
+    pdfArchiveDataUrl: proposal.pdfArchiveDataUrl || extras.pdfArchiveDataUrl || "",
+    pdfArchiveUpdatedAt: proposal.pdfArchiveUpdatedAt || extras.pdfArchiveUpdatedAt || "",
+    proposalHistory: Array.isArray(proposal.proposalHistory) ? proposal.proposalHistory : Array.isArray(extras.proposalHistory) ? extras.proposalHistory : [],
+    templateId: proposal.templateId || extras.templateId || "",
+    isFinalized: Boolean(proposal.isFinalized || extras.isFinalized),
+    archivedAt: extras.archivedAt || now,
+    updatedAt: extras.updatedAt || proposal.updatedAt || now,
+    createdAt: proposal.createdAt || extras.createdAt || now,
+  });
+}
+
+function findEstimateForProposal(proposal = {}, estimates = []) {
+  return (
+    estimates.find((estimate) => estimate.id === proposal.sourceEstimateId || estimate.estimateCode === proposal.sourceEstimateCode || estimate.estimateCode === proposal.estimateCode) ||
+    proposal.sourceEstimateSnapshot ||
+    null
+  );
+}
+
+function proposalComparableSnapshot(proposal = {}) {
+  const normalized = normalizeProposalRecord(proposal);
+  return {
+    templateId: normalized.templateId,
+    proposalNumber: normalized.proposalNumber,
+    version: normalized.version,
+    proposalTitle: normalized.proposalTitle,
+    customerName: normalized.customerName,
+    customerContact: normalized.customerContact,
+    projectName: normalized.projectName,
+    projectAddress: normalized.projectAddress,
+    estimateNumber: normalized.estimateNumber,
+    estimateCode: normalized.estimateCode,
+    estimateDate: normalized.estimateDate,
+    roofSystem: normalized.roofSystem,
+    scopeItems: normalized.scopeItems,
+    alternates: normalized.alternates,
+    exclusions: normalized.exclusions,
+    allowances: normalized.allowances,
+    taxes: normalized.taxes,
+    totalPrice: normalized.totalPrice,
+    salesperson: normalized.salesperson,
+    warranty: normalized.warranty,
+    paymentSchedule: normalized.paymentSchedule,
+    estimatedSchedule: normalized.estimatedSchedule,
+    termsAndConditions: normalized.termsAndConditions,
+    expirationDate: normalized.expirationDate,
+    sourceEstimateId: normalized.sourceEstimateId,
+    sourceEstimateCode: normalized.sourceEstimateCode,
+    proposalSections: normalized.proposalSections,
+    templateSnapshot: normalized.templateSnapshot,
+    customerAcceptance: normalized.customerAcceptance,
+    acceptanceStatus: normalized.acceptanceStatus,
+    signatureStatus: normalized.signatureStatus,
+    viewedAt: normalized.viewedAt,
+    finalizedAt: normalized.finalizedAt,
+    isFinalized: normalized.isFinalized,
+    pdfArchiveName: normalized.pdfArchiveName,
+    pdfArchiveDataUrl: normalized.pdfArchiveDataUrl,
+    pdfArchiveUpdatedAt: normalized.pdfArchiveUpdatedAt,
+    proposalHistory: normalized.proposalHistory,
+  };
+}
+
+function renderWrappedPdfParagraph(doc, text, x, y, maxWidth, options = {}) {
+  const cleanText = String(text || "").trim();
+  if (!cleanText) return y;
+  const lines = doc.splitTextToSize(cleanText, maxWidth);
+  const lineHeight = options.lineHeight || 5;
+  doc.setFontSize(options.size || 10);
+  doc.setFont(undefined, options.weight || "normal");
+  lines.forEach((line) => {
+    doc.text(line, x, y);
+    y += lineHeight;
+  });
+  return y;
+}
+
+function renderPdfKeyValueLines(doc, rows = [], x = 10, y = 10, labelWidth = 48, valueWidth = 132) {
+  const lineHeight = 5.5;
+  rows.forEach(([label, value]) => {
+    const labelText = String(label || "");
+    const valueText = String(value || "—");
+    const labelLines = doc.splitTextToSize(labelText, labelWidth);
+    const valueLines = doc.splitTextToSize(valueText, valueWidth);
+    const rowHeight = Math.max(labelLines.length, valueLines.length) * lineHeight;
+    doc.setFont(undefined, "bold");
+    doc.text(labelLines, x, y);
+    doc.setFont(undefined, "normal");
+    doc.text(valueLines, x + labelWidth + 2, y);
+    y += rowHeight + 1;
+  });
+  return y;
+}
+
+function generateProposalPDF(proposal = {}, estimate = null, template = DEFAULT_PROPOSAL_TEMPLATE) {
+  const normalizedProposal = normalizeProposalRecord(proposal);
+  const activeTemplate = normalizeProposalTemplate(template || normalizedProposal.templateSnapshot || DEFAULT_PROPOSAL_TEMPLATE);
+  const sections = buildProposalSections(normalizedProposal, estimate, activeTemplate);
+  const doc = new jsPDF({
+    orientation: "portrait",
+    unit: "mm",
+    format: "a4",
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 12;
+  const contentWidth = pageWidth - margin * 2;
+  const footerText = activeTemplate.footerText || "Generated from the live estimate data.";
+
+  const addSectionFooter = () => {
+    const totalPages = doc.getNumberOfPages();
+    for (let page = 1; page <= totalPages; page += 1) {
+      doc.setPage(page);
+      doc.setFontSize(8);
+      doc.setTextColor(100, 100, 100);
+      doc.text(footerText, margin, pageHeight - 8);
+      doc.text(`Page ${page} of ${totalPages}`, pageWidth - margin, pageHeight - 8, { align: "right" });
+    }
+    doc.setTextColor(0, 0, 0);
+  };
+
+  const drawHeader = (title, subtitle = "") => {
+    doc.setFillColor(10, 21, 29);
+    doc.rect(0, 0, pageWidth, 26, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(12);
+    doc.setFont(undefined, "bold");
+    doc.text(activeTemplate.brandName || "CRT Roofing", margin, 10);
+    doc.setFontSize(18);
+    doc.text(String(title || activeTemplate.coverPageTitle || "Proposal"), margin, 19);
+    if (subtitle) {
+      doc.setFontSize(9);
+      doc.setFont(undefined, "normal");
+      doc.text(String(subtitle), pageWidth - margin, 10, { align: "right" });
+    }
+    doc.setTextColor(0, 0, 0);
+  };
+
+  const drawSectionPage = (section, includeHeader = false) => {
+    if (includeHeader) {
+      drawHeader(section.title || activeTemplate.coverPageTitle, section.subtitle || "");
+    }
+    let y = includeHeader ? 36 : 18;
+    if (!includeHeader) {
+      drawHeader(section.title || activeTemplate.coverPageTitle, section.subtitle || "");
+      y = 36;
+    }
+
+    doc.setFontSize(13);
+    doc.setFont(undefined, "bold");
+    doc.text(String(section.title || "Proposal section"), margin, y);
+    y += 7;
+
+    if (section.subtitle) {
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+      y = renderWrappedPdfParagraph(doc, section.subtitle, margin, y, contentWidth);
+      y += 2;
+    }
+
+    if (Array.isArray(section.paragraphs)) {
+      section.paragraphs.forEach((paragraph) => {
+        y = renderWrappedPdfParagraph(doc, paragraph, margin, y, contentWidth);
+        y += 3;
+      });
+    }
+
+    if (Array.isArray(section.lines) && section.lines.length) {
+      y = renderPdfKeyValueLines(doc, section.lines, margin, y, 55, contentWidth - 57);
+      y += 2;
+    }
+
+    if (Array.isArray(section.items) && section.items.length) {
+      section.items.forEach((item) => {
+        doc.setFontSize(10);
+        doc.setFont(undefined, "bold");
+        doc.text(String(item.label || "Item"), margin, y);
+        doc.setFont(undefined, "normal");
+        y = renderWrappedPdfParagraph(doc, item.value || "—", margin + 46, y, contentWidth - 46);
+        y += 1;
+      });
+    }
+
+    return y;
+  };
+
+  drawHeader(activeTemplate.coverPageTitle || "CRT Proposal", activeTemplate.coverPageSubtitle || "");
+
+  let y = 36;
+  doc.setFontSize(12);
+  doc.setFont(undefined, "bold");
+  doc.text(activeTemplate.brandName || "CRT Roofing", margin, y);
+  y += 7;
+  doc.setFontSize(20);
+  doc.text(String(normalizedProposal.proposalTitle || normalizedProposal.projectName || "Proposal"), margin, y);
+  y += 8;
+  doc.setFontSize(10);
+  doc.setFont(undefined, "normal");
+  y = renderWrappedPdfParagraph(doc, activeTemplate.coverPageSubtitle, margin, y, contentWidth);
+  y += 4;
+
+  const coverRows = [
+    ["Proposal number", normalizedProposal.proposalNumber || "—"],
+    ["Version", normalizedProposal.version || 1],
+    ["Customer", normalizedProposal.customerName || normalizedProposal.sourceEstimateSnapshot?.inputs?.customerName || "—"],
+    ["Project", normalizedProposal.projectName || normalizedProposal.sourceEstimateSnapshot?.inputs?.jobName || "—"],
+    ["Address", normalizedProposal.projectAddress || normalizedProposal.sourceEstimateSnapshot?.inputs?.jobAddress || "—"],
+    ["Estimate code", normalizedProposal.estimateCode || normalizedProposal.sourceEstimateCode || "—"],
+    ["Salesperson", normalizedProposal.salesperson || normalizedProposal.sourceEstimateSnapshot?.inputs?.salesperson || "—"],
+    ["Proposal price", money(normalizedProposal.totalPrice || 0)],
+    ["Acceptance status", normalizedProposal.acceptanceStatus || "Pending"],
+    ["Signature status", normalizedProposal.signatureStatus || "Unsigned"],
+  ];
+  y = renderPdfKeyValueLines(doc, coverRows, margin, y, 55, contentWidth - 57);
+
+  doc.addPage();
+  sections.slice(1).forEach((section) => {
+    let sectionY = 18;
+    doc.setFontSize(13);
+    doc.setFont(undefined, "bold");
+    doc.text(String(section.title || "Proposal section"), margin, sectionY);
+    sectionY += 7;
+    if (section.subtitle) {
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+      sectionY = renderWrappedPdfParagraph(doc, section.subtitle, margin, sectionY, contentWidth);
+      sectionY += 2;
+    }
+    if (Array.isArray(section.paragraphs)) {
+      section.paragraphs.forEach((paragraph) => {
+        sectionY = renderWrappedPdfParagraph(doc, paragraph, margin, sectionY, contentWidth);
+        sectionY += 3;
+      });
+    }
+    if (Array.isArray(section.lines) && section.lines.length) {
+      sectionY = renderPdfKeyValueLines(doc, section.lines, margin, sectionY, 55, contentWidth - 57);
+      sectionY += 2;
+    }
+    if (Array.isArray(section.items) && section.items.length) {
+      section.items.forEach((item) => {
+        doc.setFontSize(10);
+        doc.setFont(undefined, "bold");
+        doc.text(String(item.label || "Item"), margin, sectionY);
+        doc.setFont(undefined, "normal");
+        sectionY = renderWrappedPdfParagraph(doc, item.value || "—", margin + 46, sectionY, contentWidth - 46);
+        sectionY += 1;
+      });
+    }
+    if (section !== sections[sections.length - 1]) {
+      doc.addPage();
+    }
+  });
+
+  addSectionFooter();
+
+  const pdfDataUrl = doc.output("datauristring");
+  const pdfFileName = createProposalPdfFileName(normalizedProposal);
+  return {
+    pdfFileName,
+    pdfDataUrl,
+  };
+}
+
+function normalizeProposalMatchText(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
+function findCrmCustomerForProposal(customers = [], proposal = {}, estimate = null) {
+  const candidateTexts = [
+    proposal.customerName,
+    proposal.projectName,
+    proposal.projectAddress,
+    proposal.sourceEstimateSnapshot?.inputs?.customerName,
+    proposal.sourceEstimateSnapshot?.inputs?.jobName,
+    estimate?.inputs?.customerName,
+    estimate?.inputs?.jobName,
+    estimate?.inputs?.jobAddress,
+  ]
+    .map(normalizeProposalMatchText)
+    .filter(Boolean);
+
+  return (
+    customers.find((customer) => {
+      const customerTexts = [
+        customer.customerName,
+        customer.companyName,
+        customer.firstName && customer.lastName ? `${customer.firstName} ${customer.lastName}` : "",
+        customer.firstName,
+        customer.lastName,
+        customer.billingAddress,
+        ...((Array.isArray(customer.properties) ? customer.properties : []).map((property) => property.propertyAddress || property.propertyName || "")),
+      ]
+        .map(normalizeProposalMatchText)
+        .filter(Boolean);
+      return customerTexts.some((text) => candidateTexts.includes(text));
+    }) || null
+  );
+}
+
+function createCustomerFromProposal(proposal = {}, estimate = null, archiveEntry = null) {
+  const proposalCustomerName = proposal.customerName || estimate?.inputs?.customerName || proposal.projectName || estimate?.inputs?.jobName || "Proposal customer";
+  const proposalProjectName = proposal.projectName || estimate?.inputs?.jobName || proposalCustomerName;
+  return normalizeCrmCustomer({
+    customerName: proposalCustomerName,
+    firstName: estimate?.inputs?.customerFirstName || "",
+    lastName: estimate?.inputs?.customerLastName || "",
+    companyName: estimate?.inputs?.customerCompanyName || proposalCustomerName,
+    phone: estimate?.inputs?.customerPhone || "",
+    email: estimate?.inputs?.customerEmail || "",
+    billingAddress: proposal.projectAddress || estimate?.inputs?.jobAddress || "",
+    city: estimate?.inputs?.customerCity || "",
+    zipCode: estimate?.inputs?.customerZip || "",
+    notes: "Created automatically from proposal generation.",
+    proposalArchive: archiveEntry ? [archiveEntry] : [],
+    jobs: [
+      {
+        id: `proposal-job-${proposal.id || Date.now()}`,
+        jobNumber: String(proposal.proposalNumber || estimate?.estimateNumber || ""),
+        projectName: proposalProjectName,
+        status: proposal.status || "Draft",
+        contractAmount: toNumber(proposal.totalPrice || 0),
+        amountBilled: 0,
+        amountCollected: 0,
+        startDate: proposal.estimatedSchedule || "",
+        completionDate: "",
+        notes: "Created from proposal archive.",
+      },
+    ],
+  });
+}
+
+function mergeProposalArchiveEntries(existingEntries = [], nextEntry = {}) {
+  const normalizedEntry = normalizeProposalArchiveEntry(nextEntry);
+  const sourceEntries = Array.isArray(existingEntries) ? existingEntries : [];
+  const filteredEntries = sourceEntries.filter(
+    (entry) =>
+      !(String(entry.proposalId || entry.id || "") === String(normalizedEntry.proposalId || normalizedEntry.id || "") && Number(entry.version || 0) === Number(normalizedEntry.version || 0)),
+  );
+  return [normalizedEntry, ...filteredEntries].sort((a, b) => String(b.updatedAt || b.archivedAt || "").localeCompare(String(a.updatedAt || a.archivedAt || "")));
+}
+
+function createBlankCrmFollowup() {
+  return {
+    id: createFieldDailyLogId(),
+    relatedType: "lead",
+    relatedId: "",
+    title: "",
+    dueDate: "",
+    assignedStaffId: "",
+    followUpType: "Call",
+    status: "Open",
+    notes: "",
+    createdAt: new Date().toISOString(),
+    completedAt: "",
+  };
+}
+
+function normalizeCrmFollowup(followup = {}) {
+  return {
+    ...createBlankCrmFollowup(),
+    id: String(followup.id || createFieldDailyLogId()),
+    relatedType: String(followup.relatedType || followup.related_type || "lead"),
+    relatedId: String(followup.relatedId || followup.related_id || ""),
+    title: String(followup.title || ""),
+    dueDate: String(followup.dueDate || followup.due_date || ""),
+    assignedStaffId: String(followup.assignedStaffId || followup.assigned_staff_id || ""),
+    followUpType: String(followup.followUpType || followup.follow_up_type || "Call"),
+    status: String(followup.status || "Open"),
+    notes: String(followup.notes || ""),
+    createdAt: String(followup.createdAt || followup.created_at || new Date().toISOString()),
+    completedAt: String(followup.completedAt || followup.completed_at || ""),
+  };
+}
+
+async function fetchFieldOperationEmployeesFromSupabase(userKey) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const { data, error } = await supabase.from("employees").select("*").eq("user_key", userKey).order("display_order", { ascending: true });
+  return {
+    data: Array.isArray(data) ? data.map(mapFieldOperationEmployeeRow) : [],
+    error,
+  };
+}
+
+async function fetchCompanyVehiclesFromSupabase(userKey) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const { data, error } = await supabase.from("company_vehicles").select("*").eq("user_key", userKey).order("display_order", { ascending: true });
+  return {
+    data: Array.isArray(data) ? data.map(mapCompanyVehicleRow).filter((row) => row.active) : [],
+    error,
+  };
+}
+
+async function upsertEmployeeToSupabase(employee, userKey) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: null };
+  const mapped = normalizeEmployeeRecord(employee);
+  const dbRow = {
+    id: mapped.id,
+    user_key: userKey,
+    first_name: mapped.firstName || "",
+    last_name: mapped.lastName || "",
+    display_name: mapped.displayName || buildEmployeeDisplayName(mapped),
+    occupation: mapped.occupation || "",
+    department: mapped.department || "",
+    is_active: Boolean(mapped.isActive),
+    is_foreman: Boolean(mapped.isForeman),
+    is_driver: Boolean(mapped.isDriver),
+    employee_number: mapped.employeeNumber || "",
+    phone: mapped.phone || "",
+    email: mapped.email || "",
+    hire_date: mapped.hireDate || null,
+    hourly_rate: mapped.hourlyRate,
+    payroll_id: mapped.payrollId || "",
+    notes: mapped.notes || "",
+    display_order: mapped.displayOrder,
+    updated_at: new Date().toISOString(),
+  };
+  return supabase.from("employees").upsert([dbRow], { onConflict: "id" }).select("*");
 }
 
 function parseSupabaseMissingColumnError(error) {
@@ -729,6 +3860,7 @@ async function upsertRowWithMissingColumnFallback(table, row, onConflict) {
 
 async function upsertEstimateToSupabase(savedEstimate, inputs, prices, summary, calculation, userKey) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: new Error("Supabase not configured") };
+  const totalSquares = calculation?.scope?.totalSquares ?? calculation?.totalSquares ?? 0;
   const dbRow = {
     user_key: userKey,
     local_estimate_id: savedEstimate.id,
@@ -744,7 +3876,7 @@ async function upsertEstimateToSupabase(savedEstimate, inputs, prices, summary, 
     labor_cost: calculation.laborCost,
     travel_cost: calculation.travelCost,
     overhead_cost: calculation.overheadOperatingCost,
-    total_squares: calculation.scope.totalSquares,
+    total_squares: totalSquares,
     price_per_square: calculation.selectedPricePerSq,
     roof_type: buildEstimateRoofType(inputs),
     estimate_status: savedEstimate.status,
@@ -758,8 +3890,64 @@ async function deleteEstimateFromSupabase(estimateId, userKey) {
   return supabase.from("estimates").delete().eq("user_key", userKey).eq("local_estimate_id", estimateId);
 }
 
+async function fetchCompletedJobMetricsFromSupabase(userKey) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  return supabase
+    .from("completed_job_metrics")
+    .select("*")
+    .eq("user_key", userKey)
+    .order("created_at", { ascending: false });
+}
+
+async function upsertCompletedJobMetricsToSupabase(metrics, userKey) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: new Error("Supabase not configured") };
+  const dbRow = {
+    user_key: userKey,
+    estimate_id: metrics.estimateId,
+    local_estimate_id: metrics.localEstimateId,
+    estimate_code: metrics.estimateCode,
+    job_name: metrics.jobName,
+    customer_name: metrics.customerName,
+    roof_type: metrics.roofType,
+    total_squares: metrics.totalSquares,
+    estimate_final_bid: metrics.estimateFinalBid,
+    estimate_material_cost: metrics.estimateMaterialCost,
+    estimate_labor_cost: metrics.estimateLaborCost,
+    estimate_travel_cost: metrics.estimateTravelCost,
+    actual_material_cost: metrics.actualMaterialCost,
+    actual_labor_cost: metrics.actualLaborCost,
+    actual_labor_hours: metrics.actualLaborHours,
+    actual_travel_cost: metrics.actualTravelCost,
+    change_orders: metrics.changeOrders,
+    final_invoice_amount: metrics.finalInvoiceAmount,
+    actual_profit: metrics.actualProfit,
+    actual_margin_percent: metrics.actualMarginPercent,
+    material_variance: metrics.actualMaterialCost - metrics.estimateMaterialCost,
+    labor_variance: metrics.actualLaborCost - metrics.estimateLaborCost,
+    notes: metrics.notes,
+    lessons_learned: metrics.lessonsLearned,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data: existing, error: queryError } = await supabase
+    .from("completed_job_metrics")
+    .select("id")
+    .eq("user_key", userKey)
+    .eq("estimate_id", metrics.estimateId)
+    .limit(1);
+
+  if (queryError) return { data: null, error: queryError };
+  if (existing && existing.length > 0) {
+    const metricsId = existing[0].id;
+    return supabase.from("completed_job_metrics").update(dbRow).eq("id", metricsId).select("*");
+  }
+
+  return supabase.from("completed_job_metrics").insert([dbRow]).select("*");
+}
+
 async function upsertCompletedJobToSupabase(savedEstimate, inputs, calculation, userKey) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY || savedEstimate.status !== "completed") return { data: null, error: null };
+  const totalSquares = calculation?.scope?.totalSquares ?? calculation?.totalSquares ?? 0;
   const dbRow = {
     id: savedEstimate.id,
     user_key: userKey,
@@ -769,7 +3957,7 @@ async function upsertCompletedJobToSupabase(savedEstimate, inputs, calculation, 
     customer_name: inputs.customerName || "",
     job_address: inputs.jobAddress || "",
     roof_type: buildEstimateRoofType(inputs),
-    square_count: calculation.scope.totalSquares,
+    square_count: totalSquares,
     final_bid: calculation.selectedBidAmount,
     labor_cost: calculation.laborCost,
     materials_cost: calculation.materialCost,
@@ -780,7 +3968,227 @@ async function upsertCompletedJobToSupabase(savedEstimate, inputs, calculation, 
   return upsertRowWithMissingColumnFallback("completed_jobs", dbRow, "estimate_id");
 }
 
+async function uploadFieldDailyLogPhotoToStorage(file, userKey, logId, category) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !file) {
+    return { photoUrl: "", storagePath: "", fileName: file?.name || "" };
+  }
+
+  const safeName = String(file.name || "photo").replace(/\s+/g, "-").replace(/[^a-zA-Z0-9._-]/g, "");
+  const storagePath = `${userKey}/${logId}/${category}/${Date.now()}-${safeName}`;
+  try {
+    const { error: uploadError } = await supabase.storage.from(FIELD_DAILY_LOG_PHOTO_BUCKET).upload(storagePath, file, {
+      upsert: true,
+      contentType: file.type || "image/jpeg",
+    });
+    if (uploadError) throw uploadError;
+    const { data } = supabase.storage.from(FIELD_DAILY_LOG_PHOTO_BUCKET).getPublicUrl(storagePath);
+    return {
+      photoUrl: data?.publicUrl || "",
+      storagePath,
+      fileName: file.name || "",
+    };
+  } catch (error) {
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () =>
+        resolve({
+          photoUrl: String(reader.result || ""),
+          storagePath,
+          fileName: file.name || "",
+        });
+      reader.onerror = () =>
+        resolve({
+          photoUrl: "",
+          storagePath,
+          fileName: file.name || "",
+        });
+      reader.readAsDataURL(file);
+    });
+  }
+}
+
+async function upsertFieldDailyLogToSupabase(log, userKey, options = {}) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: new Error("Supabase not configured") };
+  const normalized = normalizeFieldDailyLogDraft(log, options.submittedBy || "");
+  const totals = calculateFieldDailyLogTotals(normalized);
+  const photoCount = options.photoCount ?? totals.photoCount;
+  const mainRow = {
+    id: normalized.id,
+    user_key: userKey,
+    job_number: normalized.jobNumber,
+    job_name: normalized.jobName,
+    job_address: normalized.jobAddress,
+    work_date: normalized.workDate || null,
+    foreman: normalized.foreman,
+    weather_conditions: normalized.weatherConditions,
+    job_start_time: normalized.jobStartTime || null,
+    lunch_start_time: normalized.lunchStartTime || null,
+    lunch_end_time: normalized.lunchEndTime || null,
+    job_end_time: normalized.jobEndTime || null,
+    fuel_purchased: Boolean(normalized.fuelPurchased),
+    work_completed: normalized.workCompleted,
+    materials_used: normalized.materialsUsedText,
+    equipment_used: normalized.equipmentUsed,
+    delays_or_problems: normalized.delaysOrProblems,
+    safety_incidents: Boolean(normalized.safetyIncidents),
+    additional_notes: normalized.additionalNotes,
+    status: normalized.status,
+    submitted_at: normalized.status === "submitted" ? normalized.submittedAt || new Date().toISOString() : null,
+    submitted_by: normalized.status === "submitted" ? normalized.submittedBy || options.submittedBy || "" : null,
+    device_identifier: normalized.deviceIdentifier || options.deviceIdentifier || "",
+    photo_count: photoCount,
+    total_regular_hours: totals.totalRegularHours,
+    total_overtime_hours: totals.totalOvertimeHours,
+    total_double_time_hours: totals.totalDoubleTimeHours,
+    total_crew_hours: totals.totalCrewHours,
+    vehicle_miles_driven: totals.vehicleMilesDriven,
+    total_fuel_receipts: totals.totalFuelReceipts,
+    total_fuel_gallons: totals.totalFuelGallons,
+    calculated_lunch_duration_hours: totals.calculatedLunchDurationHours,
+    calculated_time_on_site_hours: totals.calculatedTimeOnSiteHours,
+    high_mileage_count: totals.highMileageCount,
+    correction_of_log_id: normalized.correctionOfLogId || null,
+    correction_reason: normalized.correctionReason || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const mainResult = await upsertRowWithMissingColumnFallback("field_daily_logs", mainRow, "id");
+  if (mainResult.error) return mainResult;
+
+  const crewRows = normalized.crewRows.map((row) => ({
+    id: row.id,
+    log_id: normalized.id,
+    user_key: userKey,
+    employee_name: row.employeeName,
+    employee_id: row.employeeId,
+    start_time: row.startTime || null,
+    end_time: row.endTime || null,
+    lunch_duration_hours: row.lunchDurationHours,
+    regular_hours: row.regularHours,
+    overtime_hours: row.overtimeHours,
+    double_time_hours: row.doubleTimeHours,
+    role: row.role,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const vehicleRows = normalized.vehicleRows.map((row) => ({
+    id: row.id,
+    log_id: normalized.id,
+    user_key: userKey,
+    vehicle_id: row.vehicleId || null,
+    driver_employee_id: row.driverEmployeeId || null,
+    driver_employee_name: row.driverEmployeeName || null,
+    truck_name: row.truckName,
+    unit_number: row.unitNumber,
+    license_plate: row.licensePlate,
+    vehicle_type: row.vehicleType,
+    starting_mileage: row.startingMileage,
+    ending_mileage: row.endingMileage,
+    miles_driven: row.milesDriven,
+    mileage_flag: Boolean(row.mileageFlag),
+    other_description: row.otherDescription,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const fuelReceiptRows = normalized.fuelReceipts.map((row) => ({
+    id: row.id,
+    log_id: normalized.id,
+    user_key: userKey,
+    vehicle_row_id: row.vehicleRowId || null,
+    gallons_pumped: row.gallonsPumped,
+    total_receipt_amount: row.totalReceiptAmount,
+    price_per_gallon: row.pricePerGallon,
+    fuel_station: row.fuelStation,
+    receipt_date_time: row.receiptDateTime || null,
+    photo_url: row.receiptPhotoUrl || "",
+    storage_path: row.receiptPhotoPath || "",
+    file_name: row.receiptPhotoName || "",
+    updated_at: new Date().toISOString(),
+  }));
+
+  const materialRows = normalized.materialsRows.map((row) => ({
+    id: row.id,
+    log_id: normalized.id,
+    user_key: userKey,
+    material_name: row.materialName,
+    quantity: row.quantity,
+    unit: row.unit,
+    notes: row.notes,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const photoRows = normalized.photos.map((row) => ({
+    id: row.id,
+    log_id: normalized.id,
+    user_key: userKey,
+    photo_category: row.photoCategory,
+    file_name: row.fileName,
+    storage_path: row.storagePath,
+    photo_url: row.photoUrl,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const revisionRows = normalized.revisions.map((row) => ({
+    id: row.id,
+    log_id: normalized.id,
+    user_key: userKey,
+    field_name: row.fieldName,
+    original_value: row.originalValue,
+    updated_value: row.updatedValue,
+    changed_by: row.changedBy || options.changedBy || "",
+    reason: row.reason,
+    changed_at: row.changedAt || new Date().toISOString(),
+  }));
+
+  await Promise.all([
+    supabase.from("field_daily_log_crew").delete().eq("log_id", normalized.id).eq("user_key", userKey),
+    supabase.from("field_daily_log_materials").delete().eq("log_id", normalized.id).eq("user_key", userKey),
+    supabase.from("daily_log_vehicles").delete().eq("log_id", normalized.id).eq("user_key", userKey),
+    supabase.from("daily_log_fuel_receipts").delete().eq("log_id", normalized.id).eq("user_key", userKey),
+    supabase.from("field_daily_log_photos").delete().eq("log_id", normalized.id).eq("user_key", userKey),
+    supabase.from("field_daily_log_revisions").delete().eq("log_id", normalized.id).eq("user_key", userKey),
+  ]);
+
+  if (crewRows.length) {
+    const crewResult = await supabase.from("field_daily_log_crew").insert(crewRows).select("*");
+    if (crewResult.error) return crewResult;
+  }
+
+  if (vehicleRows.length) {
+    const vehicleResult = await supabase.from("daily_log_vehicles").insert(vehicleRows).select("*");
+    if (vehicleResult.error) return vehicleResult;
+  }
+
+  if (fuelReceiptRows.length) {
+    const fuelReceiptResult = await supabase.from("daily_log_fuel_receipts").insert(fuelReceiptRows).select("*");
+    if (fuelReceiptResult.error) return fuelReceiptResult;
+  }
+
+  if (materialRows.length) {
+    const materialResult = await supabase.from("field_daily_log_materials").insert(materialRows).select("*");
+    if (materialResult.error) return materialResult;
+  }
+
+  if (photoRows.length) {
+    const photoResult = await supabase.from("field_daily_log_photos").insert(photoRows).select("*");
+    if (photoResult.error) return photoResult;
+  }
+
+  if (revisionRows.length) {
+    const revisionResult = await supabase.from("field_daily_log_revisions").insert(revisionRows).select("*");
+    if (revisionResult.error) return revisionResult;
+  }
+
+  return { data: mainResult.data, error: null };
+}
+
 function toNumber(value, fallback = 0) {
+  if (typeof value === "string") {
+    const cleaned = value.replace(/[$,\s]/g, "").replace(/[^\d.-]/g, "");
+    if (!cleaned) return fallback;
+    const parsedString = Number(cleaned);
+    return Number.isFinite(parsedString) ? parsedString : fallback;
+  }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
@@ -808,6 +4216,354 @@ function num(value, digits = 1) {
 function round(value, digits = 0) {
   const factor = 10 ** digits;
   return Math.round(toNumber(value, 0) * factor) / factor;
+}
+
+function extractQuickMeasureNumber(text, patterns) {
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (!match) continue;
+    const raw = String(match[1] || "").replace(/,/g, "").trim();
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return null;
+}
+
+function extractQuickMeasureText(text, patterns) {
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (!match) continue;
+    return String(match[1] || "").trim();
+  }
+  return "";
+}
+
+function extractQuickMeasureMatch(text, patterns) {
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (!match) continue;
+    return {
+      rawMatch: String(match[0] || "").trim(),
+      value: String(match[1] || "").trim(),
+      index: typeof match.index === "number" ? match.index : -1,
+    };
+  }
+  return {
+    rawMatch: "",
+    value: "",
+    index: -1,
+  };
+}
+
+function escapeQuickMeasureRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractQuickMeasureMaterialSuggestion(text, {
+  aliases = [],
+  mappedField = "",
+  quantityMode = "quantity",
+  quantityPatterns = [],
+}) {
+  const rawText = String(text || "");
+  const normalized = rawText.replace(/\s+/g, " ").trim();
+  const lines = rawText
+    .split(/\r?\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const safeAliases = aliases.filter(Boolean);
+  const aliasPattern = safeAliases.map(escapeQuickMeasureRegex).join("|");
+  if (!aliasPattern) {
+    return {
+      mappedField,
+      matchedProductName: "",
+      matchedQuantity: null,
+      quantityUnit: "",
+      rawMatch: "",
+      snippet: "",
+    };
+  }
+  const aliasRegex = new RegExp(aliasPattern, "i");
+  const quantityRegexes = quantityPatterns.length
+    ? quantityPatterns
+    : [
+        new RegExp(`(?:${aliasPattern})[^0-9]{0,120}([0-9][0-9,]*(?:\\.[0-9]+)?)`, "i"),
+        new RegExp(`([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*(?:bundles?|rolls?|boxes?|pieces?|lf|linear\\s+feet|ft|sq|squares?)[^\\n]{0,120}(?:${aliasPattern})`, "i"),
+      ];
+
+  const buildResult = (sourceText, match, line, productName) => {
+    const rawMatch = String(match[0] || "").trim();
+    const quantity = Number(String(match[1] || "").replace(/,/g, ""));
+    const unit = String(match[2] || "").trim().toLowerCase();
+    let matchedQuantity = Number.isFinite(quantity) ? quantity : null;
+    if (quantityMode === "lf-to-boxes" && matchedQuantity !== null) {
+      matchedQuantity = unit.includes("lf") || unit.includes("linear") || unit === "ft" || unit === "feet" ? Math.ceil(matchedQuantity / 20) : matchedQuantity;
+    }
+    const snippetSource = line || sourceText;
+    return {
+      mappedField,
+      matchedProductName: productName || safeAliases[0] || mappedField,
+      matchedQuantity,
+      quantityUnit: unit,
+      rawMatch,
+      snippet: snippetSource.slice(0, 220),
+    };
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!aliasRegex.test(line)) continue;
+    const block = [lines[index - 1], line, lines[index + 1]].filter(Boolean).join(" ");
+    for (const pattern of quantityRegexes) {
+      const match = pattern.exec(block);
+      if (!match) continue;
+      const foundAlias = safeAliases.find((alias) => new RegExp(escapeQuickMeasureRegex(alias), "i").test(line)) || safeAliases[0];
+      return buildResult(block, match, block, foundAlias);
+    }
+    return {
+      mappedField,
+      matchedProductName: safeAliases.find((alias) => new RegExp(escapeQuickMeasureRegex(alias), "i").test(line)) || safeAliases[0] || mappedField,
+      matchedQuantity: null,
+      quantityUnit: "",
+      rawMatch: line,
+      snippet: [lines[index - 1], line, lines[index + 1]].filter(Boolean).join(" ").slice(0, 220),
+    };
+  }
+
+  for (const pattern of quantityRegexes) {
+    const match = pattern.exec(normalized);
+    if (!match) continue;
+    const foundAlias = safeAliases.find((alias) => new RegExp(escapeQuickMeasureRegex(alias), "i").test(normalized)) || safeAliases[0];
+    return buildResult(normalized, match, normalized.slice(Math.max(0, match.index - 80), Math.min(normalized.length, match.index + 160)), foundAlias);
+  }
+
+  return {
+    mappedField,
+    matchedProductName: "",
+    matchedQuantity: null,
+    quantityUnit: "",
+    rawMatch: "",
+    snippet: "",
+  };
+}
+
+function extractQuickMeasureFields(text = "") {
+  const normalized = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const propertyAddress = extractQuickMeasureText(normalized, [
+    /property\s+address[^A-Za-z0-9]*([A-Z0-9][A-Za-z0-9#.,\-\s]+(?:\b[A-Z]{2}\b)?\s*\d{5}(?:-\d{4})?)/i,
+    /(?:job|project|property)\s+address[^A-Za-z0-9]*([A-Z0-9][A-Za-z0-9#.,\-\s]+(?:\b[A-Z]{2}\b)?\s*\d{5}(?:-\d{4})?)/i,
+    /(?:site|roof)\s+address[^A-Za-z0-9]*([A-Z0-9][A-Za-z0-9#.,\-\s]+(?:\b[A-Z]{2}\b)?\s*\d{5}(?:-\d{4})?)/i,
+    /([0-9]{1,6}\s+[A-Za-z0-9#.\-\s]+,\s*[A-Za-z0-9.\-\s]+,\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?)/i,
+  ]);
+
+  const totalRoofArea = extractQuickMeasureNumber(normalized, [
+    /total\s+roof\s+area[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /roof\s+area[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+  ]);
+
+  const totalSquares = extractQuickMeasureNumber(normalized, [
+    /total\s+squares[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /roof\s+squares[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+  ]);
+
+  const perimeterLinearFeet = extractQuickMeasureNumber(normalized, [
+    /perimeter\s+linear\s+feet[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /perimeter[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)\s*lf/i,
+  ]);
+
+  const dripEdgeMatch = extractQuickMeasureMatch(normalized, [
+    /drip\s+edge(?:\s+linear\s+feet|\s+lf|\s+starter)?[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /eave\/?rake\s+metal[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /perimeter\s+metal[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /drip\s+edge[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)\s*lf/i,
+    /drip\s+edge[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+  ]);
+  const dripEdgeLinearFeet = dripEdgeMatch.value ? Number(dripEdgeMatch.value.replace(/,/g, "")) : null;
+
+  const ridgeHipLinearFeet = extractQuickMeasureNumber(normalized, [
+    /ridges?\s*\/\s*hips?[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /ridges?\s+hips?[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /ridges?\s*and\s*hips?[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+  ]);
+
+  const ridgeLinearFeet = extractQuickMeasureNumber(normalized, [
+    /ridge\s+linear\s+feet[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /ridge[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)\s*lf/i,
+  ]);
+
+  const hipLinearFeet = extractQuickMeasureNumber(normalized, [
+    /hip\s+linear\s+feet[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /hip[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)\s*lf/i,
+  ]);
+
+  const valleyLinearFeet = extractQuickMeasureNumber(normalized, [
+    /valley\s+linear\s+feet[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /valley[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)\s*lf/i,
+  ]);
+
+  const eaveLinearFeet = extractQuickMeasureNumber(normalized, [
+    /eave\s+linear\s+feet[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /eave[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)\s*lf/i,
+  ]);
+
+  const rakeLinearFeet = extractQuickMeasureNumber(normalized, [
+    /rake\s+linear\s+feet[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /rake[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)\s*lf/i,
+  ]);
+
+  const pitch = extractQuickMeasureText(normalized, [
+    /pitch[^0-9]{0,20}([0-9]+(?:\.[0-9]+)?\s*(?:[:\/]\s*[0-9]+)?)/i,
+    /([0-9]+(?:\.[0-9]+)?\s*:\s*12)/i,
+  ]);
+
+  const roofFacets = extractQuickMeasureNumber(normalized, [
+    /roof\s+facets?[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /facets?(?:\s*\/\s*sections?)?[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /roof\s+sections?[^0-9]*([0-9][0-9,]*(?:\.[0-9]+)?)/i,
+  ]);
+
+  const shingleMaterialSuggestions = [
+    extractQuickMeasureMaterialSuggestion(normalized, {
+      aliases: ["Timberline HDZ RS+", "HDZ RS+", "Timberline HDZ Reflector", "TL HDZ Reflector", "Timberline UHDZ", "Timberline NS", "Timberline HDZ", "HDZ Reflector"],
+      mappedField: "shingleHdzBundlesNeeded",
+      quantityPatterns: [
+        /(?:Timberline\s+HDZ\s+RS\+|HDZ\s+RS\+|Timberline\s+HDZ\s+Reflector|TL\s+HDZ\s+Reflector|Timberline\s+UHDZ|Timberline\s+NS|Timberline\s+HDZ|HDZ\s+Reflector)[^0-9]{0,120}(?:suggested|recommended|qty|quantity)?[^0-9]{0,20}([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:bundles?|bundle)\b/i,
+        /([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:bundles?|bundle)\b[^\\n]{0,120}(?:Timberline\s+HDZ\s+RS\+|HDZ\s+RS\+|Timberline\s+HDZ\s+Reflector|TL\s+HDZ\s+Reflector|Timberline\s+UHDZ|Timberline\s+NS|Timberline\s+HDZ|HDZ\s+Reflector)/i,
+      ],
+    }),
+    extractQuickMeasureMaterialSuggestion(normalized, {
+      aliases: ["Deck-Armor", "Tiger Paw", "FeltBuster", "FeltBuster 10 SQ"],
+      mappedField: "shingleSyntheticUnderlaymentSuggestedRolls",
+      quantityPatterns: [
+        /(?:Deck-Armor|Tiger Paw|FeltBuster(?:\s+10\s+SQ)?)[^0-9]{0,120}(?:suggested|recommended|qty|quantity)?[^0-9]{0,20}([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:rolls?|roll)\b/i,
+        /([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:rolls?|roll)\b[^\\n]{0,120}(?:Deck-Armor|Tiger Paw|FeltBuster(?:\s+10\s+SQ)?)/i,
+      ],
+    }),
+    extractQuickMeasureMaterialSuggestion(normalized, {
+      aliases: ["Pro-Start", "ProStart", "GAF Pro-Start Starter Strip", "Starter Strip"],
+      mappedField: "shingleStarterQuantity",
+      quantityPatterns: [
+        /(?:Pro-Start|ProStart|GAF\s+Pro-Start\s+Starter\s+Strip|Starter\s+Strip)[^0-9]{0,120}([0-9][0-9,]*(?:\.[0-9]+)?)(?:\s*(?:bundles?|rolls?|pieces?|pcs?|qty|quantity))?/i,
+        /([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:bundles?|rolls?|pieces?|pcs?|qty|quantity)[^\\n]{0,120}(?:Pro-Start|ProStart|GAF\s+Pro-Start\s+Starter\s+Strip|Starter\s+Strip)/i,
+      ],
+    }),
+    extractQuickMeasureMaterialSuggestion(normalized, {
+      aliases: ["Drip Edge 10'", "10' Drip Edge", '2"x2" Drip Edge', "Drip Edge"],
+      mappedField: "shingleDripEdgePieces",
+      quantityPatterns: [
+        /(?:Drip\s+Edge\s+10'|10'\s+Drip\s+Edge|2"x2"\s+Drip\s+Edge|Drip\s+Edge)[^0-9]{0,120}([0-9][0-9,]*(?:\.[0-9]+)?)(?:\s*(?:pieces?|pcs?|piece))?/i,
+        /([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:pieces?|pcs?|piece)[^\\n]{0,120}(?:Drip\s+Edge\s+10'|10'\s+Drip\s+Edge|2"x2"\s+Drip\s+Edge|Drip\s+Edge)/i,
+      ],
+    }),
+    extractQuickMeasureMaterialSuggestion(normalized, {
+      aliases: ["Rapid Ridge", "Ridge Cap", "Timbercrest Hip & Ridge"],
+      mappedField: "shingleRapidRidgeBoxes",
+      quantityPatterns: [
+        /(?:Rapid\s+Ridge|Ridge\s+Cap|Timbercrest\s+Hip\s+&\s+Ridge)[^0-9]{0,120}([0-9][0-9,]*(?:\.[0-9]+)?)\s*(boxes?|box|lf|linear\s+feet|feet|ft)?/i,
+        /([0-9][0-9,]*(?:\.[0-9]+)?)\s*(boxes?|box|lf|linear\s+feet|feet|ft)[^\\n]{0,120}(?:Rapid\s+Ridge|Ridge\s+Cap|Timbercrest\s+Hip\s+&\s+Ridge)/i,
+      ],
+      quantityMode: "lf-to-boxes",
+    }),
+  ];
+  const materialSuggestionByField = Object.fromEntries(shingleMaterialSuggestions.map((item) => [item.mappedField, item]));
+  const shingleHdzBundlesNeeded = materialSuggestionByField.shingleHdzBundlesNeeded?.matchedQuantity ?? null;
+  const shingleSyntheticUnderlaymentSuggestedRolls = materialSuggestionByField.shingleSyntheticUnderlaymentSuggestedRolls?.matchedQuantity ?? null;
+  const shingleStarterQuantity = materialSuggestionByField.shingleStarterQuantity?.matchedQuantity ?? null;
+  const shingleDripEdgePieces = materialSuggestionByField.shingleDripEdgePieces?.matchedQuantity ?? null;
+  const shingleRapidRidgeBoxesSuggested = materialSuggestionByField.shingleRapidRidgeBoxes?.matchedQuantity ?? null;
+
+  const totalSquaresFromArea = totalRoofArea !== null ? Math.ceil(totalRoofArea / 100) : null;
+  const resolvedTotalSquares = totalSquares ?? totalSquaresFromArea;
+  const usedAreaFallback = totalSquares === null && totalSquaresFromArea !== null;
+  const usedDripEdgeFallback = perimeterLinearFeet === null && dripEdgeLinearFeet !== null;
+  const usedPerimeterFallback = perimeterLinearFeet === null && dripEdgeLinearFeet === null && (eaveLinearFeet !== null || rakeLinearFeet !== null);
+  const usedEavesOnlyFallback = perimeterLinearFeet === null && dripEdgeLinearFeet === null && eaveLinearFeet !== null && rakeLinearFeet === null;
+  const resolvedPerimeterLinearFeet =
+    perimeterLinearFeet ?? dripEdgeLinearFeet ?? (eaveLinearFeet !== null && rakeLinearFeet !== null ? eaveLinearFeet + rakeLinearFeet : eaveLinearFeet ?? null);
+  const resolvedStarterLinearFeet = dripEdgeLinearFeet ?? eaveLinearFeet ?? null;
+
+  const dripEdgeSnippet =
+    dripEdgeMatch.index >= 0
+      ? normalized.slice(Math.max(0, dripEdgeMatch.index - 80), Math.min(normalized.length, dripEdgeMatch.index + 120)).trim()
+      : "";
+
+  const combinedRidgesHips =
+    ridgeHipLinearFeet !== null && ridgeLinearFeet === null && hipLinearFeet === null ? ridgeHipLinearFeet : null;
+  const resolvedRidgeLinearFeet = ridgeLinearFeet ?? (ridgeHipLinearFeet !== null && hipLinearFeet === null ? ridgeHipLinearFeet : null);
+  const resolvedHipLinearFeet = hipLinearFeet ?? (ridgeHipLinearFeet !== null && ridgeLinearFeet === null ? 0 : null);
+  const totalRidgeCapLinearFeet = ridgeHipLinearFeet !== null ? ridgeHipLinearFeet : (ridgeLinearFeet ?? 0) + (hipLinearFeet ?? 0);
+  const shingleRapidRidgeBoxesCalculated = totalRidgeCapLinearFeet > 0 ? Math.ceil(totalRidgeCapLinearFeet / 20) : null;
+  const shingleRapidRidgeBoxes = shingleRapidRidgeBoxesSuggested ?? shingleRapidRidgeBoxesCalculated;
+  const resolvedStarterQuantity = shingleStarterQuantity ?? (dripEdgeLinearFeet !== null ? dripEdgeLinearFeet : null);
+  const resolvedDripEdgePieces = shingleDripEdgePieces ?? (dripEdgeLinearFeet !== null ? Math.ceil(dripEdgeLinearFeet / 10) : null);
+  const usedCombinedRidgesHips = ridgeHipLinearFeet !== null && ridgeLinearFeet === null && hipLinearFeet === null;
+  const perimeterSourceNote = usedDripEdgeFallback
+    ? "using drip edge as perimeter fallback"
+    : usedPerimeterFallback
+      ? usedEavesOnlyFallback
+        ? "using eaves as perimeter fallback"
+        : "using eaves/rakes as perimeter fallback"
+      : "parsed";
+  const totalSquaresSourceNote = usedAreaFallback ? "calculated from roof area" : "parsed";
+  const shingleMaterialNotes = [
+    shingleHdzBundlesNeeded === null ? "Using calculated fallback." : "",
+    shingleSyntheticUnderlaymentSuggestedRolls === null ? "Using calculated fallback." : "",
+    shingleStarterQuantity === null ? "Using calculated fallback." : "",
+    shingleDripEdgePieces === null ? "Using calculated fallback." : "",
+    shingleRapidRidgeBoxesSuggested === null ? "Using calculated fallback." : "",
+  ].filter(Boolean);
+  const starterCoverageLfPerBundle = Math.max(1, toNumber(inputs.shingleStarterRollCoverageLf, 115));
+  const starterQuantitySuggested = Math.max(0, toNumber(inputs.shingleStarterQuantity, 0));
+  const starterQuantityCalculated = starterQuantitySuggested > 0 ? starterQuantitySuggested : Math.max(0, Math.ceil((toNumber(inputs.shingleStarterLinearFeet, toNumber(inputs.shingleStarterLf, dripEdgeLinearFeet ?? 0)) || 0) / starterCoverageLfPerBundle));
+  const starterQuantity = starterQuantitySuggested > 0 ? starterQuantitySuggested : starterQuantityCalculated;
+
+  return {
+    propertyAddress,
+    totalRoofArea,
+    totalSquares: resolvedTotalSquares,
+    totalSquaresSource: totalSquaresSourceNote,
+    perimeterLinearFeet: resolvedPerimeterLinearFeet,
+    perimeterLinearFeetSource: perimeterSourceNote,
+    ridgeLinearFeet: resolvedRidgeLinearFeet,
+    hipLinearFeet: resolvedHipLinearFeet,
+    ridgeHipLinearFeet: combinedRidgesHips,
+    valleyLinearFeet,
+    eaveLinearFeet,
+    rakeLinearFeet,
+    starterLinearFeet: resolvedStarterLinearFeet,
+    dripEdgeLinearFeet: dripEdgeLinearFeet ?? null,
+    shingleStarterQuantity: resolvedStarterQuantity,
+    shingleStarterSuggestedQuantity: shingleStarterQuantity,
+    shingleStarterCalculatedQuantity: shingleStarterQuantity === null ? resolvedStarterQuantity : shingleStarterQuantity,
+    shingleDripEdgePieces: resolvedDripEdgePieces,
+    shingleDripEdgeSuggestedPieces: shingleDripEdgePieces,
+    shingleDripEdgeCalculatedPieces: shingleDripEdgePieces === null ? resolvedDripEdgePieces : shingleDripEdgePieces,
+    shingleRapidRidgeBoxes,
+    shingleRapidRidgeBoxesSuggested,
+    shingleRapidRidgeBoxesCalculated,
+    shingleRapidRidgeLFUsed: totalRidgeCapLinearFeet,
+    pitch,
+    roofFacets,
+    roofSections: roofFacets,
+    shingleHdzBundlesNeeded,
+    shingleSyntheticUnderlaymentSuggestedRolls,
+    shingleSyntheticUnderlaymentRolls: shingleSyntheticUnderlaymentSuggestedRolls,
+    shingleSyntheticUnderlaymentCalculatedRolls: null,
+    shingleMaterialSuggestions,
+    shingleMaterialNotes,
+    rawDripEdgeMatch: dripEdgeMatch.rawMatch,
+    dripEdgeSnippet,
+    notes: [
+      usedAreaFallback ? "Total squares calculated from roof area and rounded up." : "",
+      usedDripEdgeFallback ? "Starter LF matched to drip edge LF." : "",
+      usedDripEdgeFallback ? "Perimeter LF matched to drip edge LF." : usedPerimeterFallback ? (usedEavesOnlyFallback ? "Perimeter LF matched to eaves LF." : "Perimeter LF matched to eaves/rakes LF.") : "",
+      usedCombinedRidgesHips ? "Ridges/Hips combined by GAF report." : "",
+      usedEavesOnlyFallback ? "Using Eaves as perimeter fallback." : "",
+    ].filter(Boolean),
+  };
 }
 
 function formatHoursMinutes(value) {
@@ -851,6 +4607,203 @@ function normalizeMaterialPrices(prices = {}) {
     normalized[key] = rawValue > 0 ? rawValue : defaultValue;
   }
   return normalized;
+}
+
+function normalizeSprayFoamLayerConfig(config = {}) {
+  const legacyCoverageRates = {
+    primer: new Set([1000]),
+    baseCoat: new Set([250, 33]),
+    intermediateCoat1: new Set([850, 33]),
+    intermediateCoat2: new Set([850, 33]),
+    topCoat: new Set([1200, 33]),
+  };
+  const legacyUnitCosts = {
+    primer: new Set([48]),
+    baseCoat: new Set([52]),
+    intermediateCoat1: new Set([46]),
+    intermediateCoat2: new Set([46]),
+    topCoat: new Set([58]),
+  };
+  return Object.fromEntries(
+    Object.entries(DEFAULT_SPF_LAYER_CONFIG).map(([key, defaults]) => {
+      const current = config[key] || {};
+      const currentCoverageRate = toNumber(current.coverageRate, defaults.coverageRate);
+      const currentUnitCost = toNumber(current.unitCost, defaults.unitCost);
+      const resolvedCoverageRate =
+        !Number.isFinite(currentCoverageRate) || legacyCoverageRates[key]?.has(currentCoverageRate)
+          ? defaults.coverageRate
+          : currentCoverageRate;
+      const resolvedUnitCost =
+        !Number.isFinite(currentUnitCost) || legacyUnitCosts[key]?.has(currentUnitCost)
+          ? defaults.unitCost
+          : currentUnitCost;
+      return [
+        key,
+        {
+          applicable: typeof current.applicable === "boolean" ? current.applicable : Boolean(defaults.applicable),
+          coverageRate: Math.max(0.1, resolvedCoverageRate),
+          unitCost: Math.max(0, resolvedUnitCost),
+        },
+      ];
+    }),
+  );
+}
+
+function normalizeSprayFoamDetailMaterials(config = {}) {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_SPF_DETAIL_MATERIALS).map(([key, defaults]) => {
+      const current = config[key] || {};
+      return [
+        key,
+        {
+          quantity: Math.max(0, toNumber(current.quantity, defaults.quantity)),
+          unitCost: Math.max(0, toNumber(current.unitCost, defaults.unitCost)),
+          useAutoQuantity: false,
+        },
+      ];
+    }),
+  );
+}
+
+function normalizeSprayFoamAdditionalDetailMaterials(items = []) {
+  return Array.isArray(items)
+    ? items.map((item) => ({
+        name: String(item?.name || ""),
+        quantity: Math.max(0, toNumber(item?.quantity, 1)),
+        unitCost: Math.max(0, toNumber(item?.unitCost, 0)),
+        unit: String(item?.unit || "each"),
+      }))
+    : [];
+}
+
+function normalizeSprayFoamEquipmentRentals(items = []) {
+  const source = Array.isArray(items) && items.length > 0 ? items : [createBlankSprayFoamEquipmentRental()];
+  return source.map((item) => ({
+    name: String(item?.name || ""),
+    rateType: String(item?.rateType || "perDay"),
+    rateAmount: Math.max(0, toNumber(item?.rateAmount, 0)),
+    quantity: Math.max(0, toNumber(item?.quantity, 1)),
+    days: Math.max(0, toNumber(item?.days, 0)),
+    hours: Math.max(0, toNumber(item?.hours, 0)),
+  }));
+}
+
+function normalizeShingleTearOffSections(items = []) {
+  const source = Array.isArray(items) && items.length > 0 ? items : [createBlankShingleTearOffSection()];
+  return source.map((item, index) => ({
+    id: String(item?.id || createBlankShingleTearOffSection(index).id),
+    label: String(item?.label || `Section ${index + 1}`),
+    squares: Math.max(0, toNumber(item?.squares, 0)),
+    layers: Math.max(1, Math.round(toNumber(item?.layers, 1))),
+    tearOffCostPerSquare: Math.max(0, toNumber(item?.tearOffCostPerSquare, 0)),
+    disposalFee: Math.max(0, toNumber(item?.disposalFee, 0)),
+    dryRotAllowance: Math.max(0, toNumber(item?.dryRotAllowance, 0)),
+  }));
+}
+
+function normalizeShingleLaborSections(items = []) {
+  const source = Array.isArray(items) && items.length > 0 ? items : [createBlankShingleLaborSection()];
+  return source.map((item, index) => ({
+    id: String(item?.id || createBlankShingleLaborSection(index).id),
+    label: String(item?.label || `Section ${index + 1}`),
+    installSquares: Math.max(0, toNumber(item?.installSquares, 0)),
+    costPerInstallSq: Math.max(0, toNumber(item?.costPerInstallSq, 0)),
+    licensed: typeof item?.licensed === "boolean" ? item.licensed : true,
+    workersComp: typeof item?.workersComp === "boolean" ? item.workersComp : true,
+  }));
+}
+
+function normalizeSprayFoamSubcontractorItems(items = []) {
+  const defaults = DEFAULT_INPUTS.sprayFoamSubcontractorItems || [];
+  return defaults.map((defaultItem, index) => {
+    const current = Array.isArray(items) ? items[index] || {} : {};
+    return {
+      type: String(current.type || defaultItem.type || ""),
+      quantity: Math.max(0, toNumber(current.quantity, defaultItem.quantity || 0)),
+      unitPrice: Math.max(0, toNumber(current.unitPrice, defaultItem.unitPrice || 0)),
+      licensed: typeof current.licensed === "boolean" ? current.licensed : Boolean(defaultItem.licensed),
+    };
+  });
+}
+
+function normalizeTravelVehicles(value) {
+  const fallback = [DEFAULT_TRAVEL_VEHICLE_KEY];
+  const source = Array.isArray(value) && value.length > 0 ? value : fallback;
+  const filtered = source.filter((vehicleKey) => TRAVEL_VEHICLE_OPTIONS.some((option) => option.value === vehicleKey));
+  return filtered.length > 0 ? filtered : fallback;
+}
+
+function normalizeSprayFoamParapetMeasurements(items = []) {
+  const source = Array.isArray(items) && items.length > 0 ? items : [createBlankSprayFoamParapetMeasurement()];
+  return source.map((item) => ({
+    label: String(item?.label || ""),
+    height: Math.max(0, toNumber(item?.height, 0)),
+    linearFeet: Math.max(0, toNumber(item?.linearFeet ?? item?.length, 0)),
+  }));
+}
+
+function normalizeSprayFoamRoofAreas(items = []) {
+  const source = Array.isArray(items) && items.length > 0 ? items : [createBlankSprayFoamRoofArea()];
+  return source.map((item) => ({
+    label: String(item?.label || ""),
+    fieldRoofSquares: Math.max(0, toNumber(item?.fieldRoofSquares, 0)),
+    foamThicknessInches: Math.min(16, Math.max(1, toNumber(item?.foamThicknessInches, 2))),
+    hasParapetWalls: Boolean(item?.hasParapetWalls),
+    parapetWallSquares: Math.max(0, toNumber(item?.parapetWallSquares, 0)),
+  }));
+}
+
+function calculateSprayFoamParapetMeasurementTotals(items = []) {
+  const rows = normalizeSprayFoamParapetMeasurements(items);
+  const rowsWithTotals = rows.map((row) => ({
+    ...row,
+    sq: (row.linearFeet * row.height) / 100,
+  }));
+  const totalLinearFeet = rowsWithTotals.reduce((sum, row) => sum + row.linearFeet, 0);
+  const totalParapetSquares = rowsWithTotals.reduce((sum, row) => sum + row.sq, 0);
+  return {
+    rows: rowsWithTotals,
+    totalLinearFeet,
+    totalParapetSquares,
+    totalParapetSquareFeet: totalParapetSquares * 100,
+  };
+}
+
+function calculateSprayFoamRoofAreaTotalsSafe(items = [], setCost = DEFAULT_SPF_RATES.foamKitCost, yieldPerInch = 26) {
+  if (typeof calculateSprayFoamRoofAreaTotals === "function") {
+    return calculateSprayFoamRoofAreaTotals(items, setCost, yieldPerInch);
+  }
+
+  const rows = normalizeSprayFoamRoofAreas(items);
+  const rowsWithTotals = rows.map((row) => {
+    const parapetWallSquares = row.hasParapetWalls ? row.parapetWallSquares : 0;
+    const totalAreaSquares = row.fieldRoofSquares + parapetWallSquares;
+    const yieldPerKit = yieldPerInch / Math.max(0.1, row.foamThicknessInches);
+    const kitsNeeded = totalAreaSquares > 0 ? Math.ceil(totalAreaSquares / yieldPerKit) : 0;
+    return {
+      ...row,
+      parapetWallSquares,
+      totalAreaSquares,
+      yieldPerKit,
+      kitsNeeded,
+      foamCost: kitsNeeded * setCost,
+    };
+  });
+
+  const totalFieldSquares = rowsWithTotals.reduce((sum, row) => sum + (Number(row.fieldRoofSquares) || 0), 0);
+  const totalParapetWallSquares = rowsWithTotals.reduce((sum, row) => sum + (Number(row.parapetWallSquares) || 0), 0);
+  const totalRoofSquares = totalFieldSquares + totalParapetWallSquares;
+  const totalFoamKits = rowsWithTotals.reduce((sum, row) => sum + (Number(row.kitsNeeded) || 0), 0);
+  const totalFoamCost = totalFoamKits * setCost;
+
+  return {
+    rows: rowsWithTotals,
+    totalFieldSquares,
+    totalParapetWallSquares,
+    totalRoofSquares,
+    totalFoamKits,
+    totalFoamCost,
+  };
 }
 
 function normalizeFieldNotes(notes = {}) {
@@ -912,33 +4865,160 @@ function normalizeDraftInputs(inputs = {}) {
   return {
     ...DEFAULT_INPUTS,
     ...inputs,
+    sprayFoamLayerConfig: normalizeSprayFoamLayerConfig(inputs.sprayFoamLayerConfig),
+    sprayFoamDetailMaterials: normalizeSprayFoamDetailMaterials(inputs.sprayFoamDetailMaterials),
+    sprayFoamAdditionalDetailMaterials: normalizeSprayFoamAdditionalDetailMaterials(inputs.sprayFoamAdditionalDetailMaterials),
+    sprayFoamSubcontractorItems: normalizeSprayFoamSubcontractorItems(inputs.sprayFoamSubcontractorItems),
+    sprayFoamHasSubcontractors: Boolean(inputs.sprayFoamHasSubcontractors),
+    sprayFoamParapetMeasurements: normalizeSprayFoamParapetMeasurements(inputs.sprayFoamParapetMeasurements),
+    sprayFoamUseMultipleParapetMeasurements: Boolean(inputs.sprayFoamUseMultipleParapetMeasurements),
+    sprayFoamSeparateRoofAreas: Boolean(inputs.sprayFoamSeparateRoofAreas),
+    sprayFoamRoofAreas: normalizeSprayFoamRoofAreas(inputs.sprayFoamRoofAreas),
+    sprayFoamEstimateType: String(inputs.sprayFoamEstimateType || "roof"),
+    sprayFoamEquipmentRentals: normalizeSprayFoamEquipmentRentals(inputs.sprayFoamEquipmentRentals),
+    sprayFoamPrevailingWageJob: Boolean(inputs.sprayFoamPrevailingWageJob),
+    shingleTearOffSections: normalizeShingleTearOffSections(inputs.shingleTearOffSections),
+    shingleLaborType: String(inputs.shingleLaborType || "inHouse"),
+    shingleLaborSections: normalizeShingleLaborSections(inputs.shingleLaborSections),
+    shingleSubcontractorLicensed: typeof inputs.shingleSubcontractorLicensed === "boolean" ? inputs.shingleSubcontractorLicensed : true,
+    shingleSubcontractorWorkersComp: typeof inputs.shingleSubcontractorWorkersComp === "boolean" ? inputs.shingleSubcontractorWorkersComp : true,
+    shingleLaborersPerDay: Math.max(0, toNumber(inputs.shingleLaborersPerDay, 0)),
+    shingleTotalDaysOnJob: Math.max(0, toNumber(inputs.shingleTotalDaysOnJob, 0)),
+    shingleLaborHourlyRate: Math.max(0, toNumber(inputs.shingleLaborHourlyRate, 0)),
+    shingleHoursPerDay: Math.max(0, toNumber(inputs.shingleHoursPerDay, 0)),
+    tileTearOffSections: normalizeShingleTearOffSections(inputs.tileTearOffSections || [createBlankTileTearOffSection()]),
+    tileLaborType: String(inputs.tileLaborType || "inHouse"),
+    tileSubcontractorSections: normalizeShingleLaborSections(inputs.tileSubcontractorSections || [createBlankTileLaborSection()]),
+    tileSubcontractorLicensed: typeof inputs.tileSubcontractorLicensed === "boolean" ? inputs.tileSubcontractorLicensed : true,
+    tileSubcontractorWorkersComp: typeof inputs.tileSubcontractorWorkersComp === "boolean" ? inputs.tileSubcontractorWorkersComp : true,
+    tileLaborersPerDay: Math.max(0, toNumber(inputs.tileLaborersPerDay, 0)),
+    tileTotalDaysOnJob: Math.max(0, toNumber(inputs.tileTotalDaysOnJob, 0)),
+    tileLaborHourlyRate: Math.max(0, toNumber(inputs.tileLaborHourlyRate, 0)),
+    tileHoursPerDay: Math.max(0, toNumber(inputs.tileHoursPerDay, 0)),
+    tileProjectType: ["raiseReset", "removeInstallNew", "newConstruction"].includes(inputs.tileProjectType)
+      ? inputs.tileProjectType
+      : "raiseReset",
+    tileBrokenTileAllowancePercent: Math.max(0, toNumber(inputs.tileBrokenTileAllowancePercent, 3)),
+    tilePalletYieldSqPerPallet: Math.max(0, toNumber(inputs.tilePalletYieldSqPerPallet, 0)),
+    tileOrderReplacementTile: typeof inputs.tileOrderReplacementTile === "boolean" ? inputs.tileOrderReplacementTile : false,
+    tileOrderingVerifiedPalletYield: Boolean(inputs.tileOrderingVerifiedPalletYield),
+    tileOrderingVerifiedRoofLoadCost: Boolean(inputs.tileOrderingVerifiedRoofLoadCost),
+    tileOrderingVerifiedMaterialDeliveryCost: Boolean(inputs.tileOrderingVerifiedMaterialDeliveryCost),
+    tileOrderingVerifiedColorProfileAvailability: Boolean(inputs.tileOrderingVerifiedColorProfileAvailability),
+    tileOrderingVerifiedBrokenAllowance: Boolean(inputs.tileOrderingVerifiedBrokenAllowance),
+    tileFieldTileQuantityManual:
+      typeof inputs.tileFieldTileQuantityManual === "string" ? inputs.tileFieldTileQuantityManual : String(inputs.tileFieldTileQuantityManual || ""),
+    tileUnderlaymentType: ["syntheticTitanium50", "felt30"].includes(inputs.tileUnderlaymentType)
+      ? inputs.tileUnderlaymentType
+      : "syntheticTitanium50",
+    tileProfile: ["flat", "sTile", "lightweight", "claySTile", "custom"].includes(inputs.tileProfile) ? inputs.tileProfile : "flat",
+    tileFlatTileNailsQuantityManual:
+      typeof inputs.tileFlatTileNailsQuantityManual === "string"
+        ? inputs.tileFlatTileNailsQuantityManual
+        : String(inputs.tileFlatTileNailsQuantityManual || ""),
+    tileSTileNailsQuantityManual:
+      typeof inputs.tileSTileNailsQuantityManual === "string" ? inputs.tileSTileNailsQuantityManual : String(inputs.tileSTileNailsQuantityManual || ""),
+    tileFlatTileNailsCost: Math.max(0, toNumber(inputs.tileFlatTileNailsCost, 0)),
+    tileSTileNailsCost: Math.max(0, toNumber(inputs.tileSTileNailsCost, 0)),
+    tileUnderlaymentQuantityManual:
+      typeof inputs.tileUnderlaymentQuantityManual === "string" ? inputs.tileUnderlaymentQuantityManual : String(inputs.tileUnderlaymentQuantityManual || ""),
+    tileUnderlayment30QuantityManual:
+      typeof inputs.tileUnderlayment30QuantityManual === "string"
+        ? inputs.tileUnderlayment30QuantityManual
+        : String(inputs.tileUnderlayment30QuantityManual || ""),
+    tileBattensLf: Math.max(0, toNumber(inputs.tileBattensLf, 0)),
+    tileBattensQuantityManual:
+      typeof inputs.tileBattensQuantityManual === "string" ? inputs.tileBattensQuantityManual : String(inputs.tileBattensQuantityManual || ""),
+    tileValleyMetalQuantityManual:
+      typeof inputs.tileValleyMetalQuantityManual === "string" ? inputs.tileValleyMetalQuantityManual : String(inputs.tileValleyMetalQuantityManual || ""),
+    tileDripEdgeQuantityManual:
+      typeof inputs.tileDripEdgeQuantityManual === "string" ? inputs.tileDripEdgeQuantityManual : String(inputs.tileDripEdgeQuantityManual || ""),
+    tileOneHalfPipePenetrations: Math.max(0, Math.round(toNumber(inputs.tileOneHalfPipePenetrations, 0))),
+    tileTwoInchPipePenetrations: Math.max(0, Math.round(toNumber(inputs.tileTwoInchPipePenetrations, 0))),
+    tileThreeInchPipePenetrations: Math.max(0, Math.round(toNumber(inputs.tileThreeInchPipePenetrations, 0))),
+    tileFourInchPipePenetrations: Math.max(0, Math.round(toNumber(inputs.tileFourInchPipePenetrations, 0))),
+    tileOvalPipePenetrations: Math.max(0, Math.round(toNumber(inputs.tileOvalPipePenetrations, 0))),
+    tileAmericapQuantity: Math.max(0, Math.round(toNumber(inputs.tileAmericapQuantity, 0))),
+    tileOvalCapQuantity: Math.max(0, Math.round(toNumber(inputs.tileOvalCapQuantity, 0))),
+    tileOneHalfBaseJackCost: Math.max(0, toNumber(inputs.tileOneHalfBaseJackCost, 8)),
+    tileOneHalfRoofJackCost: Math.max(0, toNumber(inputs.tileOneHalfRoofJackCost, 8)),
+    tileTwoInchBaseJackCost: Math.max(0, toNumber(inputs.tileTwoInchBaseJackCost, 8)),
+    tileTwoInchRoofJackCost: Math.max(0, toNumber(inputs.tileTwoInchRoofJackCost, 8)),
+    tileThreeInchBaseJackCost: Math.max(0, toNumber(inputs.tileThreeInchBaseJackCost, 14)),
+    tileThreeInchRoofJackCost: Math.max(0, toNumber(inputs.tileThreeInchRoofJackCost, 14)),
+    tileFourInchBaseJackCost: Math.max(0, toNumber(inputs.tileFourInchBaseJackCost, 15)),
+    tileFourInchRoofJackCost: Math.max(0, toNumber(inputs.tileFourInchRoofJackCost, 15)),
+    tileOvalBaseJackCost: Math.max(0, toNumber(inputs.tileOvalBaseJackCost, 25)),
+    tileOvalRoofJackCost: Math.max(0, toNumber(inputs.tileOvalRoofJackCost, 25)),
+    tileAmericapCost: Math.max(0, toNumber(inputs.tileAmericapCost, 25)),
+    tileOvalCapCost: Math.max(0, toNumber(inputs.tileOvalCapCost, 25)),
     totalSquares: fieldSquares,
     fieldSquares,
+    tileLeftRakeLf: Math.max(0, toNumber(inputs.tileLeftRakeLf, 0)),
+    tileRightRakeLf: Math.max(0, toNumber(inputs.tileRightRakeLf, 0)),
+    tileBirdStopLf: Math.max(0, toNumber(inputs.tileBirdStopLf, 0)),
+    tileTileRaiserLf: Math.max(0, toNumber(inputs.tileTileRaiserLf, 0)),
+    tileMortarMixQuantityManual:
+      typeof inputs.tileMortarMixQuantityManual === "string"
+        ? inputs.tileMortarMixQuantityManual
+        : String(inputs.tileMortarMixQuantityManual ?? inputs.tileMortarAdhesiveQuantity ?? ""),
+    tileMortarMixCost: Math.max(0, toNumber(inputs.tileMortarMixCost, toNumber(inputs.tileMortarAdhesiveCost, 0))),
+    tileCustomMaterials: Array.isArray(inputs.tileCustomMaterials)
+      ? inputs.tileCustomMaterials.map((mat, idx) => ({
+          id: String(mat?.id || `${Date.now()}-${idx}`),
+          name: String(mat?.name || ""),
+          quantity: Math.max(0, toNumber(mat?.quantity, 0)),
+          unit: String(mat?.unit || "piece"),
+          unitPrice: Math.max(0, toNumber(mat?.unitPrice, 0)),
+        }))
+      : [],
     jobAddress,
     oneWayMiles,
     oneWayDriveTime,
     oneWayDriveTimeHours,
     estimatedDriveTimeMinutes: Math.max(0, toNumber(inputs.estimatedDriveTimeMinutes, oneWayDriveTime * 60)),
     travelDistanceSource: inputs.travelDistanceSource === "google" ? "google" : "manual",
+    travelVehicle: TRAVEL_VEHICLE_OPTIONS.some((option) => option.value === inputs.travelVehicle)
+      ? inputs.travelVehicle
+      : DEFAULT_TRAVEL_VEHICLE_KEY,
+    travelVehicles: normalizeTravelVehicles(inputs.travelVehicles || inputs.travelVehicle),
     overheadOperatingRate: OVERHEAD_OPERATING_RATE,
   };
 }
 
-function calculateTravelAndOvertime(inputs) {
-  const oneWayMiles = Math.max(0, toNumber(inputs.oneWayMiles, 0));
-  const averageDrivingSpeedMph = Math.max(0.1, toNumber(inputs.averageDrivingSpeedMph, 60));
-  const travelDriverHourlyRate = Math.max(0, toNumber(inputs.travelDriverHourlyRate, 27));
-  const workHoursPerDay = Math.max(0, toNumber(inputs.workHoursPerDay, 8));
-  const numberOfJobDays = Math.max(0, Math.round(toNumber(inputs.numberOfJobDays, 0)));
-  const numberOfDrivers = Math.max(0, Math.round(toNumber(inputs.numberOfDrivers, 0)));
+function calculateTravelAndOvertime(inputs = {}) {
+  const safeInputs = inputs || {};
+  const oneWayMiles = Math.max(0, toNumber(safeInputs.oneWayMiles, 0));
+  const averageDrivingSpeedMph = Math.max(0.1, toNumber(safeInputs.averageDrivingSpeedMph, 60));
+  const travelDriverHourlyRate = Math.max(0, toNumber(safeInputs.travelDriverHourlyRate, 27));
+  const workHoursPerDay = Math.max(0, toNumber(safeInputs.workHoursPerDay, 8));
+  const numberOfJobDays = Math.max(0, Math.round(toNumber(safeInputs.numberOfJobDays, 0)));
+  const numberOfDrivers = Math.max(0, Math.round(toNumber(safeInputs.numberOfDrivers, 0)));
   const oneWayDriveTimeHours = Math.max(
     0,
-    toNumber(inputs.oneWayDriveTimeHours, toNumber(inputs.oneWayDriveTime, toNumber(inputs.estimatedDriveTimeMinutes, 0) / 60)),
+    toNumber(safeInputs.oneWayDriveTimeHours, toNumber(safeInputs.oneWayDriveTime, toNumber(safeInputs.estimatedDriveTimeMinutes, 0) / 60)),
   );
-  const travelDistanceSource = inputs.travelDistanceSource === "google" ? "google" : "manual";
-  const companyHqAddress = String(inputs.companyHqAddress || "");
-  const jobSiteAddress = String(inputs.jobSiteAddress || "");
-  const jobAddress = String(inputs.jobAddress || "");
+  const travelDistanceSource = safeInputs.travelDistanceSource === "google" ? "google" : "manual";
+  const companyHqAddress = String(safeInputs.companyHqAddress || "");
+  const jobSiteAddress = String(safeInputs.jobSiteAddress || "");
+  const jobAddress = String(safeInputs.jobAddress || "");
+  const travelVehicles = normalizeTravelVehicles(safeInputs.travelVehicles || safeInputs.travelVehicle);
+  const travelVehicleBreakdown = travelVehicles.map((vehicleKey) => {
+    const vehicle = TRAVEL_VEHICLE_OPTIONS.find((option) => option.value === vehicleKey) || TRAVEL_VEHICLE_OPTIONS[0];
+    const fuelGallonsNeeded = (oneWayMiles * 2 * numberOfJobDays) / Math.max(0.1, vehicle.mpg);
+    const fuelCost = fuelGallonsNeeded * FUEL_COST_PER_GALLON;
+    return {
+      value: vehicle.value,
+      label: vehicle.label,
+      mpg: vehicle.mpg,
+      fuelGallonsNeeded,
+      fuelCostPerGallon: FUEL_COST_PER_GALLON,
+      fuelCost,
+    };
+  });
+  const fuelGallonsNeeded = travelVehicleBreakdown.reduce((sum, item) => sum + item.fuelGallonsNeeded, 0);
+  const fuelCostPerGallon = FUEL_COST_PER_GALLON;
+  const fuelCost = travelVehicleBreakdown.reduce((sum, item) => sum + item.fuelCost, 0);
 
   const oneWayDriveTime =
     travelDistanceSource === "google" && oneWayDriveTimeHours > 0
@@ -961,12 +5041,20 @@ function calculateTravelAndOvertime(inputs) {
     workHoursPerDay,
     numberOfJobDays,
     numberOfDrivers,
+    travelVehicleKey: travelVehicleBreakdown[0]?.value || DEFAULT_TRAVEL_VEHICLE_KEY,
+    travelVehicleLabel: travelVehicleBreakdown.map((item) => item.label).join(", "),
+    travelVehicleMpg: travelVehicleBreakdown[0]?.mpg || 0,
+    travelVehicles,
+    travelVehicleBreakdown,
+    fuelCostPerGallon,
+    fuelGallonsNeeded,
+    fuelCost,
     oneWayDriveTime,
     roundTripDriveTime,
     overtimeHoursPerDay,
     overtimePayPerDay,
     totalDriverTravelCost,
-    totalTravelCost: totalDriverTravelCost,
+    totalTravelCost: totalDriverTravelCost + fuelCost,
   };
 }
 
@@ -1008,6 +5096,32 @@ function buildEstimateName(inputs) {
   return `TPO estimate ${sq} SQ`;
 }
 
+function buildEstimateNameForTemplate(templateKey, inputs) {
+  if (templateKey === "sprayFoam") {
+    const parapetTotals = inputs.sprayFoamUseMultipleParapetMeasurements
+      ? calculateSprayFoamParapetMeasurementTotals(inputs.sprayFoamParapetMeasurements)
+      : { totalParapetSquares: toNumber(inputs.sprayFoamParapetWallSquares, 0) };
+    const fieldRoofSquares = toNumber(inputs.sprayFoamFieldRoofSquares, 0);
+    const sq = num(
+      fieldRoofSquares + toNumber(parapetTotals.totalParapetSquares, 0),
+      0,
+    );
+    return `SPF estimate ${sq} SQ`;
+  }
+
+  if (templateKey === "shingle") {
+    const sq = num(toNumber(inputs.shingleTotalRoofSquares, toNumber(inputs.totalSquares, 0)), 0);
+    return `Shingle estimate ${sq} SQ`;
+  }
+
+  if (templateKey === "tile") {
+    const sq = num(toNumber(inputs.tileTotalRoofSquares, toNumber(inputs.totalSquares, 0)), 0);
+    return `Tile estimate ${sq} SQ`;
+  }
+
+  return buildEstimateName(inputs);
+}
+
 function Field({ label, hint, children }) {
   return (
     <label className="field">
@@ -1029,10 +5143,13 @@ function ChoiceCard({ name, value, checked, onChange, label }) {
   );
 }
 
-function DetailRow({ label, value }) {
+function DetailRow({ label, value, note }) {
   return (
     <div className="detailRow">
-      <span>{label}</span>
+      <div>
+        <span>{label}</span>
+        {note ? <div className="detailNote">{note}</div> : null}
+      </div>
       <strong>{value}</strong>
     </div>
   );
@@ -1051,6 +5168,30 @@ function Section({ title, subtitle, right, children }) {
       {children}
     </section>
   );
+}
+
+class SafeTileSection extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <Section title="Tile Travel / Overtime" subtitle="This section is temporarily hidden while Tile rendering is stabilized.">
+          <p style={{ color: "var(--text-muted)", margin: 0 }}>
+            The Tile overhead section remains visible. The remaining Tile section will be restored once the render error is cleared.
+          </p>
+        </Section>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function calculateScope(inputs) {
@@ -1177,12 +5318,52 @@ function calculateTermination(inputs, prices) {
   const manualTerminationCost = Math.max(0, toNumber(inputs.manualTerminationCost, 0));
   const cleatRequired = Boolean(inputs.copingCleatRequired);
 
-  const items = [];
+  let items = [];
   const push = (key, label, quantity, unit, unitPrice, notes = "") => {
     const amount = quantity * unitPrice;
     items.push({ key, label, quantity, unit, unitPrice, amount, notes });
   };
 
+  // Multi-termination logic
+  if (method === "multiTermination" && Array.isArray(inputs.multiTerminationRows)) {
+    inputs.multiTerminationRows.forEach((row, idx) => {
+      const type = row.terminationType || row.type;
+      const linearFeet = Math.max(0, toNumber(row.linearFeet, 0));
+      if (!type || linearFeet <= 0) return;
+      if (type === "copingMetal") {
+        const pieces = Math.ceil(linearFeet / 10);
+        push(`copingMetal_${idx}`, "Coping metal", pieces, "piece", toNumber(prices.copingMetalCost, 0), "10 LF pieces");
+        if (cleatRequired) {
+          push(`copingCleat_${idx}`, "Coping cleat", pieces, "piece", toNumber(prices.copingCleatCost, 0), "10 LF pieces");
+          push(`copingCleatFastener_${idx}`, "Coping cleat fasteners", 1, "allowance", toNumber(prices.copingCleatFastenerCost, 0), "Allowance");
+        }
+      } else if (type === "cladDripEdge") {
+        const pieces = Math.ceil(linearFeet / 10);
+        push(`dripEdge_${idx}`, "Clad drip edge", pieces, "piece", toNumber(prices.dripEdgeCost, 0), "10 LF pieces");
+        const stripTapeRolls = Math.ceil(linearFeet / 50);
+        push(`tpoStripTape_${idx}`, "TPO strip tape", stripTapeRolls, "roll", toNumber(prices.tpoStripTapeCost, 0), "50 LF rolls");
+        push(`dripEdgeFastener_${idx}`, "Drip edge fasteners", 1, "allowance", toNumber(prices.dripEdgeFastenerCost, 0), "Allowance");
+      } else if (type === "termBar") {
+        const pieces = Math.ceil(linearFeet / 10);
+        push(`termBar_${idx}`, "Term bar", pieces, "piece", toNumber(prices.termBarCost, 0), "10 LF pieces");
+        push(`termBarFastener_${idx}`, "Term bar fasteners", 1, "allowance", toNumber(prices.termBarFastenerCost, 0), "Allowance");
+        push(`termBarSealant_${idx}`, "Term bar sealant / waterblock", 1, "allowance", toNumber(prices.termBarSealantCost, 0), "Allowance");
+      } else if (type === "existingMetal") {
+        push(`stripIn_${idx}`, "Strip-in / detail allowance", 1, "allowance", strippingAllowance, "Manual allowance");
+      } else if (type === "otherManual") {
+        push(`manualTermination_${idx}`, "Manual termination cost", 1, "allowance", manualTerminationCost, "Manual input");
+      }
+    });
+    return {
+      items,
+      totalTerminationCost: items.reduce((sum, item) => sum + item.amount, 0),
+      multiTerminationRows: inputs.multiTerminationRows,
+      cleatRequired,
+      manualTerminationCost,
+    };
+  }
+
+  // Single-method logic (unchanged)
   if (method === "copingMetal") {
     const pieces = Math.ceil(copingLinearFeet / 10);
     push("copingMetal", "Coping metal", pieces, "piece", toNumber(prices.copingMetalCost, 0), "10 LF pieces");
@@ -1530,6 +5711,30 @@ function calculateMaterialPricing(inputs, prices, scope, termination, pitchPocke
   };
 }
 
+// Include custom materials stored in inputs.customMaterials
+function mergeCustomMaterialsIntoPricing(inputs, pricing, scope) {
+  const custom = Array.isArray(inputs.customMaterials) ? inputs.customMaterials : [];
+  if (!custom.length) return pricing;
+  const items = [...pricing.items];
+  custom.forEach((mat, idx) => {
+    const quantity = toNumber(mat.quantity, 0);
+    const unitPrice = toNumber(mat.unitPrice, 0);
+    const amount = quantity * unitPrice;
+    items.push({
+      key: `custom-${idx}`,
+      label: mat.name || "Custom material",
+      quantity,
+      unit: mat.unit || "ea",
+      unitPrice,
+      amount,
+      notes: "Custom material",
+    });
+  });
+  const totalMaterialCost = items.reduce((sum, item) => sum + (item.amount || 0), 0);
+  const costPerSquare = scope && scope.totalSquares > 0 ? totalMaterialCost / scope.totalSquares : pricing.costPerSquare || 0;
+  return { items, totalMaterialCost, costPerSquare };
+}
+
 function calculateBidOptions(totalCostBeforeProfit, totalSquares, selectedMarkupPercent) {
   const options = MARKUP_OPTIONS.map((percent) => {
     const markup = percent / 100;
@@ -1550,7 +5755,7 @@ function calculateBidOptions(totalCostBeforeProfit, totalSquares, selectedMarkup
   };
 }
 
-async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName) {
+async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName, estimateType = "TPO", previewWindow = null) {
   try {
     const doc = new jsPDF({
       orientation: "portrait",
@@ -1563,6 +5768,14 @@ async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName
     const pageHeight = doc.internal.pageSize.getHeight();
     const margin = 10;
     let yPosition = margin;
+    const totalSquaresForPdf =
+      calculation?.scope?.totalSquares ??
+      calculation?.totalSquares ??
+      calculation?.tileTotalRoofSquares ??
+      calculation?.tileAdjustedRoofSquares ??
+      calculation?.productionSquares ??
+      calculation?.totalRoofSquares ??
+      0;
 
     // Helper function to check if we need a new page
     const checkNewPage = (heightNeeded) => {
@@ -1604,10 +5817,10 @@ async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName
     doc.setFontSize(10);
     doc.setFont(undefined, "normal");
     const jobInfo = [
-      ["Job Name:", inputs.jobName || "N/A"],
-      ["Customer Name:", inputs.customerName || "N/A"],
-      ["Job Address:", inputs.jobAddress || "N/A"],
-      ["Estimate Type:", "TPO"],
+      ["Job Name:", calculation.jobName || inputs.jobName || "N/A"],
+      ["Customer Name:", calculation.customerName || inputs.customerName || "N/A"],
+      ["Job Address:", calculation.jobAddress || inputs.jobAddress || "N/A"],
+      ["Estimate Type:", estimateType || "TPO"],
       ["Date:", new Date().toLocaleDateString()],
     ];
 
@@ -1631,7 +5844,7 @@ async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName
     doc.setFontSize(10);
     doc.setFont(undefined, "normal");
     const summaryInfo = [
-      ["Total Squares:", `${num(calculation.scope.totalSquares, 0)} SQ`],
+      ["Total Squares:", `${num(totalSquaresForPdf, 0)} SQ`],
       ["Selected Bid Amount:", `$${num(calculation.selectedBidAmount, 2)}`],
       ["Markup Percentage:", `${num(calculation.selectedMarkupPercent, 0)}%`],
       ["Price Per Square:", `$${num(calculation.selectedPricePerSq, 2)}`],
@@ -1646,6 +5859,325 @@ async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName
       yPosition += 6;
     });
 
+    if (estimateType === "Spray Foam") {
+      yPosition += 4;
+      checkNewPage(25);
+      doc.setFontSize(12);
+      doc.setFont(undefined, "bold");
+      addText("SPRAY FOAM FIELD SUMMARY", margin, yPosition);
+      yPosition += 8;
+
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+      const sprayFoamFieldSummary = [
+        ["Field Squares:", `${num(calculation.fieldSquares ?? calculation.totalFieldSquares ?? calculation.fieldRoofSquares, 2)} SQ`],
+        ["Parapet Wall Squares:", `${num(calculation.parapetWallSquares ?? calculation.totalParapetWallSquares ?? calculation.totalParapetSquares, 2)} SQ`],
+        ["Total Roof Squares:", `${num(calculation.totalRoofSquares, 2)} SQ`],
+        ["Total Foam Kits:", `${num(calculation.totalFoamKits ?? calculation.foamKitsNeeded, 0)}`],
+        ["Total Foam Cost:", `$${num(calculation.totalFoamCost ?? calculation.foamMaterialCost, 2)}`],
+        ["Estimated Days:", `${num(calculation.estimatedCompletionDays, 0)}`],
+        ["Laborers / Day:", `${num(calculation.laborersNeededPerDay, 0)}`],
+        ["Total Laborers:", `${num(calculation.totalLaborers, 0)}`],
+      ];
+      sprayFoamFieldSummary.forEach(([label, value]) => {
+        checkNewPage(5);
+        doc.setFont(undefined, "bold");
+        doc.text(label, margin, yPosition);
+        doc.setFont(undefined, "normal");
+        doc.text(value, margin + 54, yPosition);
+        yPosition += 6;
+      });
+
+      if (calculation.separateRoofAreas && calculation.roofAreas?.length) {
+        yPosition += 4;
+        checkNewPage(22);
+        doc.setFontSize(11);
+        doc.setFont(undefined, "bold");
+        addText("ROOF AREAS", margin, yPosition);
+        yPosition += 7;
+
+        doc.setFontSize(9);
+        doc.setFont(undefined, "bold");
+        doc.text("Area", margin, yPosition);
+        doc.text("Field SQ", margin + 48, yPosition);
+        doc.text("Parapet SQ", margin + 82, yPosition);
+        doc.text("Total SQ", margin + 123, yPosition);
+        doc.text("Yield/Kit", margin + 154, yPosition);
+        doc.text("Kits", margin + 186, yPosition);
+        yPosition += 5;
+        doc.setFont(undefined, "normal");
+        calculation.roofAreas.forEach((row) => {
+          checkNewPage(5);
+          doc.text(String(row.label || "Roof area"), margin, yPosition);
+          doc.text(`${num(row.fieldRoofSquares || 0, 2)}`, margin + 48, yPosition);
+          doc.text(`${num(row.parapetWallSquares || 0, 2)}`, margin + 82, yPosition);
+          doc.text(`${num(row.totalAreaSquares || 0, 2)}`, margin + 123, yPosition);
+          doc.text(`${num(row.yieldPerKit || 0, 2)}`, margin + 154, yPosition);
+          doc.text(`${num(row.kitsNeeded || 0, 0)}`, margin + 186, yPosition);
+          yPosition += 5;
+        });
+      }
+
+      if (calculation.coatingItems?.length) {
+        yPosition += 4;
+        checkNewPage(22);
+        doc.setFontSize(11);
+        doc.setFont(undefined, "bold");
+        addText("COATING BREAKDOWN", margin, yPosition);
+        yPosition += 7;
+
+        doc.setFontSize(9);
+        doc.setFont(undefined, "bold");
+        doc.text("Layer", margin, yPosition);
+        doc.text("Squares", margin + 38, yPosition);
+        doc.text("Coverage", margin + 72, yPosition);
+        doc.text("Drums", margin + 118, yPosition);
+        doc.text("Unit", margin + 143, yPosition);
+        doc.text("Total", margin + 177, yPosition);
+        yPosition += 5;
+        doc.setFont(undefined, "normal");
+        calculation.coatingItems.forEach((item) => {
+          checkNewPage(5);
+          doc.text(String(item.label || ""), margin, yPosition);
+          doc.text(`${num(item.squaresNeeded || 0, 0)} SQ`, margin + 38, yPosition);
+          doc.text(`${num(item.coverageRate || 0, 2)} SQ/Drum`, margin + 72, yPosition);
+          doc.text(`${num(item.drumsNeeded || 0, 0)}`, margin + 118, yPosition);
+          doc.text(`$${num(item.unitPrice || 0, 2)}`, margin + 143, yPosition);
+          doc.text(`$${num(item.amount || 0, 2)}`, margin + 177, yPosition);
+          yPosition += 5;
+  });
+}
+
+function calculateSprayFoamRoofAreaTotals(items = [], setCost = DEFAULT_SPF_RATES.foamKitCost, yieldPerInch = 26) {
+  const rows = normalizeSprayFoamRoofAreas(items);
+  const rowsWithTotals = rows.map((row) => {
+    const parapetWallSquares = row.hasParapetWalls ? row.parapetWallSquares : 0;
+    const totalAreaSquares = row.fieldRoofSquares + parapetWallSquares;
+    const yieldPerKit = yieldPerInch / Math.max(0.1, row.foamThicknessInches);
+    const kitsNeeded = totalAreaSquares > 0 ? Math.ceil(totalAreaSquares / yieldPerKit) : 0;
+    return {
+      ...row,
+      parapetWallSquares,
+      totalAreaSquares,
+      yieldPerKit,
+      kitsNeeded,
+      foamCost: kitsNeeded * setCost,
+    };
+  });
+  const totalFieldSquares = rowsWithTotals.reduce((sum, row) => sum + row.fieldRoofSquares, 0);
+  const totalParapetWallSquares = rowsWithTotals.reduce((sum, row) => sum + row.parapetWallSquares, 0);
+  const totalRoofSquares = totalFieldSquares + totalParapetWallSquares;
+  const totalFoamKits = rowsWithTotals.reduce((sum, row) => sum + row.kitsNeeded, 0);
+  const totalFoamCost = totalFoamKits * setCost;
+  return {
+    rows: rowsWithTotals,
+    totalFieldSquares,
+    totalParapetWallSquares,
+    totalRoofSquares,
+    totalFoamKits,
+    totalFoamCost,
+  };
+}
+
+      if (calculation.sprayFoamMaterialItems?.length) {
+        yPosition += 4;
+        checkNewPage(22);
+        doc.setFontSize(11);
+        doc.setFont(undefined, "bold");
+        addText("SPF MATERIAL BREAKDOWN", margin, yPosition);
+        yPosition += 7;
+
+        doc.setFontSize(9);
+        doc.setFont(undefined, "bold");
+        doc.text("Item", margin, yPosition);
+        doc.text("Qty", margin + 84, yPosition);
+        doc.text("Unit", margin + 118, yPosition);
+        doc.text("Total", margin + 154, yPosition);
+        yPosition += 5;
+        doc.setFont(undefined, "normal");
+        calculation.sprayFoamMaterialItems.forEach((item) => {
+          checkNewPage(5);
+          doc.text(String(item.label || ""), margin, yPosition);
+          doc.text(`${num(item.quantity || 0, 2)}`, margin + 84, yPosition);
+          doc.text(`$${num(item.unitPrice || 0, 2)}`, margin + 118, yPosition);
+          doc.text(`$${num(item.amount || 0, 2)}`, margin + 154, yPosition);
+          yPosition += 5;
+        });
+      }
+
+      if (calculation.detailMaterialItems?.length) {
+        yPosition += 4;
+        checkNewPage(22);
+        doc.setFontSize(11);
+        doc.setFont(undefined, "bold");
+        addText("DETAIL MATERIALS", margin, yPosition);
+        yPosition += 7;
+
+        doc.setFontSize(9);
+        doc.setFont(undefined, "bold");
+        doc.text("Item", margin, yPosition);
+        doc.text("Qty", margin + 84, yPosition);
+        doc.text("Unit", margin + 118, yPosition);
+        doc.text("Total", margin + 154, yPosition);
+        yPosition += 5;
+        doc.setFont(undefined, "normal");
+        calculation.detailMaterialItems.forEach((item) => {
+          checkNewPage(5);
+          doc.text(String(item.label || ""), margin, yPosition);
+          doc.text(`${num(item.quantity || 0, 2)}`, margin + 84, yPosition);
+          doc.text(`$${num(item.unitCost || 0, 2)}`, margin + 118, yPosition);
+          doc.text(`$${num(item.amount || 0, 2)}`, margin + 154, yPosition);
+          yPosition += 5;
+        });
+      }
+
+    }
+
+    if (estimateType === "Shingle") {
+      yPosition += 4;
+      checkNewPage(25);
+      doc.setFontSize(12);
+      doc.setFont(undefined, "bold");
+      addText("SHINGLE MEASUREMENT SUMMARY", margin, yPosition);
+      yPosition += 8;
+
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+      const shingleFieldSummary = [
+        ["Total Roof Squares:", `${num(calculation.totalRoofSquares, 2)} SQ`],
+        ["Waste %:", `${num(calculation.wastePercent, 0)}%`],
+        ["Production Squares:", `${num(calculation.productionSquares, 2)} SQ`],
+        ["Total HDZ RS+ Bundles Needed:", `${num(calculation.shingleHdzBundlesNeeded, 0)}`],
+        ["Pro-Start Starter:", `${num(calculation.shingleStarterQuantity, 0)}`],
+        ['2"x2" Drip Edge 10 ft Pieces:', `${num(calculation.shingleDripEdgePieces, 0)}`],
+        ['Rapid Ridge 8" Ridge Cap:', `${num(calculation.shingleRapidRidgeBoxes, 0)}`],
+        ["Ridge/Hip LF used:", `${num(calculation.shingleRapidRidgeLFUsed, 1)} LF`],
+        ["Suggested GAF Quantity:", `${num(calculation.shingleSyntheticUnderlaymentSuggestedRolls, 0)}`],
+        ["Calculated Fallback Quantity:", `${num(calculation.shingleSyntheticUnderlaymentCalculatedRolls, 0)}`],
+        ["Final Underlayment Rolls Used:", `${num(calculation.shingleSyntheticUnderlaymentRolls, 0)}`],
+        ["Ridge LF:", `${num(calculation.ridgeLf, 1)}`],
+        ["Hip LF:", `${num(calculation.hipLf, 1)}`],
+        ["Valley LF:", `${num(calculation.valleyLf, 1)}`],
+        ["Rake LF:", `${num(calculation.rakeLf, 1)}`],
+        ["Eave LF:", `${num(calculation.eaveLf, 1)}`],
+        ["Starter LF:", `${num(calculation.starterLf, 1)}`],
+        ["Drip Edge LF:", `${num(calculation.dripEdgeLf, 1)}`],
+      ];
+      shingleFieldSummary.forEach(([label, value]) => {
+        checkNewPage(5);
+        doc.setFont(undefined, "bold");
+        doc.text(label, margin, yPosition);
+        doc.setFont(undefined, "normal");
+        doc.text(value, margin + 54, yPosition);
+        yPosition += 6;
+      });
+
+      if (calculation.shingleTearOffSections?.length) {
+        yPosition += 2;
+        checkNewPage(14);
+        doc.setFontSize(10);
+        doc.setFont(undefined, "bold");
+        doc.text("TEAR-OFF SECTIONS", margin, yPosition);
+        yPosition += 6;
+        doc.setFont(undefined, "normal");
+        calculation.shingleTearOffSections.forEach((section, index) => {
+          checkNewPage(6);
+          const label = section.label || `Section ${index + 1}`;
+          doc.text(`${label}:`, margin, yPosition);
+          doc.text(
+            `${num(section.squares || 0, 1)} SQ x ${num(section.layers || 0, 0)} layers = $${num(section.sectionTearOffTotal || 0, 2)}`,
+            margin + 48,
+            yPosition,
+          );
+          yPosition += 5;
+        });
+        yPosition += 1;
+      }
+
+      if (calculation.materialItems?.length) {
+        yPosition += 4;
+        checkNewPage(22);
+        doc.setFontSize(11);
+        doc.setFont(undefined, "bold");
+        addText("SHINGLE MATERIAL BREAKDOWN", margin, yPosition);
+        yPosition += 7;
+
+        doc.setFontSize(9);
+        doc.setFont(undefined, "bold");
+        doc.text("Item", margin, yPosition);
+        doc.text("Qty", margin + 84, yPosition);
+        doc.text("Unit", margin + 118, yPosition);
+        doc.text("Total", margin + 154, yPosition);
+        yPosition += 5;
+        doc.setFont(undefined, "normal");
+        calculation.materialItems.forEach((item) => {
+          checkNewPage(5);
+          doc.text(String(item.label || ""), margin, yPosition);
+          doc.text(`${num(item.quantity || 0, 2)}`, margin + 84, yPosition);
+          doc.text(`${item.unit || ""}`, margin + 118, yPosition);
+          doc.text(`$${num(item.amount || 0, 2)}`, margin + 154, yPosition);
+          yPosition += 5;
+        });
+      }
+
+      yPosition += 4;
+      checkNewPage(20);
+      doc.setFontSize(11);
+      doc.setFont(undefined, "bold");
+      addText("SHINGLE LABOR / DISPOSAL / TRAVEL", margin, yPosition);
+      yPosition += 7;
+
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+      const shingleCostRows = [
+        ["Tear-off / disposal:", `$${num(calculation.tearOffDisposalCost, 2)}`],
+        ["Labor cost:", `$${num(calculation.laborCost, 2)}`],
+        ["Travel & overtime:", `$${num(calculation.totalTravelCost, 2)}`],
+        ["City permit fee:", `$${num(calculation.cityPermitFee, 2)}`],
+        ["Total job cost:", `$${num(calculation.totalJobCost, 2)}`],
+      ];
+      shingleCostRows.forEach(([label, value]) => {
+        checkNewPage(5);
+        doc.setFont(undefined, "bold");
+        doc.text(label, margin, yPosition);
+        doc.setFont(undefined, "normal");
+        doc.text(value, margin + 55, yPosition);
+        yPosition += 6;
+      });
+    }
+
+    if (estimateType === "Spray Foam") {
+      yPosition += 4;
+      checkNewPage(20);
+      doc.setFontSize(11);
+      doc.setFont(undefined, "bold");
+      addText("LABOR / TRAVEL / OVERTIME", margin, yPosition);
+      yPosition += 7;
+
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+      const sprayFoamCostRows = [
+        ["Estimated labor cost:", `$${num(calculation.estimatedLaborCost, 2)}`],
+        ...(calculation.prevailingWageJob
+          ? [["Prevailing wage labor:", `$${num(calculation.prevailingWageLaborCost, 2)}`]]
+          : []),
+        ["Subcontractor cost:", `$${num(calculation.subcontractorCost, 2)}`],
+        ["Travel & overtime:", `$${num(calculation.totalTravelCost, 2)}`],
+        ...(calculation.lodgingNeeded
+          ? [["Lodging total:", `$${num(calculation.lodgingTotal, 2)}`]]
+          : []),
+        ["Total job cost:", `$${num(calculation.totalJobCost, 2)}`],
+      ];
+      sprayFoamCostRows.forEach(([label, value]) => {
+        checkNewPage(5);
+        doc.setFont(undefined, "bold");
+        doc.text(label, margin, yPosition);
+        doc.setFont(undefined, "normal");
+        doc.text(value, margin + 55, yPosition);
+        yPosition += 6;
+      });
+    }
+
     // Cost Breakdown Section
     yPosition += 4;
     checkNewPage(25);
@@ -1657,7 +6189,9 @@ async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName
     doc.setFontSize(10);
     doc.setFont(undefined, "normal");
     const costBreakdown = [
+      ["Foam Cost:", `$${num(calculation.foamMaterialCost, 2)}`],
       ["Material Cost:", `$${num(calculation.materialCost, 2)}`],
+      ["Detail Material Cost:", `$${num(calculation.totalDetailMaterialCost, 2)}`],
       ["Labor Cost:", `$${num(calculation.laborCost, 2)}`],
       ["Travel & Overtime Cost:", `$${num(calculation.totalTravelCost, 2)}`],
       ["Overhead / Operating Cost:", `$${num(calculation.overheadOperatingCost, 2)}`],
@@ -1672,6 +6206,87 @@ async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName
       doc.text(value, margin + 50, yPosition);
       yPosition += 6;
     });
+
+    if (calculation.bidOptions?.options?.length) {
+      yPosition += 4;
+      checkNewPage(20);
+      doc.setFontSize(12);
+      doc.setFont(undefined, "bold");
+      addText("MARKUP TABLE", margin, yPosition);
+      yPosition += 8;
+
+      doc.setFontSize(9);
+      doc.setFont(undefined, "bold");
+      doc.text("Markup %", margin, yPosition);
+      doc.text("Bid Amount", margin + 40, yPosition);
+      doc.text("Profit", margin + 90, yPosition);
+      doc.text("Price/SQ", margin + 130, yPosition);
+      yPosition += 5;
+      doc.setFont(undefined, "normal");
+      calculation.bidOptions.options.forEach((option) => {
+        checkNewPage(5);
+        const selected = option.percent === calculation.selectedMarkupPercent;
+        if (selected) {
+          doc.setFont(undefined, "bold");
+        }
+        doc.text(`${option.percent}%${selected ? " *" : ""}`, margin, yPosition);
+        doc.text(`$${num(option.bidAmount, 2)}`, margin + 40, yPosition);
+        doc.text(`$${num(option.profitDollars, 2)}`, margin + 90, yPosition);
+        doc.text(`$${num(option.pricePerSq, 2)}`, margin + 130, yPosition);
+        yPosition += 5;
+        if (selected) {
+          doc.setFont(undefined, "normal");
+        }
+      });
+
+      yPosition += 4;
+      checkNewPage(12);
+      doc.setFontSize(11);
+      doc.setFont(undefined, "bold");
+      addText("SELECTED BID", margin, yPosition);
+      yPosition += 7;
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+      const selectedBidInfo = [
+        ["Selected Markup:", calculation.customBidSelected ? "Custom Bid" : `${num(calculation.selectedMarkupPercent, 0)}%`],
+        ["Selected Bid:", `$${num(calculation.selectedBidAmount, 2)}`],
+        ["Selected Profit:", `$${num(calculation.selectedProfitDollars, 2)}`],
+        ["Selected Price / SQ:", `$${num(calculation.selectedPricePerSq, 2)}`],
+      ];
+      selectedBidInfo.forEach(([label, value]) => {
+        checkNewPage(5);
+        doc.setFont(undefined, "bold");
+        doc.text(label, margin, yPosition);
+        doc.setFont(undefined, "normal");
+        doc.text(value, margin + 55, yPosition);
+        yPosition += 6;
+      });
+
+      if (calculation.customTotalCharge > 0) {
+        yPosition += 2;
+        checkNewPage(18);
+        doc.setFontSize(11);
+        doc.setFont(undefined, "bold");
+        addText("CUSTOM BID SUMMARY", margin, yPosition);
+        yPosition += 7;
+        doc.setFontSize(10);
+        doc.setFont(undefined, "normal");
+        const customBidInfo = [
+          ["Custom Bid Amount:", `$${num(calculation.customTotalCharge, 2)}`],
+          ["Custom Profit:", `$${num(calculation.customProfitDollars, 2)}`],
+          ["Custom Price / SQ:", `$${num(calculation.customPricePerSq, 2)}`],
+          ["Custom Margin:", `${num(calculation.customProfitMarginPercent, 1)}%`],
+        ];
+        customBidInfo.forEach(([label, value]) => {
+          checkNewPage(5);
+          doc.setFont(undefined, "bold");
+          doc.text(label, margin, yPosition);
+          doc.setFont(undefined, "normal");
+          doc.text(value, margin + 55, yPosition);
+          yPosition += 6;
+        });
+      }
+    }
 
     // Material Cost Details
     if (calculation.materialPricing && calculation.materialPricing.items && calculation.materialPricing.items.length > 0) {
@@ -1778,14 +6393,72 @@ async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName
     }
 
     // Generate filename
-    const fileName = `${estimateName.replace(/[^a-z0-9]/gi, "_").toLowerCase() || "estimate"}_${Date.now()}.pdf`;
+    const safeEstimateName = String(estimateName || "");
+    const fileName = `${safeEstimateName.replace(/[^a-z0-9]/gi, "_").toLowerCase() || "estimate"}_${Date.now()}.pdf`;
 
-    // Save PDF
-    doc.save(fileName);
+    const pdfBlob = doc.output("blob");
+    const blobUrl = URL.createObjectURL(pdfBlob);
+    const triggerDownload = () => {
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = fileName;
+      link.rel = "noopener";
+      document.body.appendChild(link);
+      try {
+        link.click();
+      } finally {
+        link.remove();
+      }
+    };
+
+    try {
+      if (typeof window.showSaveFilePicker === "function") {
+        const fileHandle = await window.showSaveFilePicker({
+          suggestedName: fileName,
+          types: [
+            {
+              description: "PDF document",
+              accept: { "application/pdf": [".pdf"] },
+            },
+          ],
+        });
+        const writable = await fileHandle.createWritable();
+        await writable.write(pdfBlob);
+        await writable.close();
+        URL.revokeObjectURL(blobUrl);
+        return true;
+      }
+    } catch (saveError) {
+      console.warn("PDF file picker save failed, falling back:", saveError);
+    }
+
+    let previewOpened = false;
+    if (previewWindow && !previewWindow.closed) {
+      try {
+        previewWindow.location.href = blobUrl;
+        previewOpened = true;
+      } catch (previewError) {
+        console.warn("PDF preview window update failed:", previewError);
+      }
+    }
+
+    if (!previewOpened) {
+      try {
+        triggerDownload();
+      } catch (downloadError) {
+        console.warn("Primary PDF download path failed, trying direct window open:", downloadError);
+        const fallbackWindow = window.open(blobUrl, "_blank", "noopener,noreferrer");
+        if (!fallbackWindow) {
+          throw downloadError;
+        }
+      }
+    }
+
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
     return true;
   } catch (error) {
     console.error("Error generating PDF:", error);
-    alert("Failed to generate PDF. Please check the console for details.");
+    alert(`Failed to generate PDF: ${error?.message || error}`);
     return false;
   }
 }
@@ -1793,8 +6466,9 @@ async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName
 function buildMissingScopeChecklist(inputs, prices, calculation) {
   const checklist = [];
   const addItem = (label, detail) => checklist.push({ label, detail });
+  const totalSquares = calculation?.scope?.totalSquares ?? calculation?.totalSquares ?? 0;
 
-  if (calculation.scope.totalSquares <= 0) {
+  if (totalSquares <= 0) {
     addItem("Total squares", "Enter the roof size before pricing the bid.");
   }
 
@@ -1824,6 +6498,11 @@ function buildMissingScopeChecklist(inputs, prices, calculation) {
   const terminationMethod = inputs.terminationMethod || "";
   if (!terminationMethod) {
     addItem("Termination linear feet", "Choose a termination method and enter the related linear feet.");
+  } else if (terminationMethod === "multiTermination") {
+    const validRows = (inputs.multiTerminationRows || []).filter(row => row.type && Number(row.linearFeet) > 0);
+    if (validRows.length === 0) {
+      addItem("Termination linear feet", "Add at least one termination type and linear feet.");
+    }
   } else if (terminationMethod === "copingMetal" && calculation.termination.copingLinearFeet <= 0) {
     addItem("Termination linear feet", "Enter coping linear feet.");
   } else if (terminationMethod === "cladDripEdge" && calculation.termination.dripEdgeLinearFeet <= 0) {
@@ -1867,12 +6546,23 @@ function calculateTpoEstimate(inputs, prices) {
   const acHandling = calculateAcHandling(inputs);
   const travelAndOvertime = calculateTravelAndOvertime(inputs);
   const labor = calculateLabor(inputs);
+  const lodgingNeeded =
+    inputs.lodgingNeeded === "Yes" ||
+    inputs.lodgingNeeded === true ||
+    inputs.travelLodgingNeeded === "Yes" ||
+    inputs.travelLodgingNeeded === true;
 
-  const materialPricing = calculateMaterialPricing(inputs, prices, scope, termination, pitchPocket, detailMembrane, acHandling);
+  let materialPricing = calculateMaterialPricing(inputs, prices, scope, termination, pitchPocket, detailMembrane, acHandling);
+  // merge any custom materials from inputs into the computed pricing
+  materialPricing = mergeCustomMaterialsIntoPricing(inputs, materialPricing, scope);
 
   const terminationCost = termination.totalTerminationCost;
   const pitchPocketCost = pitchPocket.totalPitchPocketCost;
-  const travelCost = travelAndOvertime.totalTravelCost;
+  const lodgingName = String(inputs.sprayFoamLodgingName || "");
+  const nightlyLodgingCost = Math.max(0, toNumber(inputs.sprayFoamNightlyLodgingCost, 0));
+  const lodgingNights = Math.max(0, Math.round(toNumber(inputs.sprayFoamLodgingNights, 0)));
+  const lodgingTotal = lodgingNeeded ? nightlyLodgingCost * lodgingNights : 0;
+  const travelCost = travelAndOvertime.totalTravelCost + lodgingTotal;
   const tearOffCost = scope.totalTearOffCost;
   const laborCost = labor.totalLaborCost;
   const acHandlingCost = acHandling.totalAcHandlingCost;
@@ -1938,6 +6628,1746 @@ function calculateTpoEstimate(inputs, prices) {
   };
 }
 
+function calculateSprayFoamEstimate(inputs) {
+  const sprayFoamEstimateType = String(inputs.sprayFoamEstimateType || "roof");
+  const isWallFoamEstimate = sprayFoamEstimateType === "wall";
+  const foamSetYieldAtOneInch = isWallFoamEstimate ? DEFAULT_SPF_RATES.wallFoamYieldAtOneInch : 26;
+  const foamSetCost = isWallFoamEstimate ? DEFAULT_SPF_RATES.wallFoamSetCost : DEFAULT_SPF_RATES.foamKitCost;
+  const foamSetLabel = isWallFoamEstimate ? "Wall insulation set" : "Spray foam kit";
+  const wallFoamChargeMethod = String(inputs.wallFoamChargeMethod || "prorated");
+  const lodgingNeeded =
+    inputs.lodgingNeeded === "Yes" ||
+    inputs.lodgingNeeded === true ||
+    inputs.travelLodgingNeeded === "Yes" ||
+    inputs.travelLodgingNeeded === true ||
+    inputs.sprayFoamLodgingNeeded === "Yes" ||
+    inputs.sprayFoamLodgingNeeded === true;
+  const separateRoofAreas = Boolean(inputs.sprayFoamSeparateRoofAreas);
+  const roofAreaTotals = calculateSprayFoamRoofAreaTotalsSafe(inputs.sprayFoamRoofAreas, foamSetCost, foamSetYieldAtOneInch);
+  const fieldSquares = separateRoofAreas
+    ? roofAreaTotals.totalFieldSquares
+    : Number(inputs.sprayFoamTotalFieldSquares || inputs.sprayFoamFieldRoofSquares || 0);
+  const parapetSquares = separateRoofAreas
+    ? roofAreaTotals.totalParapetWallSquares
+    : Number(inputs.sprayFoamParapetWallSquares || 0);
+  const useMultipleParapetMeasurements = Boolean(inputs.sprayFoamUseMultipleParapetMeasurements);
+  const parapetMeasurementTotals = calculateSprayFoamParapetMeasurementTotals(inputs.sprayFoamParapetMeasurements);
+  const totalParapetSquares = useMultipleParapetMeasurements
+    ? parapetMeasurementTotals.totalParapetSquares
+    : parapetSquares;
+  const totalParapetSquareFeet = totalParapetSquares * 100;
+  const totalRoofSquares = fieldSquares + totalParapetSquares;
+  const productionSquares = totalRoofSquares;
+  const selectedFoamThicknessInches = Math.min(16, Math.max(1, toNumber(inputs.sprayFoamFieldThickness, 2)));
+  const yieldPerKitAtSelectedThickness = foamSetYieldAtOneInch / selectedFoamThicknessInches;
+  const wallFoamSqFt = productionSquares;
+  const wallFoamKitCoverage = yieldPerKitAtSelectedThickness;
+  const wallFoamUsageRatio = wallFoamKitCoverage > 0 ? wallFoamSqFt / wallFoamKitCoverage : 0;
+  const wallFoamFullKitsNeeded = Math.ceil(wallFoamUsageRatio);
+  const wallFoamProratedMaterialCost = foamSetCost * wallFoamUsageRatio;
+  const foamKitsNeeded = separateRoofAreas
+    ? roofAreaTotals.totalFoamKits
+    : isWallFoamEstimate
+      ? wallFoamFullKitsNeeded
+      : totalRoofSquares > 0
+        ? Math.ceil(totalRoofSquares / yieldPerKitAtSelectedThickness)
+        : 0;
+  const foamKitCost = foamSetCost;
+  const wallFoamMaterialCost =
+    wallFoamChargeMethod === "fullKit"
+      ? wallFoamFullKitsNeeded * foamKitCost
+      : wallFoamProratedMaterialCost;
+  const linearFeet = Math.max(0, toNumber(inputs.sprayFoamLinearFeet, 0));
+  const dripEdgeRequired = Boolean(inputs.sprayFoamDripEdgeRequired);
+  const foamStopDripEdgePieces = dripEdgeRequired ? Math.ceil(linearFeet / 10) : 0;
+  const foamStopDripEdgeUnitCost = 22;
+  const foamStopDripEdgeCost = foamStopDripEdgePieces * foamStopDripEdgeUnitCost;
+  const estimatedCompletionDays = Math.max(0, Math.round(toNumber(inputs.sprayFoamEstimatedCompletionDays, 0)));
+  const cityPermitFee = Math.max(0, toNumber(inputs.sprayFoamCityPermitFee, 0));
+  const urgency = String(inputs.sprayFoamUrgency || "normal");
+  const fieldThickness = selectedFoamThicknessInches;
+  const wallThickness = Math.max(0.1, toNumber(inputs.sprayFoamWallThickness, 1));
+  const laborersNeededPerDay = Math.max(0, Math.round(toNumber(inputs.sprayFoamLaborersNeededPerDay, 0)));
+  const prevailingWageJob = Boolean(inputs.sprayFoamPrevailingWageJob);
+  const prevailingWageHourlyRate = Math.max(0, toNumber(inputs.sprayFoamPrevailingWageHourlyRate, 0));
+  const prevailingWageCrewSize = Math.max(0, Math.round(toNumber(inputs.sprayFoamPrevailingWageCrewSize, 0)));
+  const prevailingWageHoursPerDay = Math.max(0, toNumber(inputs.sprayFoamPrevailingWageHoursPerDay, 0));
+  const prevailingWageJobDays = Math.max(0, Math.round(toNumber(inputs.sprayFoamPrevailingWageJobDays, estimatedCompletionDays)));
+  const prevailingWageLaborCost = prevailingWageJob
+    ? prevailingWageHourlyRate * prevailingWageCrewSize * prevailingWageHoursPerDay * prevailingWageJobDays
+    : 0;
+  const sprayFoamHasSubcontractors = Boolean(inputs.sprayFoamHasSubcontractors);
+  const sprayFoamSubcontractorItems = normalizeSprayFoamSubcontractorItems(inputs.sprayFoamSubcontractorItems);
+  const subcontractorItems = sprayFoamHasSubcontractors
+    ? sprayFoamSubcontractorItems.map((item) => {
+        const quantity = Math.max(0, toNumber(item.quantity, 0));
+        const unitPrice = Math.max(0, toNumber(item.unitPrice, 0));
+        const baseCost = quantity * unitPrice;
+        const workersCompRate = item.licensed ? 0 : 0.198;
+        const workersCompCost = baseCost * workersCompRate;
+        const totalCost = baseCost + workersCompCost;
+        return {
+          ...item,
+          quantity,
+          unitPrice,
+          baseCost,
+          workersCompRate,
+          workersCompCost,
+          totalCost,
+        };
+      })
+    : [];
+  const subcontractorCost = subcontractorItems.reduce((sum, item) => sum + item.totalCost, 0);
+  const travelAndOvertime = calculateTravelAndOvertime(inputs);
+  const lodgingName = String(inputs.sprayFoamLodgingName || "");
+  const nightlyLodgingCost = Math.max(0, toNumber(inputs.sprayFoamNightlyLodgingCost, 0));
+  const lodgingNights = Math.max(0, Math.round(toNumber(inputs.sprayFoamLodgingNights, 0)));
+  const lodgingTotal = lodgingNeeded ? nightlyLodgingCost * lodgingNights : 0;
+
+  const urgencyMultiplier =
+    urgency === "rush" ? 1.1 : urgency === "emergency" ? 1.2 : 1;
+
+  const layerConfig = {
+    ...DEFAULT_SPF_LAYER_CONFIG,
+    ...(inputs.sprayFoamLayerConfig || {}),
+  };
+
+  const layerItems = [
+    {
+      key: "primer",
+      label: "Primer",
+      coverageRate: toNumber(layerConfig.primer.coverageRate, DEFAULT_SPF_LAYER_CONFIG.primer.coverageRate),
+      applicable: Boolean(layerConfig.primer.applicable),
+      unitPrice: toNumber(layerConfig.primer.unitCost, DEFAULT_SPF_LAYER_CONFIG.primer.unitCost),
+      quantityBase: productionSquares,
+    },
+    {
+      key: "baseCoat",
+      label: "Base coat",
+      coverageRate: toNumber(layerConfig.baseCoat.coverageRate, DEFAULT_SPF_LAYER_CONFIG.baseCoat.coverageRate),
+      applicable: Boolean(layerConfig.baseCoat.applicable),
+      unitPrice: toNumber(layerConfig.baseCoat.unitCost, DEFAULT_SPF_LAYER_CONFIG.baseCoat.unitCost),
+      quantityBase: productionSquares,
+    },
+    {
+      key: "intermediateCoat1",
+      label: "Intermediate coat 1",
+      coverageRate: toNumber(layerConfig.intermediateCoat1.coverageRate, DEFAULT_SPF_LAYER_CONFIG.intermediateCoat1.coverageRate),
+      applicable: Boolean(layerConfig.intermediateCoat1.applicable),
+      unitPrice: toNumber(layerConfig.intermediateCoat1.unitCost, DEFAULT_SPF_LAYER_CONFIG.intermediateCoat1.unitCost),
+      quantityBase: productionSquares,
+    },
+    {
+      key: "intermediateCoat2",
+      label: "Intermediate coat 2",
+      coverageRate: toNumber(layerConfig.intermediateCoat2.coverageRate, DEFAULT_SPF_LAYER_CONFIG.intermediateCoat2.coverageRate),
+      applicable: Boolean(layerConfig.intermediateCoat2.applicable),
+      unitPrice: toNumber(layerConfig.intermediateCoat2.unitCost, DEFAULT_SPF_LAYER_CONFIG.intermediateCoat2.unitCost),
+      quantityBase: productionSquares,
+    },
+    {
+      key: "topCoat",
+      label: "Top coat",
+      coverageRate: toNumber(layerConfig.topCoat.coverageRate, DEFAULT_SPF_LAYER_CONFIG.topCoat.coverageRate),
+      applicable: Boolean(layerConfig.topCoat.applicable),
+      unitPrice: toNumber(layerConfig.topCoat.unitCost, DEFAULT_SPF_LAYER_CONFIG.topCoat.unitCost),
+      quantityBase: productionSquares,
+    },
+    {
+      key: "granules",
+      label: "Granules",
+      coverageRate: toNumber(layerConfig.granules.coverageRate, DEFAULT_SPF_LAYER_CONFIG.granules.coverageRate),
+      applicable: Boolean(layerConfig.granules.applicable),
+      unitPrice: toNumber(layerConfig.granules.unitCost, DEFAULT_SPF_LAYER_CONFIG.granules.unitCost),
+      quantityBase: productionSquares,
+    },
+  ].map((item) => {
+    const drumsNeeded = item.applicable ? Math.ceil(item.quantityBase / item.coverageRate) : 0;
+    const usedSquares = item.applicable ? item.quantityBase : 0;
+    const usedCost = item.applicable ? (usedSquares / item.coverageRate) * item.unitPrice : 0;
+    return {
+      ...item,
+      squaresNeeded: usedSquares,
+      drumsNeeded,
+      amount: usedCost,
+    };
+  });
+
+  const coatingItems = layerItems;
+  const foamMaterialCost = separateRoofAreas
+    ? roofAreaTotals.totalFoamCost
+    : isWallFoamEstimate
+      ? wallFoamMaterialCost
+      : totalRoofSquares > 0 && coatingItems.some((item) => item.amount > 0)
+        ? foamKitsNeeded * foamKitCost
+        : 0;
+  const materialItems = [
+    {
+      key: "foamKit",
+      label: foamSetLabel,
+      quantity: foamKitsNeeded,
+      unit: isWallFoamEstimate ? "set" : "kit",
+      unitPrice: foamKitCost,
+      coverageRate: yieldPerKitAtSelectedThickness,
+      kitsNeeded: foamKitsNeeded,
+      selectedFoamThicknessInches,
+      yieldPerKitAtSelectedThickness,
+      foamMaterialCost,
+    },
+    {
+      key: "wallThickness",
+      label: "Wall thickness",
+      quantity: linearFeet * wallThickness,
+      unit: "lf / inch",
+      unitPrice: DEFAULT_SPF_RATES.wallThicknessUnitCost,
+    },
+    {
+      key: "foamStopDripEdge",
+      label: "4x4 Foam Stop Edge Metal",
+      quantity: foamStopDripEdgePieces,
+      unit: "10' piece",
+      unitPrice: foamStopDripEdgeUnitCost,
+      required: dripEdgeRequired,
+    },
+  ].map((item) => ({
+    ...item,
+    amount:
+      item.key === "foamKit"
+        ? foamMaterialCost
+        : item.quantity * item.unitPrice,
+  }));
+
+  const detailMaterialConfig = normalizeSprayFoamDetailMaterials(inputs.sprayFoamDetailMaterials);
+  const secureRockAutoQuantity = fieldSquares * 3.124;
+  const skylightCurbsQuantity = Math.max(0, toNumber(detailMaterialConfig.skylightCurbs.quantity, 0));
+  const roofHatchQuantity = Math.max(0, toNumber(detailMaterialConfig.roofHatch.quantity, 0));
+  const totalRoofLoadingQuantity =
+    Math.max(0, toNumber(detailMaterialConfig.ventedLouveredSkylights.quantity, 0)) +
+    Math.max(0, toNumber(detailMaterialConfig.nonVentedLouveredSkylights.quantity, 0)) +
+    roofHatchQuantity;
+  const skylightCurbLumberBoardQuantity = skylightCurbsQuantity * 2;
+  const skylightCurbLumberBoardUnitCost = Math.max(0, toNumber(inputs.sprayFoamSkylightCurbLumberBoardUnitCost, 0));
+  const skylightCurbLumberLongPiecesNeeded = skylightCurbsQuantity * 2;
+  const skylightCurbLumberShortPiecesNeeded = skylightCurbsQuantity * 2;
+  const skylightCurbLumberOutsideLengthInches = 97.5;
+  const skylightCurbLumberOutsideWidthInches = 49.5;
+  const skylightCurbLumberShortCutInches = 46.5;
+  const skylightCurbLumberEstimatedWasteInches = 0;
+  const skylightCurbLumberEstimatedTotalLumberLF =
+    skylightCurbLumberBoardQuantity * 12 * 2; // 2x8x12 boards
+  const skylightCurbLumberOrderItem = skylightCurbsQuantity > 0
+    ? {
+        key: "skylightCurbLumberOrder",
+        label: "Skylight Curb 2x8x12 Lumber Order",
+        unit: "board",
+        quantity: skylightCurbLumberBoardQuantity,
+        unitCost: skylightCurbLumberBoardUnitCost,
+        amount: skylightCurbLumberBoardQuantity * skylightCurbLumberBoardUnitCost,
+      }
+    : null;
+  const detailMaterialItems = [
+    {
+      key: "scuppers",
+      label: "Scuppers",
+      unit: "each",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.scuppers.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.scuppers.unitCost, 65)),
+    },
+    {
+      key: "castIronDrain",
+      label: "Cast Iron Drain",
+      unit: "each",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.castIronDrain.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.castIronDrain.unitCost, 450)),
+    },
+    {
+      key: "ventedLouveredSkylights",
+      label: "Vented Louvered Skylight",
+      unit: "each",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.ventedLouveredSkylights.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.ventedLouveredSkylights.unitCost, 800)),
+    },
+    {
+      key: "nonVentedLouveredSkylights",
+      label: "Non-Vented Louvered Skylight",
+      unit: "each",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.nonVentedLouveredSkylights.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.nonVentedLouveredSkylights.unitCost, 635)),
+    },
+    {
+      key: "acCurbs",
+      label: "A/C Curbs",
+      unit: "each",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.acCurbs.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.acCurbs.unitCost, 100)),
+    },
+    {
+      key: "acPans",
+      label: "A/C Pans",
+      unit: "each",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.acPans.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.acPans.unitCost, 165)),
+    },
+    {
+      key: "skylightCurbs",
+      label: "Skylight Curbs",
+      unit: "each",
+      quantity: skylightCurbsQuantity,
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.skylightCurbs.unitCost, 100)),
+    },
+    ...(skylightCurbLumberOrderItem ? [skylightCurbLumberOrderItem] : []),
+    {
+      key: "tTops",
+      label: "T-Tops",
+      unit: "each",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.tTops.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.tTops.unitCost, 55)),
+    },
+    {
+      key: "roofHatch",
+      label: "Roof Hatch",
+      unit: "each",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.roofHatch.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.roofHatch.unitCost, 1800)),
+    },
+    {
+      key: "whirlyBird16",
+      label: '16" Whirly Bird',
+      unit: "each",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.whirlyBird16.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.whirlyBird16.unitCost, 125)),
+    },
+    {
+      key: "corrugatedMetalSheets",
+      label: "Corrugated Metal Sheets",
+      unit: "sheet",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.corrugatedMetalSheets.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.corrugatedMetalSheets.unitCost, 38)),
+    },
+    {
+      key: "pbrMetalSheets",
+      label: "PBR Metal 3x12' Sheets",
+      unit: "sheet",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.pbrMetalSheets.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.pbrMetalSheets.unitCost, 105)),
+    },
+    {
+      key: "secureRockDenseDeck",
+      label: "Secure Rock / Dense Deck",
+      unit: "each",
+      quantity: Math.max(0, toNumber(detailMaterialConfig.secureRockDenseDeck.quantity, 0)),
+      unitCost: Math.max(0, toNumber(detailMaterialConfig.secureRockDenseDeck.unitCost, 30)),
+      useAutoQuantity: false,
+    },
+  ].map((item) => ({
+    ...item,
+    amount: item.quantity * item.unitCost,
+  }));
+
+  const additionalDetailMaterialItems = normalizeSprayFoamAdditionalDetailMaterials(inputs.sprayFoamAdditionalDetailMaterials).map(
+    (item, index) => {
+      const quantity = Math.max(0, toNumber(item.quantity, 1));
+      const unitCost = Math.max(0, toNumber(item.unitCost, 0));
+      return {
+        key: `customDetailMaterial-${index}`,
+        label: item.name || `Custom material ${index + 1}`,
+        unit: item.unit || "each",
+        quantity,
+        unitCost,
+        amount: quantity * unitCost,
+      };
+    },
+  );
+
+  const equipmentRentalItems = normalizeSprayFoamEquipmentRentals(inputs.sprayFoamEquipmentRentals).map((item, index) => {
+    const rateAmount = Math.max(0, toNumber(item.rateAmount, 0));
+    const quantity = Math.max(0, toNumber(item.quantity, 1));
+    const days = Math.max(0, toNumber(item.days, 0));
+    const hours = Math.max(0, toNumber(item.hours, 0));
+    const total =
+      item.rateType === "perDay"
+        ? rateAmount * quantity * days
+        : item.rateType === "perHour"
+          ? rateAmount * quantity * hours
+          : rateAmount * quantity;
+    return {
+      key: `equipmentRental-${index}`,
+      label: item.name || `Equipment / rental ${index + 1}`,
+      rateType: item.rateType,
+      quantity,
+      days,
+      hours,
+      rateAmount,
+      unit: item.rateType === "perDay" ? "day" : item.rateType === "perHour" ? "hour" : "flat",
+      amount: total,
+      total,
+    };
+  });
+
+  const allDetailMaterialItems = [...detailMaterialItems, ...additionalDetailMaterialItems, ...equipmentRentalItems];
+  const rooftopDeliveryFee = totalRoofLoadingQuantity > 0 && inputs.sprayFoamSkylightsRoofLoaded
+    ? Math.max(0, toNumber(inputs.sprayFoamRooftopDeliveryFee, 750))
+    : 0;
+  const rooftopDeliveryItem = rooftopDeliveryFee > 0
+    ? {
+        key: "rooftopDeliveryFee",
+        label: "Rooftop delivery fee",
+        unit: "fee",
+        quantity: 1,
+        unitCost: rooftopDeliveryFee,
+        amount: rooftopDeliveryFee,
+      }
+    : null;
+  const materialCostItems = [...coatingItems, ...materialItems, ...allDetailMaterialItems, ...(rooftopDeliveryItem ? [rooftopDeliveryItem] : [])];
+  const totalMaterialCost = materialCostItems.reduce((sum, item) => sum + item.amount, 0);
+  const totalDetailMaterialCost = allDetailMaterialItems.reduce((sum, item) => sum + item.amount, 0);
+  const equipmentRentalTotal = equipmentRentalItems.reduce((sum, item) => sum + item.amount, 0);
+
+  const effectiveTotalLaborers = laborersNeededPerDay * Math.max(estimatedCompletionDays, 0);
+  const estimatedLaborCost = effectiveTotalLaborers * 400 * urgencyMultiplier + prevailingWageLaborCost;
+
+  const travelCost = travelAndOvertime.totalTravelCost + lodgingTotal;
+  const directJobCost = totalMaterialCost + estimatedLaborCost + subcontractorCost + travelCost;
+  const overheadCost = directJobCost * 0.1;
+  const operatingCost = directJobCost * 0.075;
+  const permitFee = cityPermitFee;
+  const totalJobCost = directJobCost + overheadCost + operatingCost + permitFee;
+  const overheadOperatingCost = overheadCost + operatingCost;
+  const customTotalCharge = Math.max(0, toNumber(inputs.sprayFoamCustomBidAmount, 0));
+  const customPricePerSq = productionSquares > 0 ? customTotalCharge / productionSquares : 0;
+  const customProfitDollars = customTotalCharge - totalJobCost;
+  const customProfitMarginPercent = totalJobCost > 0 ? (customProfitDollars / totalJobCost) * 100 : 0;
+  const useCustomBid = Boolean(customTotalCharge > 0 || inputs.sprayFoamCustomBidSelected);
+
+  const bidOptions = calculateBidOptions(totalJobCost, productionSquares, Math.max(30, Math.min(60, toNumber(inputs.selectedMarkupPercent, 30))));
+  const selectedBidAmount = useCustomBid ? customTotalCharge : bidOptions.selectedBidAmount;
+  const selectedPricePerSq = useCustomBid ? customPricePerSq : bidOptions.selectedPricePerSq;
+  const selectedProfitDollars = useCustomBid ? customProfitDollars : bidOptions.selectedProfitDollars;
+  const selectedMarkupPercent = useCustomBid ? (totalJobCost > 0 ? (customProfitDollars / totalJobCost) * 100 : 0) : bidOptions.selectedMarkupPercent;
+
+  return {
+    template: "sprayFoam",
+    sprayFoamEstimateType,
+    isWallFoamEstimate,
+    foamSetLabel,
+    scope: {
+      totalSquares: productionSquares,
+    },
+    jobName: String(inputs.jobName || ""),
+    salesperson: String(inputs.sprayFoamSalesperson || ""),
+    customerName: String(inputs.customerName || ""),
+    jobAddress: String(inputs.jobAddress || ""),
+    companyHqAddress: travelAndOvertime.companyHqAddress,
+    jobSiteAddress: travelAndOvertime.jobSiteAddress || String(inputs.jobAddress || ""),
+    milesToLocation: travelAndOvertime.oneWayMiles,
+    roundTripMiles: travelAndOvertime.oneWayMiles * 2,
+    travelTimeHours: travelAndOvertime.oneWayDriveTimeHours,
+    travelDistanceSource: travelAndOvertime.travelDistanceSource,
+    estimatedCompletionDays,
+    totalFieldSquares: fieldSquares,
+    fieldSquares,
+    fieldRoofSquares: fieldSquares,
+    separateRoofAreas,
+    roofAreas: roofAreaTotals.rows,
+    totalRoofSquares,
+    totalFoamKits: foamKitsNeeded,
+    totalFoamCost: foamMaterialCost,
+    wallFoamChargeMethod,
+    wallFoamSqFt,
+    wallFoamKitCoverage,
+    wallFoamUsageRatio,
+    wallFoamFullKitsNeeded,
+    wallFoamProratedMaterialCost,
+    wallFoamMaterialCost,
+    selectedFoamThicknessInches,
+    yieldPerKitAtSelectedThickness,
+    foamKitsNeeded,
+    foamKitCost,
+    foamMaterialCost,
+    dripEdgeRequired,
+    foamStopDripEdgePieces,
+    foamStopDripEdgeCost,
+    totalParapetSquareFeet,
+    totalParapetSquares,
+    parapetWallSquares: totalParapetSquares,
+    parapetMeasurementTotals,
+    useMultipleParapetMeasurements,
+    productionSquares,
+    linearFeet,
+    cityPermitFee,
+    urgency,
+    fieldThickness,
+    wallThickness,
+    laborersNeededPerDay,
+    totalLaborers: effectiveTotalLaborers,
+    prevailingWageJob,
+    prevailingWageHourlyRate,
+    prevailingWageCrewSize,
+    prevailingWageHoursPerDay,
+    prevailingWageJobDays,
+    prevailingWageLaborCost,
+    sprayFoamHasSubcontractors,
+    sprayFoamSubcontractorItems: subcontractorItems,
+    subcontractorCost,
+    coatingItems,
+    sprayFoamMaterialItems: materialItems,
+    detailMaterialItems: allDetailMaterialItems,
+    equipmentRentalItems,
+    equipmentRentalTotal,
+    materialPricing: {
+      items: materialCostItems,
+      totalMaterialCost,
+    },
+    materialPricingCost: totalMaterialCost,
+    totalMaterialCost,
+    materialCost: totalMaterialCost,
+    foamMaterialCost,
+    foamKitsNeeded,
+    yieldPerKitAtSelectedThickness,
+    selectedFoamThicknessInches,
+    totalDetailMaterialCost,
+    equipmentRentalItems,
+    equipmentRentalTotal,
+    detailMaterialItems: allDetailMaterialItems,
+    additionalDetailMaterialItems,
+    sprayFoamEquipmentRentals: equipmentRentalItems,
+    skylightCurbsQuantity,
+    totalRoofLoadingQuantity,
+    skylightCurbLumberOrderItem,
+    skylightCurbLumberLongPiecesNeeded,
+    skylightCurbLumberShortPiecesNeeded,
+    skylightCurbLumberEstimatedWasteInches,
+    skylightCurbLumberEstimatedTotalLumberLF,
+    skylightCurbLumberOutsideLengthInches,
+    skylightCurbLumberOutsideWidthInches,
+    skylightCurbLumberShortCutInches,
+    rooftopDeliveryFee,
+    rooftopDeliveryItem,
+    lodgingNeeded,
+    lodgingName,
+    nightlyLodgingCost,
+    lodgingNights,
+    lodgingTotal,
+    secureRockAutoQuantity,
+    estimatedLaborCost,
+    laborCost: estimatedLaborCost,
+    prevailingWageJob,
+    prevailingWageHourlyRate,
+    prevailingWageCrewSize,
+    prevailingWageHoursPerDay,
+    prevailingWageJobDays,
+    prevailingWageLaborCost,
+    subcontractorCost,
+    travelCost,
+    totalTravelCost: travelCost,
+    travelAndOvertime,
+    lodgingNeeded,
+    lodgingName,
+    nightlyLodgingCost,
+    lodgingNights,
+    lodgingTotal,
+    overheadCost,
+    operatingCost,
+    permitFee,
+    directJobCost,
+    overheadOperatingCost,
+    totalCostBeforeProfit: totalJobCost,
+    totalCost: totalJobCost,
+    totalJobCost,
+    bidOptions,
+    selectedMarkupPercent,
+    selectedBidAmount,
+    selectedPricePerSq,
+    selectedProfitDollars,
+    customBidAmount: customTotalCharge,
+    customBidSelected: useCustomBid,
+    totalSquares: productionSquares,
+    customTotalCharge,
+    customPricePerSq,
+    customProfitDollars,
+    customProfitMarginPercent,
+  };
+}
+
+function calculateShingleEstimate(inputs, travelAndOvertime = calculateTravelAndOvertime(inputs)) {
+  const totalRoofSquares = Math.max(0, toNumber(inputs.shingleTotalRoofSquares, toNumber(inputs.totalSquares, 0)));
+  const roofSquares = totalRoofSquares;
+  const wastePercent = Math.max(0, toNumber(inputs.shingleWastePercent, 15));
+  const productionSquares = Math.max(0, toNumber(inputs.shingleProductionSquares, totalRoofSquares * (1 + wastePercent / 100)));
+  const adjustedSquares = totalRoofSquares * (1 + wastePercent / 100);
+  const ridgeHipLf = Math.max(0, toNumber(inputs.shingleRidgeHipLinearFeet, toNumber(inputs.shingleRidgeHipLf, 0)));
+  const ridgeLf = Math.max(0, toNumber(inputs.shingleRidgeLinearFeet, toNumber(inputs.shingleRidgeLf, ridgeHipLf)));
+  const hipLf = Math.max(0, toNumber(inputs.shingleHipLinearFeet, toNumber(inputs.shingleHipLf, ridgeHipLf > 0 && ridgeLf === ridgeHipLf ? 0 : 0)));
+  const valleyLf = Math.max(0, toNumber(inputs.shingleValleyLinearFeet, toNumber(inputs.shingleValleyLf, 0)));
+  const rakeLf = Math.max(0, toNumber(inputs.shingleRakeLinearFeet, toNumber(inputs.shingleRakeLf, 0)));
+  const eaveLf = Math.max(0, toNumber(inputs.shingleEaveLinearFeet, toNumber(inputs.shingleEaveLf, 0)));
+  const starterLf = Math.max(0, toNumber(inputs.shingleStarterLinearFeet, toNumber(inputs.shingleStarterLf, 0)));
+  const dripEdgeLf = Math.max(0, toNumber(inputs.shingleDripEdgeLinearFeet, toNumber(inputs.shingleDripEdgeLf, 0)));
+  const hdzBundlesInput = Math.max(0, toNumber(inputs.shingleHdzBundlesNeeded, 0));
+  const calculatedHdzBundlesNeeded = Math.max(0, Math.ceil(adjustedSquares * 3));
+  const hdzBundlesQuantity = hdzBundlesInput > 0 ? hdzBundlesInput : calculatedHdzBundlesNeeded;
+  const syntheticUnderlaymentSuggestedRolls = Math.max(0, toNumber(inputs.shingleSyntheticUnderlaymentSuggestedRolls, 0));
+  const syntheticUnderlaymentInput = Math.max(0, toNumber(inputs.shingleSyntheticUnderlaymentRolls, 0));
+  const calculatedSyntheticUnderlaymentRolls = Math.max(0, Math.ceil(adjustedSquares / 9.6));
+  const syntheticUnderlaymentRollsQuantity =
+    syntheticUnderlaymentInput > 0
+      ? syntheticUnderlaymentInput
+      : calculatedSyntheticUnderlaymentRolls;
+  const calculatedStarterBundles = starterLf > 0 ? Math.ceil(starterLf / 115) : 0;
+  const calculatedRapidRidgeBoxes = ridgeLf > 0 ? Math.ceil(ridgeLf / 20) : 0;
+  const calculatedValleyPieces = valleyLf > 0 ? Math.ceil(valleyLf / 10) : 0;
+  const calculatedDripEdgePieces = Math.max(0, Math.ceil(dripEdgeLf / 10));
+  const calculatedOhaginVentQuantity = Math.max(0, Math.round(toNumber(inputs.shingleVentsCount, 0)));
+  const starterQuantity = Math.max(0, toNumber(inputs.shingleStarterQuantity, 0));
+  const rapidRidgeBoxes = Math.max(0, toNumber(inputs.shingleRapidRidgeBoxes, 0));
+  const valleyMetalQuantity = Math.max(0, toNumber(inputs.shingleValleyMetalQuantity, 0));
+  const dripEdgePiecesQuantity = Math.max(0, toNumber(inputs.shingleDripEdgePieces, 0));
+  const ohaginVentQuantity = Math.max(0, toNumber(inputs.shingleOHaginVentQuantity, 0));
+  const totalRidgeCapLinearFeet = ridgeHipLf > 0 ? ridgeHipLf : ridgeLf + hipLf;
+  const shingleMaterialFallbackNotes = [
+    "Manual measurement mode active. Quantities are calculated from entered roof measurements.",
+  ].filter(Boolean);
+  const perimeterLf = Math.max(0, toNumber(inputs.shinglePerimeterLinearFeet, 0));
+  const pipeJacksCount = Math.max(0, Math.round(toNumber(inputs.shinglePipeJacksCount, 0)));
+  const ventsCount = calculatedOhaginVentQuantity;
+  const skylightsCount = Math.max(0, Math.round(toNumber(inputs.shingleSkylightsCount, 0)));
+  const chimneyCount = Math.max(0, Math.round(toNumber(inputs.shingleChimneyCount, 0)));
+  const existingLayers = Math.max(0, Math.round(toNumber(inputs.shingleExistingLayers, 1)));
+  const shingleTearOffSections = normalizeShingleTearOffSections(inputs.shingleTearOffSections);
+  const shingleTearOffSectionTotals = shingleTearOffSections.map((section) => {
+    const sectionSquares = Math.max(0, toNumber(section.squares, 0));
+    const sectionLayers = Math.max(1, Math.round(toNumber(section.layers, 1)));
+    const sectionTearOffCostPerSquare = Math.max(0, toNumber(section.tearOffCostPerSquare, 0));
+    const sectionDisposalFee = Math.max(0, toNumber(section.disposalFee, 0));
+    const sectionDryRotAllowance = Math.max(0, toNumber(section.dryRotAllowance, 0));
+    const sectionTearOffTotal = (sectionSquares * sectionLayers * sectionTearOffCostPerSquare) + sectionDisposalFee + sectionDryRotAllowance;
+    return {
+      ...section,
+      squares: sectionSquares,
+      layers: sectionLayers,
+      tearOffCostPerSquare: sectionTearOffCostPerSquare,
+      disposalFee: sectionDisposalFee,
+      dryRotAllowance: sectionDryRotAllowance,
+      sectionTearOffTotal,
+    };
+  });
+  const shinglePrices = {
+    shinglesPerSquareCost: Math.max(0, toNumber(inputs.shingleShinglesPerSquareCost, 45)),
+    syntheticUnderlaymentRollCost: Math.max(0, toNumber(inputs.shingleSyntheticUnderlaymentRollCost, 90)),
+    syntheticUnderlaymentRollCoverageSq: Math.max(1, toNumber(inputs.shingleSyntheticUnderlaymentRollCoverageSq, 9.6)),
+    starterCost: Math.max(0, toNumber(inputs.shingleStarterCost, 50)),
+    ridgeCapCost: Math.max(0, toNumber(inputs.shingleRidgeCapCost, 80)),
+    dripEdgeCost: Math.max(0, toNumber(inputs.shingleDripEdgeCost, 8)),
+    coilNails125Cost: Math.max(0, toNumber(inputs.shingleCoilNails125Cost, 55)),
+    coilNails78Cost: Math.max(0, toNumber(inputs.shingleCoilNails78Cost, 52)),
+    markingPaintCost: Math.max(0, toNumber(inputs.shingleMarkingPaintCost, 7)),
+    tinShinglesCost: Math.max(0, toNumber(inputs.shingleTinShinglesCost, 36)),
+    roofJack2Cost: Math.max(0, toNumber(inputs.shingleRoofJack2Cost, 8)),
+    roofJack15Cost: Math.max(0, toNumber(inputs.shingleRoofJack15Cost, 8)),
+    roofJack3Cost: Math.max(0, toNumber(inputs.shingleRoofJack3Cost, 14)),
+    roofJack4Cost: Math.max(0, toNumber(inputs.shingleRoofJack4Cost, 15)),
+    americapOvalCost: Math.max(0, toNumber(inputs.shingleAmericapOvalCost, 25)),
+    americapRoundCost: Math.max(0, toNumber(inputs.shingleAmericapRoundCost, 25)),
+    ovalRoofJackCost: Math.max(0, toNumber(inputs.shingleOvalRoofJackCost, 25)),
+    valleyMetalCost: Math.max(0, toNumber(inputs.shingleValleyMetalCost, 60)),
+    ohaginVentCost: Math.max(0, toNumber(inputs.shingleOHaginVentCost, 65)),
+    dormerVentCost: Math.max(0, toNumber(inputs.shingleDormerVentCost, 65)),
+    caulkingSealantTubeCost: Math.max(0, toNumber(inputs.shingleCaulkingSealantTubeCost, 12)),
+    ventCost: Math.max(0, toNumber(inputs.shingleVentCost, 65)),
+    nailCostPerSquare: Math.max(0, toNumber(inputs.shingleNailsCostPerSquare, 55)),
+    caulkingSealantCost: Math.max(0, toNumber(inputs.shingleCaulkingSealantCost, 0)),
+    plywoodSheetCost: Math.max(0, toNumber(inputs.shinglePlywoodSheetCost, 30)),
+    sprayPaintCost: Math.max(0, toNumber(inputs.shingleSprayPaintCost, 7)),
+    roofConveyorDeliveryChargeQuantity: Math.max(0, toNumber(inputs.shingleRoofConveyorDeliveryChargeQuantity, 1)),
+    roofConveyorDeliveryCharge: Math.max(0, toNumber(inputs.shingleRoofConveyorDeliveryCharge, 75)),
+    fuelSurchargeQuantity: Math.max(0, toNumber(inputs.shingleFuelSurchargeQuantity, 1)),
+    fuelSurcharge: Math.max(0, toNumber(inputs.shingleFuelSurcharge, 75)),
+  };
+  const shinglePlywoodSheets = Math.max(0, toNumber(inputs.shinglePlywoodSheets, 0));
+  const coilNails125Quantity = Math.max(0, toNumber(inputs.shingleCoilNails125Quantity, Math.ceil(productionSquares / 10)));
+  const coilNails78Quantity = Math.max(0, toNumber(inputs.shingleCoilNails78Quantity, Math.ceil(productionSquares / 10)));
+  const markingPaintQuantity = Math.max(0, toNumber(inputs.shingleMarkingPaintQuantity, pipeJacksCount + ventsCount + skylightsCount + chimneyCount));
+  const tinShinglesQuantity = Math.max(0, toNumber(inputs.shingleTinShinglesQuantity, 0));
+  const roofJack2Quantity = Math.max(0, toNumber(inputs.shingleRoofJack2Quantity, 0));
+  const roofJack15Quantity = Math.max(0, toNumber(inputs.shingleRoofJack15Quantity, 0));
+  const roofJack3Quantity = Math.max(0, toNumber(inputs.shingleRoofJack3Quantity, 0));
+  const roofJack4Quantity = Math.max(0, toNumber(inputs.shingleRoofJack4Quantity, 0));
+  const americapOvalQuantity = Math.max(0, toNumber(inputs.shingleAmericapOvalQuantity, 0));
+  const americapRoundQuantity = Math.max(0, toNumber(inputs.shingleAmericapRoundQuantity, 0));
+  const ovalRoofJackQuantity = Math.max(0, toNumber(inputs.shingleOvalRoofJackQuantity, 0));
+  const dormerVentQuantity = Math.max(0, toNumber(inputs.shingleDormerVentQuantity, 0));
+  const caulkingSealantTubeQuantity = Math.max(0, toNumber(inputs.shingleCaulkingSealantTubeQuantity, 0));
+  const roofConveyorDeliveryChargeQuantity = Math.max(0, toNumber(inputs.shingleRoofConveyorDeliveryChargeQuantity, 1));
+  const fuelSurchargeQuantity = Math.max(0, toNumber(inputs.shingleFuelSurchargeQuantity, 1));
+  const shingleMaterialItems = [
+    {
+      key: "shingles",
+      label: "Timberline HDZ RS+ Bundle",
+      quantity: hdzBundlesQuantity,
+      unit: "bundle",
+      unitPrice: shinglePrices.shinglesPerSquareCost,
+    },
+    {
+      key: "underlayment",
+      label: "Synthetic Underlayment",
+      quantity: syntheticUnderlaymentRollsQuantity,
+      unit: "roll",
+      unitPrice: shinglePrices.syntheticUnderlaymentRollCost,
+    },
+    {
+      key: "starter",
+      label: "Pro-Start Starter",
+      quantity: starterQuantity,
+      unit: "bundle",
+      unitPrice: shinglePrices.starterCost,
+      helperText: "115 LF coverage per bundle",
+    },
+    {
+      key: "ridgeCap",
+      label: 'Rapid Ridge 8" Ridge Cap',
+      quantity: rapidRidgeBoxes,
+      unit: "box",
+      unitPrice: shinglePrices.ridgeCapCost,
+      helperText: "20 LF coverage per box",
+    },
+    {
+      key: "dripEdge",
+      label: '2"x2" Drip Edge 10 ft Piece',
+      quantity: dripEdgePiecesQuantity,
+      unit: "piece",
+      unitPrice: shinglePrices.dripEdgeCost,
+    },
+    {
+      key: "coilNails125",
+      label: '1-1/4" Coil Nails',
+      quantity: coilNails125Quantity,
+      unit: "box",
+      unitPrice: shinglePrices.coilNails125Cost,
+    },
+    {
+      key: "coilNails78",
+      label: '7/8" Coil Nails',
+      quantity: coilNails78Quantity,
+      unit: "box",
+      unitPrice: shinglePrices.coilNails78Cost,
+    },
+    {
+      key: "markingPaint",
+      label: "Marking Paint",
+      quantity: markingPaintQuantity,
+      unit: "can",
+      unitPrice: shinglePrices.markingPaintCost,
+    },
+    {
+      key: "tinShingles",
+      label: '6"x8" Tin Shingles',
+      quantity: tinShinglesQuantity,
+      unit: "bundle",
+      unitPrice: shinglePrices.tinShinglesCost,
+    },
+    {
+      key: "roofJack2",
+      label: '2" Roof Jack',
+      quantity: roofJack2Quantity,
+      unit: "each",
+      unitPrice: shinglePrices.roofJack2Cost,
+    },
+    {
+      key: "roofJack15",
+      label: '1-1/2" Roof Jack',
+      quantity: roofJack15Quantity,
+      unit: "each",
+      unitPrice: shinglePrices.roofJack15Cost,
+    },
+    {
+      key: "roofJack3",
+      label: '3" Roof Jack',
+      quantity: roofJack3Quantity,
+      unit: "each",
+      unitPrice: shinglePrices.roofJack3Cost,
+    },
+    {
+      key: "roofJack4",
+      label: '4" Roof Jack',
+      quantity: roofJack4Quantity,
+      unit: "each",
+      unitPrice: shinglePrices.roofJack4Cost,
+    },
+    {
+      key: "ovalRoofJack",
+      label: 'Oval 4" Roof Jack',
+      quantity: ovalRoofJackQuantity,
+      unit: "each",
+      unitPrice: shinglePrices.ovalRoofJackCost,
+    },
+    {
+      key: "americapRound",
+      label: 'Americap 4" Round',
+      quantity: americapRoundQuantity,
+      unit: "each",
+      unitPrice: shinglePrices.americapRoundCost,
+    },
+    {
+      key: "americapOval",
+      label: 'Americap 4" Oval',
+      quantity: americapOvalQuantity,
+      unit: "each",
+      unitPrice: shinglePrices.americapOvalCost,
+    },
+    {
+      key: "valleyMetal",
+      label: "26 Gauge Valley Metal",
+      quantity: valleyMetalQuantity,
+      unit: "10 ft piece",
+      unitPrice: shinglePrices.valleyMetalCost,
+    },
+    {
+      key: "ohaginVent",
+      label: "O'Hagin Vent",
+      quantity: ohaginVentQuantity,
+      unit: "each",
+      unitPrice: shinglePrices.ohaginVentCost,
+    },
+    {
+      key: "dormerVent",
+      label: "Dormer Vent",
+      quantity: dormerVentQuantity,
+      unit: "each",
+      unitPrice: shinglePrices.dormerVentCost,
+    },
+    {
+      key: "caulkingSealantTube",
+      label: "Caulking / Sealant Tube",
+      quantity: caulkingSealantTubeQuantity,
+      unit: "tube",
+      unitPrice: shinglePrices.caulkingSealantTubeCost,
+    },
+    {
+      key: "cdxPlywood",
+      label: "CDX Plywood",
+      quantity: shinglePlywoodSheets,
+      unit: "sheet",
+      unitPrice: shinglePrices.plywoodSheetCost,
+    },
+    {
+      key: "roofConveyorDeliveryCharge",
+      label: "Roof conveyor delivery charge",
+      quantity: roofConveyorDeliveryChargeQuantity,
+      unit: "fee",
+      unitPrice: shinglePrices.roofConveyorDeliveryCharge,
+    },
+    {
+      key: "fuelSurcharge",
+      label: "Fuel surcharge",
+      quantity: fuelSurchargeQuantity,
+      unit: "fee",
+      unitPrice: shinglePrices.fuelSurcharge,
+    },
+  ].map((item) => ({
+    ...item,
+    amount: item.quantity * item.unitPrice,
+  }));
+  const materialCost = shingleMaterialItems.reduce((sum, item) => sum + item.amount, 0);
+  const tearOffCostPerSquare = Math.max(0, toNumber(inputs.shingleTearOffCostPerSquare, 0));
+  const dumpTrailerFee = Math.max(0, toNumber(inputs.shingleDumpTrailerFee, 0));
+  const dryRotAllowance = Math.max(0, toNumber(inputs.shingleDryRotAllowance, 0));
+  const tearOffDisposalCost = shingleTearOffSectionTotals.reduce((sum, section) => sum + section.sectionTearOffTotal, 0);
+  const shingleLaborType = String(inputs.shingleLaborType || "inHouse");
+  const laborersPerDay = Math.max(0, Math.round(toNumber(inputs.shingleLaborersPerDay, 0)));
+  const totalDaysOnJob = Math.max(0, Math.round(toNumber(inputs.shingleTotalDaysOnJob, 0)));
+  const laborHourlyRate = Math.max(0, toNumber(inputs.shingleLaborHourlyRate, 0));
+  const hoursPerDay = Math.max(0, toNumber(inputs.shingleHoursPerDay, 0));
+  const inHouseLaborCost = laborersPerDay * totalDaysOnJob * hoursPerDay * laborHourlyRate;
+  const shingleSubcontractorLicensed = Boolean(inputs.shingleSubcontractorLicensed);
+  const shingleSubcontractorWorkersComp = Boolean(inputs.shingleSubcontractorWorkersComp);
+  const shingleSubcontractorSections = normalizeShingleLaborSections(inputs.shingleSubcontractorSections);
+  const shingleSubcontractorSectionTotals = shingleSubcontractorSections.map((section) => {
+    const installSquares = Math.max(0, toNumber(section.installSquares, 0));
+    const installCostPerSq = Math.max(0, toNumber(section.costPerInstallSq, 0));
+    const sectionInstallTotal = installSquares * installCostPerSq;
+    return {
+      ...section,
+      installSquares,
+      installCostPerSq,
+      sectionInstallTotal,
+    };
+  });
+  const subcontractorInstallSubtotal = shingleSubcontractorSectionTotals.reduce((sum, section) => sum + section.sectionInstallTotal, 0);
+  const workersCompRiskAddOn =
+    shingleLaborType === "subcontracted" && (!shingleSubcontractorLicensed || !shingleSubcontractorWorkersComp)
+      ? subcontractorInstallSubtotal * 0.2
+      : 0;
+  const totalSubcontractorLaborCost = subcontractorInstallSubtotal + workersCompRiskAddOn;
+  const laborCost = shingleLaborType === "subcontracted" ? totalSubcontractorLaborCost : inHouseLaborCost;
+  const additionalLabor = 0;
+  const jobDays = totalDaysOnJob;
+  const crewSize = laborersPerDay;
+  const cityPermitFee = Math.max(0, toNumber(inputs.shingleCityPermitFee, 0));
+  const travelCost = travelAndOvertime.totalTravelCost;
+  const directJobCost = materialCost + laborCost + tearOffDisposalCost + travelCost;
+  const overheadOperatingCost = directJobCost * (OVERHEAD_OPERATING_RATE / 100);
+  const totalCostBeforeProfit = directJobCost + overheadOperatingCost + cityPermitFee;
+  const totalJobCost = totalCostBeforeProfit;
+
+  const customTotalCharge = Math.max(0, toNumber(inputs.shingleCustomBidAmount, 0));
+  const customPricePerSq = totalRoofSquares > 0 ? customTotalCharge / totalRoofSquares : 0;
+  const customProfitDollars = customTotalCharge - totalJobCost;
+  const customProfitMarginPercent = totalJobCost > 0 ? (customProfitDollars / totalJobCost) * 100 : 0;
+  const useCustomBid = Boolean(customTotalCharge > 0 || inputs.shingleCustomBidSelected);
+  const bidOptions = calculateBidOptions(totalJobCost, totalRoofSquares, Math.max(30, Math.min(60, toNumber(inputs.selectedMarkupPercent, 30))));
+  const selectedBidAmount = useCustomBid ? customTotalCharge : bidOptions.selectedBidAmount;
+  const selectedPricePerSq = useCustomBid ? customPricePerSq : bidOptions.selectedPricePerSq;
+  const selectedProfitDollars = useCustomBid ? customProfitDollars : bidOptions.selectedProfitDollars;
+  const selectedMarkupPercent = useCustomBid ? (totalJobCost > 0 ? (customProfitDollars / totalJobCost) * 100 : 0) : bidOptions.selectedMarkupPercent;
+
+  return {
+    template: "shingle",
+    estimateType: "Shingle",
+    scope: {
+      totalSquares: totalRoofSquares,
+    },
+    jobName: String(inputs.shingleJobName || inputs.jobName || ""),
+    customerName: String(inputs.shingleCustomerName || inputs.customerName || ""),
+    jobAddress: String(inputs.shingleJobAddress || inputs.jobAddress || ""),
+    salesperson: String(inputs.shingleSalesperson || ""),
+    cityPermitFee,
+    totalRoofSquares,
+    totalSquares: totalRoofSquares,
+    wastePercent,
+    productionSquares,
+    ridgeLf,
+    hipLf,
+    valleyLf,
+    rakeLf,
+    eaveLf,
+    starterLf,
+    dripEdgeLf,
+    pipeJacksCount,
+    ventsCount,
+    skylightsCount,
+    chimneyCount,
+    shinglePrices,
+    materialItems: shingleMaterialItems,
+    materialCost,
+    shingleHdzBundlesNeeded: hdzBundlesQuantity,
+    shingleHdzBundlesCalculated: calculatedHdzBundlesNeeded,
+    shingleSyntheticUnderlaymentSuggestedRolls: syntheticUnderlaymentSuggestedRolls,
+    shingleSyntheticUnderlaymentCalculatedRolls: calculatedSyntheticUnderlaymentRolls,
+    shingleSyntheticUnderlaymentRolls: syntheticUnderlaymentRollsQuantity,
+    shingleStarterQuantity: starterQuantity,
+    shingleStarterSuggestedQuantity: starterLf,
+    shingleStarterCalculatedQuantity: calculatedStarterBundles,
+    shingleDripEdgePieces: dripEdgePiecesQuantity,
+    shingleDripEdgeSuggestedPieces: dripEdgePiecesQuantity,
+    shingleDripEdgeCalculatedPieces: calculatedDripEdgePieces,
+    shingleRapidRidgeBoxes: rapidRidgeBoxes,
+    shingleRapidRidgeBoxesCalculated: calculatedRapidRidgeBoxes,
+    shingleRapidRidgeLFUsed: totalRidgeCapLinearFeet,
+    shingleValleyMetalQuantity: valleyMetalQuantity,
+    shingleValleyMetalCalculatedQuantity: calculatedValleyPieces,
+    shingleMaterialFallbackNotes,
+    shingleTearOffSectionTotals,
+    shingleTearOffSections: shingleTearOffSectionTotals,
+    shingleTearOffSectionCount: shingleTearOffSectionTotals.length,
+    tearOffCostPerSquare,
+    dumpTrailerFee,
+    dryRotAllowance,
+    tearOffDisposalCost,
+    shingleLaborType,
+    shingleLaborersPerDay: laborersPerDay,
+    shingleTotalDaysOnJob: totalDaysOnJob,
+    shingleLaborHourlyRate: laborHourlyRate,
+    shingleHoursPerDay: hoursPerDay,
+    shingleSubcontractorLicensed,
+    shingleSubcontractorWorkersComp,
+    shingleSubcontractorSections: shingleSubcontractorSectionTotals,
+    shingleSubcontractorInstallSubtotal: subcontractorInstallSubtotal,
+    shingleWorkersCompRiskAddOn: workersCompRiskAddOn,
+    shingleTotalSubcontractorLaborCost: totalSubcontractorLaborCost,
+    existingLayers,
+    jobDays,
+    crewSize,
+    laborCost,
+    travelCost,
+    totalTravelCost: travelCost,
+    travelAndOvertime,
+    directJobCost,
+    overheadOperatingCost,
+    totalCostBeforeProfit,
+    totalCost: totalJobCost,
+    totalJobCost,
+    bidOptions,
+    selectedMarkupPercent,
+    selectedBidAmount,
+    selectedPricePerSq,
+    selectedProfitDollars,
+    customBidAmount: customTotalCharge,
+    customBidSelected: useCustomBid,
+    customTotalCharge,
+    customPricePerSq,
+    customProfitDollars,
+    customProfitMarginPercent,
+    totalMaterialCost: materialCost,
+    totalLaborCost: laborCost,
+  };
+}
+
+function calculateTileEstimate(inputs, travelAndOvertime = calculateTravelAndOvertime(inputs)) {
+  const tileProjectType = String(inputs.tileProjectType || "raiseReset");
+  const tileTotalRoofSquares = Math.max(0, toNumber(inputs.tileTotalRoofSquares, 0));
+  const tileWastePercent = Math.max(0, toNumber(inputs.tileWastePercent, 10));
+  const tileBrokenTileAllowancePercent = Math.max(0, toNumber(inputs.tileBrokenTileAllowancePercent, 3));
+  const tilePalletYieldSqPerPallet = Math.max(0, toNumber(inputs.tilePalletYieldSqPerPallet, 0));
+  const tileValleyLf = Math.max(0, toNumber(inputs.tileValleyLf, 0));
+  const tileRidgeLf = Math.max(0, toNumber(inputs.tileRidgeLf, 0));
+  const tileHipLf = Math.max(0, toNumber(inputs.tileHipLf, 0));
+  const tileDripEdgeLf = Math.max(0, toNumber(inputs.tileDripEdgeLf, 0));
+  const tileBattensLf = Math.max(0, toNumber(inputs.tileBattensLf, 0));
+  const tileOrderReplacementTile = tileProjectType !== "raiseReset" ? true : Boolean(inputs.tileOrderReplacementTile);
+  const adjustedTileSquares = tileOrderReplacementTile
+    ? tileTotalRoofSquares * (1 + tileWastePercent / 100) * (1 + tileBrokenTileAllowancePercent / 100)
+    : 0;
+  const adjustedRoofSquares = tileTotalRoofSquares * (1 + tileWastePercent / 100);
+  const tileUnderlaymentType = String(inputs.tileUnderlaymentType || "syntheticTitanium50");
+  const tileUnderlaymentCoverageSqPerRoll = tileUnderlaymentType === "felt30" ? 2 : 10;
+  const tileUnderlaymentDefaultCost = tileUnderlaymentType === "felt30" ? 30 : 180;
+  const tileUnderlaymentRollsCalculated = adjustedRoofSquares > 0 ? Math.ceil(adjustedRoofSquares / tileUnderlaymentCoverageSqPerRoll) : 0;
+  const tileUnderlaymentRolls =
+    inputs.tileUnderlaymentQuantityManual === "" || inputs.tileUnderlaymentQuantityManual == null
+      ? tileUnderlaymentRollsCalculated
+      : Math.max(0, toNumber(inputs.tileUnderlaymentQuantityManual, tileUnderlaymentRollsCalculated));
+  const tileUnderlayment30CoverageSqPerRoll = 2;
+  const tileUnderlayment30RollsCalculated = adjustedRoofSquares > 0 ? Math.ceil(adjustedRoofSquares / tileUnderlayment30CoverageSqPerRoll) : 0;
+  const tileUnderlayment30Rolls =
+    inputs.tileUnderlayment30QuantityManual === "" || inputs.tileUnderlayment30QuantityManual == null
+      ? tileUnderlayment30RollsCalculated
+      : Math.max(0, toNumber(inputs.tileUnderlayment30QuantityManual, tileUnderlayment30RollsCalculated));
+  const tileBattensQuantityCalculated = tileBattensLf > 0 ? Math.ceil(tileBattensLf / 48) : 0;
+  const tileBattensQuantity =
+    inputs.tileBattensQuantityManual === "" || inputs.tileBattensQuantityManual == null
+      ? tileBattensQuantityCalculated
+      : Math.max(0, toNumber(inputs.tileBattensQuantityManual, tileBattensQuantityCalculated));
+  const tileValleyMetalQuantityCalculated = tileValleyLf > 0 ? Math.ceil(tileValleyLf / 10) : 0;
+  const tileValleyMetalQuantity =
+    inputs.tileValleyMetalQuantityManual === "" || inputs.tileValleyMetalQuantityManual == null
+      ? tileValleyMetalQuantityCalculated
+      : Math.max(0, toNumber(inputs.tileValleyMetalQuantityManual, tileValleyMetalQuantityCalculated));
+  const tileDripEdgeQuantityCalculated = tileDripEdgeLf > 0 ? Math.ceil(tileDripEdgeLf / 10) : 0;
+  const tileDripEdgeQuantity =
+    inputs.tileDripEdgeQuantityManual === "" || inputs.tileDripEdgeQuantityManual == null
+      ? tileDripEdgeQuantityCalculated
+      : Math.max(0, toNumber(inputs.tileDripEdgeQuantityManual, tileDripEdgeQuantityCalculated));
+  const oneHalfPipePenetrations = Math.max(0, Math.round(toNumber(inputs.tileOneHalfPipePenetrations, 0)));
+  const twoInchPipePenetrations = Math.max(0, Math.round(toNumber(inputs.tileTwoInchPipePenetrations, 0)));
+  const threeInchPipePenetrations = Math.max(0, Math.round(toNumber(inputs.tileThreeInchPipePenetrations, 0)));
+  const fourInchPipePenetrations = Math.max(0, Math.round(toNumber(inputs.tileFourInchPipePenetrations, 0)));
+  const ovalPipePenetrations = Math.max(0, Math.round(toNumber(inputs.tileOvalPipePenetrations, 0)));
+  const americapQuantity = Math.max(0, Math.round(toNumber(inputs.tileAmericapQuantity, 0)));
+  const ovalCapQuantity = Math.max(0, Math.round(toNumber(inputs.tileOvalCapQuantity, 0)));
+  const oneHalfPipeJackQuantity = oneHalfPipePenetrations;
+  const twoInchPipeJackQuantity = twoInchPipePenetrations;
+  const threeInchPipeJackQuantity = threeInchPipePenetrations;
+  const fourInchPipeJackQuantity = fourInchPipePenetrations;
+  const ovalPipeJackQuantity = ovalPipePenetrations;
+  const tilePalletsNeeded = tileOrderReplacementTile && tilePalletYieldSqPerPallet > 0 ? Math.ceil(adjustedTileSquares / tilePalletYieldSqPerPallet) : 0;
+  const tileOrderingChecklistComplete = Boolean(
+    inputs.tileOrderingVerifiedPalletYield &&
+      inputs.tileOrderingVerifiedRoofLoadCost &&
+      inputs.tileOrderingVerifiedMaterialDeliveryCost &&
+      inputs.tileOrderingVerifiedColorProfileAvailability &&
+      inputs.tileOrderingVerifiedBrokenAllowance,
+  );
+  const totalMortarLinearFeet = tileRidgeLf + tileHipLf;
+  const mortarBagsCalculated = totalMortarLinearFeet > 0 ? Math.ceil(totalMortarLinearFeet / 22) : 0;
+  const mortarBags =
+    inputs.tileMortarMixQuantityManual === "" || inputs.tileMortarMixQuantityManual == null
+      ? mortarBagsCalculated
+      : Math.max(0, toNumber(inputs.tileMortarMixQuantityManual, mortarBagsCalculated));
+  const tileProfile = String(inputs.tileProfile || "flat");
+  const tileProfileFastenerNameMap = {
+    flat: "2-1/2\" Tile Nails",
+    lightweight: "2-1/2\" Tile Nails",
+    sTile: "3\" Tile Nails",
+    claySTile: "3\" Tile Nails",
+    custom: String(inputs.tileFastenersName || "Custom Fasteners"),
+  };
+  const tileProfileRecommendedFastenerSizeMap = {
+    flat: "2-1/2\"",
+    lightweight: "2-1/2\"",
+    sTile: "3\"",
+    claySTile: "3\"",
+    custom: String(inputs.tileFastenersSize || ""),
+  };
+  const tileFastenerName = tileProfileFastenerNameMap[tileProfile] || "2-1/2\" Tile Nails";
+  const tileFastenerSize = tileProfileRecommendedFastenerSizeMap[tileProfile] || "2-1/2\"";
+  const tilesPerSquare = 10;
+  const estimatedTileCount = adjustedTileSquares * tilesPerSquare;
+  const totalNailsNeededCalculated = estimatedTileCount * Math.max(0, toNumber(inputs.tileFastenersNailsPerTile, 1));
+  const fastenerNailsPerBox = Math.max(1, toNumber(inputs.tileFastenersNailsPerBox, 400));
+  const fastenerBoxesCalculated = totalNailsNeededCalculated > 0 ? Math.ceil(totalNailsNeededCalculated / fastenerNailsPerBox) : 0;
+  const flatTileNailsQuantityCalculated =
+    tileProfile === "flat" || tileProfile === "lightweight" ? fastenerBoxesCalculated : 0;
+  const sTileNailsQuantityCalculated = tileProfile === "sTile" || tileProfile === "claySTile" ? fastenerBoxesCalculated : 0;
+  const flatTileNailsQuantity =
+    inputs.tileFlatTileNailsQuantityManual === "" || inputs.tileFlatTileNailsQuantityManual == null
+      ? flatTileNailsQuantityCalculated
+      : Math.max(0, toNumber(inputs.tileFlatTileNailsQuantityManual, flatTileNailsQuantityCalculated));
+  const sTileNailsQuantity =
+    inputs.tileSTileNailsQuantityManual === "" || inputs.tileSTileNailsQuantityManual == null
+      ? sTileNailsQuantityCalculated
+      : Math.max(0, toNumber(inputs.tileSTileNailsQuantityManual, sTileNailsQuantityCalculated));
+  const tileFieldTileQuantityManual = inputs.tileFieldTileQuantityManual;
+  const fieldTileQuantity = tileOrderReplacementTile
+    ? tileFieldTileQuantityManual === "" || tileFieldTileQuantityManual == null
+      ? tilePalletsNeeded
+      : Math.max(0, toNumber(tileFieldTileQuantityManual, tilePalletsNeeded))
+    : 0;
+  const productionSquares = tileOrderReplacementTile ? adjustedTileSquares : tileTotalRoofSquares;
+  const roofSquareBaseForBidding = productionSquares || tileTotalRoofSquares;
+  const tileCustomMaterials = Array.isArray(inputs.tileCustomMaterials) ? inputs.tileCustomMaterials : [];
+  const tileCustomMaterialItems = tileCustomMaterials.map((mat, index) => {
+    const quantity = Math.max(0, toNumber(mat?.quantity, 0));
+    const unitPrice = Math.max(0, toNumber(mat?.unitPrice, 0));
+    return {
+      key: `tileCustomMaterial-${String(mat?.id || index)}`,
+      label: String(mat?.name || `Custom material ${index + 1}`),
+      quantity,
+      unit: String(mat?.unit || "piece"),
+      unitPrice,
+      notes: "Custom Tile material order",
+    };
+  });
+
+  const tileMaterialItems = [
+    {
+      key: "fieldTile",
+      label: "Field Tile",
+      quantity: fieldTileQuantity,
+      unit: "pallet",
+      unitPrice: Math.max(0, toNumber(inputs.tileFieldTileCost, 0)),
+      notes: tileOrderReplacementTile
+        ? `Adjusted squares: ${num(adjustedTileSquares, 2)} | Verify tile pallet yield before finalizing.`
+        : "Replacement tile not included for this project type.",
+    },
+    {
+      key: "tileUnderlayment",
+      label: tileUnderlaymentType === "felt30" ? "30# Felt" : "Synthetic Titanium-50 Felt",
+      quantity: tileUnderlaymentType === "felt30" ? 0 : tileUnderlaymentRolls,
+      unit: "roll",
+      unitPrice: Math.max(0, toNumber(inputs.tileUnderlaymentCost, tileUnderlaymentDefaultCost)),
+      notes: `Coverage: ${tileUnderlaymentCoverageSqPerRoll} SQ per roll.`,
+    },
+    {
+      key: "tileUnderlayment30",
+      label: '30# Underlayment (2 SQ Roll)',
+      quantity: tileUnderlaymentType === "felt30" ? tileUnderlayment30Rolls : 0,
+      unit: "roll",
+      unitPrice: Math.max(0, toNumber(inputs.tileUnderlayment30Cost, 30)),
+      notes: "Coverage: 2 SQ per roll.",
+    },
+    {
+      key: "battensLath",
+      label: "Batten Strips",
+      quantity: tileBattensQuantity,
+      unit: "bundle",
+      unitPrice: Math.max(0, toNumber(inputs.tileBattensCost, 6)),
+      notes: "Yield: 48 LF per bundle.",
+    },
+    {
+      key: "flatTileNails",
+      label: '8D 2-1/2" Common Nails',
+      quantity: flatTileNailsQuantity,
+      unit: "box",
+      unitPrice: Math.max(0, toNumber(inputs.tileFlatTileNailsCost, 85)),
+      notes: "Nail count: 1,311 nails per box | Profile: Flat Tile | Recommended fastener: 2-1/2\" | Total nails needed: calculated | Boxes needed: calculated",
+    },
+    {
+      key: "sTileNails",
+      label: '16D 3-1/2" Common Nails',
+      quantity: sTileNailsQuantity,
+      unit: "box",
+      unitPrice: Math.max(0, toNumber(inputs.tileSTileNailsCost, 85)),
+      notes: "Nail count: 1,311 nails per box | Profile: S Tile | Recommended fastener: 3\" | Total nails needed: calculated | Boxes needed: calculated",
+    },
+    {
+      key: "valleyMetal",
+      label: "26-Gauge Valley Metal",
+      quantity: tileValleyMetalQuantity,
+      unit: "10 ft piece",
+      unitPrice: Math.max(0, toNumber(inputs.tileValleyMetalCost, 70)),
+      notes: "Quantity = ceiling of valley linear feet divided by 10.",
+    },
+    {
+      key: "flashingMetal",
+      label: "Drip Edge Galvanized Flashing",
+      quantity: tileDripEdgeQuantity,
+      unit: "10 ft piece",
+      unitPrice: Math.max(0, toNumber(inputs.tileFlashingMetalCost, 11.5)),
+      notes: "Quantity = ceiling of drip edge / perimeter linear feet divided by 10.",
+    },
+    {
+      key: "ridgeHipMaterial",
+      label: "Ridge / Hip Material",
+      quantity: Math.max(0, toNumber(inputs.tileRidgeHipQuantity, 0)),
+      unit: "piece",
+      unitPrice: Math.max(0, toNumber(inputs.tileRidgeHipCost, 0)),
+    },
+    {
+      key: "mortarMix",
+      label: "Mortar Mix (94 lb Bag)",
+      quantity: mortarBags,
+      unit: "94 lb bag",
+      unitPrice: Math.max(0, toNumber(inputs.tileMortarMixCost, 12.5)),
+      notes: "Yield: 22 LF per 94 lb bag.",
+    },
+    {
+      key: "tileOneHalfBaseJack",
+      label: '1-1/2" Base Jack',
+      quantity: oneHalfPipeJackQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileOneHalfBaseJackCost, 8)),
+      notes: '1-1/2" pipe penetrations.',
+    },
+    {
+      key: "tileOneHalfRoofJack",
+      label: '1-1/2" Tile Roof Jack',
+      quantity: oneHalfPipeJackQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileOneHalfRoofJackCost, 8)),
+      notes: '1-1/2" pipe penetrations.',
+    },
+    {
+      key: "tileTwoInchBaseJack",
+      label: '2" Base Jack',
+      quantity: twoInchPipeJackQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileTwoInchBaseJackCost, 8)),
+      notes: '2" pipe penetrations.',
+    },
+    {
+      key: "tileTwoInchRoofJack",
+      label: '2" Tile Roof Jack',
+      quantity: twoInchPipeJackQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileTwoInchRoofJackCost, 8)),
+      notes: '2" pipe penetrations.',
+    },
+    {
+      key: "tileThreeInchBaseJack",
+      label: '3" Base Jack',
+      quantity: threeInchPipeJackQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileThreeInchBaseJackCost, 14)),
+      notes: '3" pipe penetrations.',
+    },
+    {
+      key: "tileThreeInchRoofJack",
+      label: '3" Tile Roof Jack',
+      quantity: threeInchPipeJackQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileThreeInchRoofJackCost, 14)),
+      notes: '3" pipe penetrations.',
+    },
+    {
+      key: "tileFourInchBaseJack",
+      label: '4" Base Jack',
+      quantity: fourInchPipeJackQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileFourInchBaseJackCost, 15)),
+      notes: '4" pipe penetrations.',
+    },
+    {
+      key: "tileFourInchRoofJack",
+      label: '4" Tile Roof Jack',
+      quantity: fourInchPipeJackQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileFourInchRoofJackCost, 15)),
+      notes: '4" pipe penetrations.',
+    },
+    {
+      key: "tileOvalBaseJack",
+      label: "Oval Base Jack",
+      quantity: ovalPipeJackQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileOvalBaseJackCost, 25)),
+      notes: "Oval pipe penetrations.",
+    },
+    {
+      key: "tileOvalRoofJack",
+      label: "Oval Tile Roof Jack",
+      quantity: ovalPipeJackQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileOvalRoofJackCost, 25)),
+      notes: "Oval pipe penetrations.",
+    },
+    {
+      key: "tileAmericap",
+      label: "Americap",
+      quantity: americapQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileAmericapCost, 25)),
+    },
+    {
+      key: "tileOvalCap",
+      label: "Oval Cap",
+      quantity: ovalCapQuantity,
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileOvalCapCost, 25)),
+    },
+    {
+      key: "ohaginVents",
+      label: "O'Hagin Vent",
+      quantity: Math.max(0, toNumber(inputs.tileOHaginVentsQuantity, 0)),
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileOHaginVentsCost, 55)),
+    },
+    {
+      key: "dormerVents",
+      label: "Dormer Vent",
+      quantity: Math.max(0, toNumber(inputs.tileDormerVentsQuantity, 0)),
+      unit: "each",
+      unitPrice: Math.max(0, toNumber(inputs.tileDormerVentsCost, 80)),
+    },
+    {
+      key: "cdxPlywood",
+      label: "CDX 15/32 Plywood",
+      quantity: Math.max(0, toNumber(inputs.tileCDXPlywoodQuantity, 0)),
+      unit: "sheet",
+      unitPrice: Math.max(0, toNumber(inputs.tileCDXPlywoodCost, 27)),
+      notes: "Yield: 32 SQFT per sheet.",
+    },
+    {
+      key: "materialDeliveryCharge",
+      label: "Material Delivery Charge",
+      quantity: Math.max(0, toNumber(inputs.tileMaterialDeliveryChargeQuantity, 1)),
+      unit: "job",
+      unitPrice: Math.max(0, toNumber(inputs.tileMaterialDeliveryCharge, 0)),
+      notes: "Cost to deliver tile and materials to the project site.",
+    },
+    {
+      key: "tileRoofLoadCost",
+      label: "Tile Roof Load Cost",
+      quantity: Math.max(0, toNumber(inputs.tileRoofLoadCostQuantity, 1)),
+      unit: "job",
+      unitPrice: Math.max(0, toNumber(inputs.tileRoofLoadCost, 0)),
+      notes: "Cost to roof-load tile pallets using forklift, crane, boom truck, conveyor, or supplier roof-loading service.",
+    },
+    {
+      key: "fuelSurcharge",
+      label: "Fuel Surcharge",
+      quantity: Math.max(0, toNumber(inputs.tileFuelSurchargeQuantity, 1)),
+      unit: "fee",
+      unitPrice: Math.max(0, toNumber(inputs.tileFuelSurcharge, 0)),
+    },
+    ...tileCustomMaterialItems,
+  ].map((item) => ({
+    ...item,
+    amount: item.quantity * item.unitPrice,
+  }));
+
+  const materialCost = tileMaterialItems.reduce((sum, item) => sum + item.amount, 0);
+  const materialDeliveryCharge = tileMaterialItems.find((item) => item.key === "materialDeliveryCharge")?.amount || 0;
+  const tileRoofLoadCost = tileMaterialItems.find((item) => item.key === "tileRoofLoadCost")?.amount || 0;
+
+  const tileTearOffSections = normalizeShingleTearOffSections(inputs.tileTearOffSections || [createBlankTileTearOffSection()]);
+  const tileTearOffSectionTotals = tileTearOffSections.map((section) => {
+    const squares = Math.max(0, toNumber(section.squares, 0));
+    const layers = Math.max(1, Math.round(toNumber(section.layers, 1)));
+    const tearOffCostPerSquare = Math.max(0, toNumber(section.tearOffCostPerSquare, 0));
+    const disposalFee = Math.max(0, toNumber(section.disposalFee, 0));
+    const dryRotAllowance = Math.max(0, toNumber(section.dryRotAllowance, 0));
+    const sectionTearOffTotal = squares * layers * tearOffCostPerSquare + disposalFee + dryRotAllowance;
+    return {
+      ...section,
+      squares,
+      layers,
+      tearOffCostPerSquare,
+      disposalFee,
+      dryRotAllowance,
+      sectionTearOffTotal,
+    };
+  });
+  const tearOffDisposalCost = tileTearOffSectionTotals.reduce((sum, section) => sum + section.sectionTearOffTotal, 0);
+
+  const tileLaborType = String(inputs.tileLaborType || "inHouse");
+  const laborersPerDay = Math.max(0, Math.round(toNumber(inputs.tileLaborersPerDay, 0)));
+  const totalDaysOnJob = Math.max(0, Math.round(toNumber(inputs.tileTotalDaysOnJob, 0)));
+  const laborHourlyRate = Math.max(0, toNumber(inputs.tileLaborHourlyRate, 0));
+  const hoursPerDay = Math.max(0, toNumber(inputs.tileHoursPerDay, 0));
+  const inHouseLaborCost = laborersPerDay * totalDaysOnJob * hoursPerDay * laborHourlyRate;
+
+  const tileSubcontractorLicensed = Boolean(inputs.tileSubcontractorLicensed);
+  const tileSubcontractorWorkersComp = Boolean(inputs.tileSubcontractorWorkersComp);
+  const tileSubcontractorSections = normalizeShingleLaborSections(inputs.tileSubcontractorSections || [createBlankTileLaborSection()]);
+  const tileSubcontractorSectionTotals = tileSubcontractorSections.map((section) => {
+    const installSquares = Math.max(0, toNumber(section.installSquares, 0));
+    const costPerInstallSq = Math.max(0, toNumber(section.costPerInstallSq, 0));
+    const sectionInstallTotal = installSquares * costPerInstallSq;
+    return {
+      ...section,
+      installSquares,
+      costPerInstallSq,
+      sectionInstallTotal,
+    };
+  });
+  const subcontractorInstallSubtotal = tileSubcontractorSectionTotals.reduce((sum, section) => sum + section.sectionInstallTotal, 0);
+  const workersCompRiskAddOn =
+    tileLaborType === "subcontracted" && (!tileSubcontractorLicensed || !tileSubcontractorWorkersComp)
+      ? subcontractorInstallSubtotal * 0.2
+      : 0;
+  const totalSubcontractorLaborCost = subcontractorInstallSubtotal + workersCompRiskAddOn;
+  const laborCost = tileLaborType === "subcontracted" ? totalSubcontractorLaborCost : inHouseLaborCost;
+
+  const cityPermitFee = Math.max(0, toNumber(inputs.cityPermitFee, 0));
+  const overheadPercent = Math.max(0, toNumber(inputs.overheadPercent, 17.5));
+  const travelCost = travelAndOvertime.totalTravelCost;
+  const directJobCost = materialCost + laborCost + tearOffDisposalCost + travelCost;
+  const overheadOperatingRate = overheadPercent / 100;
+  const overheadOperatingCost = directJobCost * overheadOperatingRate;
+  const totalCostBeforeProfit = directJobCost + overheadOperatingCost + cityPermitFee;
+  const totalJobCost = totalCostBeforeProfit;
+
+  const customTotalCharge = Math.max(0, toNumber(inputs.tileCustomBidAmount, 0));
+  const customPricePerSq = roofSquareBaseForBidding > 0 ? customTotalCharge / roofSquareBaseForBidding : 0;
+  const customProfitDollars = customTotalCharge - totalJobCost;
+  const customProfitMarginPercent = totalJobCost > 0 ? (customProfitDollars / totalJobCost) * 100 : 0;
+  const useCustomBid = Boolean(customTotalCharge > 0 || inputs.tileCustomBidSelected);
+  const bidOptions = calculateBidOptions(
+    totalJobCost,
+    roofSquareBaseForBidding,
+    Math.max(30, Math.min(60, toNumber(inputs.selectedMarkupPercent, 30))),
+  );
+  const selectedBidAmount = useCustomBid ? customTotalCharge : bidOptions.selectedBidAmount;
+  const selectedPricePerSq = useCustomBid ? customPricePerSq : bidOptions.selectedPricePerSq;
+  const selectedProfitDollars = useCustomBid ? customProfitDollars : bidOptions.selectedProfitDollars;
+  const selectedMarkupPercent = useCustomBid ? (totalJobCost > 0 ? (customProfitDollars / totalJobCost) * 100 : 0) : bidOptions.selectedMarkupPercent;
+
+  return {
+    template: "tile",
+    estimateType: "Tile",
+    jobName: String(inputs.jobName || ""),
+    customerName: String(inputs.customerName || ""),
+    jobAddress: String(inputs.jobAddress || ""),
+    salesperson: String(inputs.salesperson || ""),
+    cityPermitFee,
+    tileProjectType,
+    tileTotalRoofSquares,
+    totalSquares: tileTotalRoofSquares,
+    tileWastePercent,
+    tileBrokenTileAllowancePercent,
+    tilePalletYieldSqPerPallet,
+    tileOrderReplacementTile,
+    tileUnderlaymentType,
+    tileAdjustedRoofSquares: adjustedRoofSquares,
+    tileUnderlaymentCoverageSqPerRoll,
+    tileUnderlaymentRollsCalculated,
+    tileUnderlaymentQuantity: tileUnderlaymentRolls,
+    tileOrderingVerifiedPalletYield: Boolean(inputs.tileOrderingVerifiedPalletYield),
+    tileOrderingVerifiedRoofLoadCost: Boolean(inputs.tileOrderingVerifiedRoofLoadCost),
+    tileOrderingVerifiedMaterialDeliveryCost: Boolean(inputs.tileOrderingVerifiedMaterialDeliveryCost),
+    tileOrderingVerifiedColorProfileAvailability: Boolean(inputs.tileOrderingVerifiedColorProfileAvailability),
+    tileOrderingVerifiedBrokenAllowance: Boolean(inputs.tileOrderingVerifiedBrokenAllowance),
+    tileOrderingChecklistComplete,
+    tileAdjustedTileSquares: adjustedTileSquares,
+    tilePalletsNeeded,
+    materialDeliveryCharge,
+    tileRoofLoadCost,
+    productionSquares,
+    materialItems: tileMaterialItems,
+    materialCost,
+    tileTearOffSections: tileTearOffSectionTotals,
+    tileTearOffSectionTotals,
+    tearOffDisposalCost,
+    tileLaborType,
+    tileLaborersPerDay: laborersPerDay,
+    tileTotalDaysOnJob: totalDaysOnJob,
+    tileLaborHourlyRate: laborHourlyRate,
+    tileHoursPerDay: hoursPerDay,
+    tileSubcontractorLicensed,
+    tileSubcontractorWorkersComp,
+    tileSubcontractorSections: tileSubcontractorSectionTotals,
+    tileSubcontractorInstallSubtotal: subcontractorInstallSubtotal,
+    tileWorkersCompRiskAddOn: workersCompRiskAddOn,
+    tileTotalSubcontractorLaborCost: totalSubcontractorLaborCost,
+    overheadPercent,
+    overheadOperatingRate,
+    overheadOperatingCost,
+    directJobCost,
+    laborCost,
+    travelCost,
+    totalTravelCost: travelCost,
+    travelAndOvertime,
+    directJobCost,
+    overheadOperatingCost,
+    totalCostBeforeProfit,
+    totalCost: totalJobCost,
+    totalJobCost,
+    bidOptions,
+    selectedMarkupPercent,
+    selectedBidAmount,
+    selectedPricePerSq,
+    selectedProfitDollars,
+    customBidAmount: customTotalCharge,
+    customBidSelected: useCustomBid,
+    customTotalCharge,
+    customPricePerSq,
+    customProfitDollars,
+    customProfitMarginPercent,
+    totalMaterialCost: materialCost,
+    totalLaborCost: laborCost,
+  };
+}
+
+function TravelCalculator({
+  inputs = {},
+  calculation = calculateTravelAndOvertime(inputs),
+  isLoaded,
+  loadError,
+  isLookingUpDistance,
+  travelLookupMessage,
+  googleDebug,
+  onCompanyHqAddressChange,
+  onJobSiteAddressChange,
+  onOneWayMilesChange,
+  onAverageDrivingSpeedChange,
+  onDriverHourlyRateChange,
+  onWorkHoursPerDayChange,
+  onNumberOfJobDaysChange,
+  onNumberOfDriversChange,
+  onVehicleSelection,
+  onAddVehicleSelection,
+  onRemoveVehicleSelection,
+  onCalculateDistance,
+  onTestGoogleGeocoder,
+  onTestDirections,
+  showLodging = false,
+  onLodgingNeededChange,
+  onLodgingNameChange,
+  onNightlyLodgingCostChange,
+  onLodgingNightsChange,
+  showGoogleDebug = true,
+  oneWayMilesLabel = "One-way miles",
+  companyHqHint,
+  subtitle = "Use Google Maps when available, with manual fallback always editable.",
+}) {
+  const safeInputs = inputs || {};
+  const lodgingNeeded =
+    safeInputs.lodgingNeeded === "Yes" ||
+    safeInputs.lodgingNeeded === true ||
+    safeInputs.travelLodgingNeeded === "Yes" ||
+    safeInputs.travelLodgingNeeded === true ||
+    safeInputs.sprayFoamLodgingNeeded === "Yes" ||
+    safeInputs.sprayFoamLodgingNeeded === true ||
+    calculation.lodgingNeeded;
+  const selectedVehicles = normalizeTravelVehicles(safeInputs.travelVehicles || safeInputs.travelVehicle);
+
+  return (
+    <Section title="Travel & Overtime Cost" subtitle={subtitle}>
+      <div className="formGrid">
+        <Field label="Company HQ address" hint={companyHqHint}>
+          <input type="text" value={safeInputs.companyHqAddress || ""} onChange={(e) => onCompanyHqAddressChange?.(e.target.value)} />
+        </Field>
+        <Field label="Job site address">
+          <input type="text" value={safeInputs.jobSiteAddress || ""} onChange={(e) => onJobSiteAddressChange?.(e.target.value)} />
+        </Field>
+        {showLodging ? (
+          <>
+            <Field label="Lodging needed?">
+              <select value={lodgingNeeded ? "yes" : "no"} onChange={(e) => onLodgingNeededChange?.(e.target.value === "yes")}>
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+              </select>
+            </Field>
+            {lodgingNeeded ? (
+              <>
+                <Field label="Lodging type / name">
+                  <input type="text" value={safeInputs.sprayFoamLodgingName || ""} onChange={(e) => onLodgingNameChange?.(e.target.value)} />
+                </Field>
+                <Field label="Nightly lodging cost">
+                  <input type="number" min="0" step="0.01" value={safeInputs.sprayFoamNightlyLodgingCost || 0} onChange={(e) => onNightlyLodgingCostChange?.(e.target.value)} />
+                </Field>
+                <Field label="Number of nights">
+                  <input type="number" min="0" step="1" value={safeInputs.sprayFoamLodgingNights || 0} onChange={(e) => onLodgingNightsChange?.(e.target.value)} />
+                </Field>
+              </>
+            ) : null}
+          </>
+        ) : null}
+        <div className="field" style={{ alignSelf: "end" }}>
+          {!isLoaded && !loadError ? <em>Google Maps loading...</em> : null}
+          {loadError ? <em>Google Maps failed to load: {loadError.message}</em> : null}
+          <button type="button" className="secondaryButton" onClick={onCalculateDistance} disabled={!isLoaded || !!loadError || isLookingUpDistance}>
+            {isLookingUpDistance ? "Calculating..." : "Calculate Distance"}
+          </button>
+          <button type="button" className="secondaryButton" onClick={onTestGoogleGeocoder} disabled={!isLoaded || !!loadError || isLookingUpDistance}>
+            Test Google Geocoder
+          </button>
+          <button type="button" className="secondaryButton" onClick={onTestDirections} disabled={!isLoaded || !!loadError || isLookingUpDistance}>
+            Test Directions
+          </button>
+          {travelLookupMessage ? <em>{travelLookupMessage}</em> : null}
+        </div>
+        <Field label={oneWayMilesLabel}>
+          <input type="number" min="0" step="0.1" value={safeInputs.oneWayMiles || 0} onChange={(e) => onOneWayMilesChange?.(e.target.value)} />
+        </Field>
+        <Field label="Average driving speed">
+          <input type="number" min="0" step="1" value={safeInputs.averageDrivingSpeedMph || 0} onChange={(e) => onAverageDrivingSpeedChange?.(e.target.value)} />
+        </Field>
+        <Field label="Driver hourly rate">
+          <input type="number" min="0" step="0.01" value={safeInputs.travelDriverHourlyRate || 0} onChange={(e) => onDriverHourlyRateChange?.(e.target.value)} />
+          <em>Typical range $22-$32/hr</em>
+        </Field>
+        <Field label="Work hours per day">
+          <input type="number" min="0" step="0.1" value={safeInputs.workHoursPerDay || 0} onChange={(e) => onWorkHoursPerDayChange?.(e.target.value)} />
+        </Field>
+        <Field label="Number of job days">
+          <input type="number" min="0" step="1" value={safeInputs.numberOfJobDays || 0} onChange={(e) => onNumberOfJobDaysChange?.(e.target.value)} />
+        </Field>
+        <Field label="Number of drivers">
+          <input type="number" min="0" step="1" value={safeInputs.numberOfDrivers || 0} onChange={(e) => onNumberOfDriversChange?.(e.target.value)} />
+        </Field>
+        <div className="field" style={{ gridColumn: "1 / -1" }}>
+          <label>Trucks on jobsite</label>
+          <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+            {selectedVehicles.map((selectedVehicle, index) => (
+              <div key={`${selectedVehicle}-${index}`} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center" }}>
+                <select value={selectedVehicle} onChange={(e) => onVehicleSelection?.(index, e.target.value)}>
+                  {TRAVEL_VEHICLE_OPTIONS.map((option) => {
+                    const otherSelected = selectedVehicles.some((vehicle, vehicleIndex) => vehicle === option.value && vehicleIndex !== index);
+                    return (
+                      <option key={option.value} value={option.value} disabled={otherSelected}>
+                        {option.label} ({option.mpg} mpg)
+                      </option>
+                    );
+                  })}
+                </select>
+                {selectedVehicles.length > 1 ? (
+                  <button type="button" className="secondaryButton" onClick={() => onRemoveVehicleSelection?.(index)}>
+                    Remove
+                  </button>
+                ) : null}
+              </div>
+            ))}
+            <button type="button" className="secondaryButton" onClick={onAddVehicleSelection}>
+              Add another truck
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="detailList" style={{ marginTop: 14 }}>
+        <DetailRow label="HQ address" value={calculation.travelAndOvertime.companyHqAddress || "Not entered"} />
+        <DetailRow label="Job site address" value={calculation.travelAndOvertime.jobSiteAddress || "Not entered"} />
+        <DetailRow label="Source" value={calculation.travelAndOvertime.travelDistanceSource === "google" ? "Google Maps" : "Manual"} />
+        <DetailRow label="Trucks on jobsite" value={calculation.travelAndOvertime.travelVehicleLabel || "Not selected"} />
+        <DetailRow label="One-way miles" value={num(calculation.travelAndOvertime.oneWayMiles, 1)} />
+        <DetailRow label="Average speed" value={`${num(calculation.travelAndOvertime.averageDrivingSpeedMph, 1)} mph`} />
+        <DetailRow label="One-way drive time" value={formatHoursMinutes(calculation.travelAndOvertime.oneWayDriveTimeHours)} />
+        <DetailRow label="Round trip drive time" value={formatHoursMinutes(calculation.travelAndOvertime.roundTripDriveTime)} />
+        <DetailRow label="Driver hourly rate" value={money2(calculation.travelAndOvertime.travelDriverHourlyRate)} />
+        {calculation.travelAndOvertime.travelVehicleBreakdown?.length ? (
+          <DetailRow
+            label="Fuel by truck"
+            value={calculation.travelAndOvertime.travelVehicleBreakdown
+              .map((item) => `${item.label}: ${num(item.fuelGallonsNeeded, 2)} gal`)
+              .join(" | ")}
+          />
+        ) : null}
+        <DetailRow label="Fuel gallons needed" value={num(calculation.travelAndOvertime.fuelGallonsNeeded, 2)} />
+        <DetailRow label="Fuel cost per gallon" value={money2(calculation.travelAndOvertime.fuelCostPerGallon)} />
+        <DetailRow label="Fuel cost" value={money2(calculation.travelAndOvertime.fuelCost)} />
+        <DetailRow label="Overtime hours per day" value={`${num(calculation.travelAndOvertime.overtimeHoursPerDay, 2)} hrs`} />
+        <DetailRow label="Overtime pay per day" value={money(calculation.travelAndOvertime.overtimePayPerDay)} />
+        <DetailRow label="Total driver travel cost" value={money(calculation.travelAndOvertime.totalDriverTravelCost)} />
+        <DetailRow label="Total travel cost" value={money(calculation.travelAndOvertime.totalTravelCost)} />
+        {showLodging && lodgingNeeded ? (
+          <>
+            <DetailRow label="Lodging type / name" value={calculation.lodgingName || "N/A"} />
+            <DetailRow label="Nightly lodging cost" value={money2(calculation.nightlyLodgingCost)} />
+            <DetailRow label="Lodging nights" value={num(calculation.lodgingNights, 0)} />
+            <DetailRow label="Lodging total" value={money2(calculation.lodgingTotal)} />
+          </>
+        ) : null}
+      </div>
+
+      {showGoogleDebug ? (
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Google API key loaded?" value={googleDebug?.apiKeyFound ? "Yes" : "No"} />
+          <DetailRow label="Google Maps script loaded?" value={googleDebug?.mapsJsLoaded ? "Yes" : "No"} />
+          <DetailRow label="DirectionsService available?" value={googleDebug?.directionsServiceAvailable ? "Yes" : "No"} />
+          <DetailRow label="Last Google callback status" value={googleDebug?.lastGoogleStatus || "Unknown"} />
+          <DetailRow label="Last element status" value={googleDebug?.lastElementStatus || "Unknown"} />
+          <DetailRow label="Last Google error/status" value={googleDebug?.lastError || "None"} />
+        </div>
+  ) : null}
+    </Section>
+  );
+}
+
+function OverheadCalculator({
+  inputs = {},
+  calculation = {},
+  onOverheadPercentChange,
+  onScopeAddersChange,
+  onMiscCostChange,
+  title = "Overhead",
+  subtitle = "Apply an overhead percentage before markup is calculated.",
+}) {
+  const overheadPercent = Math.max(0, toNumber(inputs.overheadPercent, 17.5));
+
+  return (
+    <Section title={title} subtitle={subtitle}>
+      <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", marginTop: 0 }}>
+        <div className="summaryCard">
+          <span>Direct job cost</span>
+          <strong>{money(calculation.directJobCost || 0)}</strong>
+        </div>
+        <div className="summaryCard">
+          <span>Overhead markup</span>
+          <strong>{money(calculation.overheadCost || 0)}</strong>
+        </div>
+        <div className="summaryCard">
+          <span>Operating markup</span>
+          <strong>{money(calculation.operatingCost || 0)}</strong>
+        </div>
+        <div className="summaryCard">
+          <span>Total before profit</span>
+          <strong>{money(calculation.totalCostBeforeProfit || 0)}</strong>
+        </div>
+      </div>
+      <div className="formGrid">
+        <Field label="Overhead / operating rate">
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            value={inputs.overheadPercent ?? 17.5}
+            onChange={(e) => onOverheadPercentChange?.(e.target.value)}
+          />
+        </Field>
+        <Field label="Scope adders">
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={inputs.scopeAdders || 0}
+            onChange={(e) => onScopeAddersChange?.(e.target.value)}
+          />
+        </Field>
+        <Field label="Misc cost">
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={inputs.miscCost || 0}
+            onChange={(e) => onMiscCostChange?.(e.target.value)}
+          />
+        </Field>
+      </div>
+    </Section>
+  );
+}
+
 function App() {
   const [authUser, setAuthUser] = useState(() => {
     const stored = readJson(AUTH_KEY, null);
@@ -1951,6 +8381,10 @@ function App() {
   const [sessionMessageType, setSessionMessageType] = useState("");
   const [travelLookupMessage, setTravelLookupMessage] = useState("");
   const [isLookingUpDistance, setIsLookingUpDistance] = useState(false);
+  const [quickMeasureReport, setQuickMeasureReport] = useState(null);
+  const [quickMeasureStatus, setQuickMeasureStatus] = useState("");
+  const [quickMeasureIsProcessing, setQuickMeasureIsProcessing] = useState(false);
+  const quickMeasureFileInputRef = useRef(null);
   const [googleDebug, setGoogleDebug] = useState({
     apiKeyFound: Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY),
     mapsJsLoaded: false,
@@ -1960,38 +8394,272 @@ function App() {
     lastError: "Not run",
   });
 
-  const [inputs, setInputs] = useState(() => {
-    if (!authUser?.key) return DEFAULT_INPUTS;
-    const draft = readJson(DRAFT_KEY(authUser.key), null);
-    return normalizeDraftInputs(draft?.inputs);
-  });
+  const [inputs, setInputs] = useState(() => DEFAULT_INPUTS);
+  const [prices, setPrices] = useState(() => ({ ...DEFAULT_MATERIAL_PRICES }));
 
-  const [prices, setPrices] = useState(() => {
-    if (!authUser?.key) {
-      return { ...DEFAULT_MATERIAL_PRICES };
-    }
-
-    const draft = readJson(DRAFT_KEY(authUser.key), null);
-    return normalizeMaterialPrices(draft?.prices);
-  });
-
-  const [estimateName, setEstimateName] = useState(() => {
-    if (!authUser?.key) return "";
-    const draft = readJson(DRAFT_KEY(authUser.key), null);
-    return draft?.estimateName || "";
-  });
+  const [estimateName, setEstimateName] = useState(() => "");
 
   const [savedEstimates, setSavedEstimates] = useState([]);
+  const [dashboardSavedEstimatesOpen, setDashboardSavedEstimatesOpen] = useState(false);
+  const [dashboardSavedEstimateSearch, setDashboardSavedEstimateSearch] = useState("");
+  const [dashboardApprovedJobsCollapsed, setDashboardApprovedJobsCollapsed] = useState(false);
   const [completedJobs, setCompletedJobs] = useState([]);
+  const [completedJobMetrics, setCompletedJobMetrics] = useState([]);
+  const [selectedMetricsEstimate, setSelectedMetricsEstimate] = useState(null);
+  const [metricsFormData, setMetricsFormData] = useState(null);
+  const [selectedApprovedJob, setSelectedApprovedJob] = useState(null);
+  const [approvedJobData, setApprovedJobData] = useState(null);
+  const [approvedDailyProgressLogs, setApprovedDailyProgressLogs] = useState([]);
+  const [activeJobs, setActiveJobs] = useState(() => createSeedActiveJobs());
+  const [activeJobSelectedId, setActiveJobSelectedId] = useState("");
+  const [activeJobsSearch, setActiveJobsSearch] = useState("");
+  const [activeJobsFilters, setActiveJobsFilters] = useState(() => ({
+    status: "all",
+    contact: "",
+    supervisor: "",
+    riskLevel: "all",
+    startDate: "",
+    customer: "",
+    openIssues: "all",
+    sortBy: "startDate",
+    sortDirection: "asc",
+  }));
+  const [activeJobIssueModalOpen, setActiveJobIssueModalOpen] = useState(false);
+  const [activeJobIssueDraft, setActiveJobIssueDraft] = useState(() => createBlankActiveJobIssue());
+  const [activeJobIssueResponse, setActiveJobIssueResponse] = useState("");
+  const [approvedJobsSearch, setApprovedJobsSearch] = useState("");
+  const [approvedJobsFilters, setApprovedJobsFilters] = useState(() => ({
+    customer: "",
+    address: "",
+    status: "all",
+    contact: "",
+    startDate: "",
+  }));
+  const [selectedCfoCard, setSelectedCfoCard] = useState("");
+  const [cfoSupplierPayablesView, setCfoSupplierPayablesView] = useState("current");
+  const [cfoDashboardFilters, setCfoDashboardFilters] = useState(() => ({
+    search: "",
+    dateFrom: "",
+    dateTo: "",
+    customer: "",
+    supplier: "",
+    subcontractor: "",
+    job: "",
+    currentOverdue: "all",
+    agingBucket: "all",
+    status: "all",
+    sortBy: "lastUpdated",
+    sortDirection: "desc",
+  }));
   const [fieldNotes, setFieldNotes] = useState(() => normalizeFieldNotes(readJson(FIELD_NOTES_DRAFT_KEY(authUser?.key || "guest"), DEFAULT_FIELD_NOTES)));
   const [savedInspections, setSavedInspections] = useState(() => {
     if (!authUser?.key) return [];
     return readJson(INSPECTIONS_KEY(authUser.key), []);
   });
+  const [fieldOperationsTab, setFieldOperationsTab] = useState("dailyLog");
+  const [fieldDailyLogDraft, setFieldDailyLogDraft] = useState(() => createBlankFieldDailyLog(authUser?.displayName || ""));
+  const [fieldDailyLogs, setFieldDailyLogs] = useState([]);
+  const [fieldDailyLogSelectedId, setFieldDailyLogSelectedId] = useState("");
+  const [fieldDailyLogReviewSearch, setFieldDailyLogReviewSearch] = useState("");
+  const [fieldDailyLogFilters, setFieldDailyLogFilters] = useState(() => ({
+    dateStart: "",
+    dateEnd: "",
+    job: "",
+    foreman: "",
+    employee: "",
+    status: "all",
+    missingPhotos: false,
+    hasOvertime: false,
+    hasSafetyIncident: false,
+  }));
+  const [employeeDirectory, setEmployeeDirectory] = useState([]);
+  const [employeeManagementDraft, setEmployeeManagementDraft] = useState(() => createBlankEmployeeRecord());
+  const [employeeManagementSearch, setEmployeeManagementSearch] = useState("");
+  const [fieldOperationCompanyVehicles, setFieldOperationCompanyVehicles] = useState([]);
+  const [fieldOperationsDeviceId, setFieldOperationsDeviceId] = useState(() => readJson(FIELD_DAILY_LOG_DEVICE_KEY, "") || createFieldDailyLogId());
   const [activeTemplate, setActiveTemplate] = useState("dashboard");
   const [adminPricing, setAdminPricing] = useState(() => normalizeAdminPricing(readJson(ADMIN_PRICING_KEY, DEFAULT_ADMIN_PRICING)));
   const [inspectionTemplateChooserOpen, setInspectionTemplateChooserOpen] = useState(false);
+  const [proposals, setProposals] = useState([]);
+  const [proposalSelectedId, setProposalSelectedId] = useState("");
+  const [proposalSearch, setProposalSearch] = useState("");
+  const [proposalFilters, setProposalFilters] = useState(() => ({
+    status: "all",
+    customer: "",
+    address: "",
+    salesperson: "",
+    sortBy: "updatedAt",
+    sortDirection: "desc",
+  }));
+  const [proposalDraft, setProposalDraft] = useState(() => createBlankProposal());
+  const [proposalTemplate, setProposalTemplate] = useState(() => createBlankProposalTemplate());
+  const [proposalTemplateDraft, setProposalTemplateDraft] = useState(() => createBlankProposalTemplate());
+  const [cfoLiquidCashEntries, setCfoLiquidCashEntries] = useState([]);
+  const [cfoLiquidCashDraft, setCfoLiquidCashDraft] = useState(() => createBlankCfoLiquidCashEntry());
+  const [cfoLiquidCashEditingId, setCfoLiquidCashEditingId] = useState("");
+  const [cfoReceivableEntries, setCfoReceivableEntries] = useState([]);
+  const [cfoReceivableDraft, setCfoReceivableDraft] = useState(() => createBlankCfoReceivableEntry());
+  const [cfoReceivableEditingId, setCfoReceivableEditingId] = useState("");
+  const [cfoManualEntriesByCard, setCfoManualEntriesByCard] = useState(() => createBlankCfoManualEntriesByCard());
+  const [cfoManualDraftsByCard, setCfoManualDraftsByCard] = useState(() => createBlankCfoManualDraftsByCard());
+  const [cfoManualEditingByCard, setCfoManualEditingByCard] = useState(() => createBlankCfoManualEditingByCard());
+  const [crmTab, setCrmTab] = useState("newLead");
+  const [crmLeads, setCrmLeads] = useState([]);
+  const [crmLeadDraft, setCrmLeadDraft] = useState(() => createBlankCrmLead());
+  const [crmLeadEditingId, setCrmLeadEditingId] = useState("");
+  const [crmLeadSearch, setCrmLeadSearch] = useState("");
+  const [crmLeadStatusFilter, setCrmLeadStatusFilter] = useState("all");
+  const [crmLeadSourceFilter, setCrmLeadSourceFilter] = useState("all");
+  const [crmLeadAssigneeFilter, setCrmLeadAssigneeFilter] = useState("all");
+  const [crmLeadDateFrom, setCrmLeadDateFrom] = useState("");
+  const [crmLeadDateTo, setCrmLeadDateTo] = useState("");
+  const [crmLeadSortBy, setCrmLeadSortBy] = useState("createdAt");
+  const [crmLeadSortDirection, setCrmLeadSortDirection] = useState("desc");
+  const [crmPipelineView, setCrmPipelineView] = useState("table");
+  const [crmCustomers, setCrmCustomers] = useState([]);
+  const [crmCustomerDraft, setCrmCustomerDraft] = useState(() => createBlankCrmCustomer());
+  const [crmCustomerEditingId, setCrmCustomerEditingId] = useState("");
+  const [crmCustomerSearch, setCrmCustomerSearch] = useState("");
+  const [crmSelectedCustomerId, setCrmSelectedCustomerId] = useState("");
+  const [crmFollowups, setCrmFollowups] = useState([]);
+  const [crmFollowupDraft, setCrmFollowupDraft] = useState(() => createBlankCrmFollowup());
+  const [crmFollowupEditingId, setCrmFollowupEditingId] = useState("");
+  const [crmFollowupSearch, setCrmFollowupSearch] = useState("");
   const fieldNotesSyncInitializedRef = useRef(false);
+  const fieldOperationsSyncInitializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!authUser?.key) {
+      setActiveJobs(createSeedActiveJobs());
+      return;
+    }
+    setActiveJobs(readJson(ACTIVE_JOBS_KEY(authUser.key), createSeedActiveJobs()));
+  }, [authUser?.key]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(ACTIVE_JOBS_KEY(authUser.key), activeJobs);
+  }, [activeJobs, authUser?.key]);
+
+  useEffect(() => {
+    if (!authUser?.key) {
+      setCompletedJobs(createSeedApprovedJobs());
+      setProposals([]);
+      return;
+    }
+
+    let active = true;
+    const loadApprovedJobData = async () => {
+      const { data: completedData, error: completedError } = await fetchCompletedJobsFromSupabase(authUser.key);
+      if (!active) return;
+      if (!completedError && Array.isArray(completedData) && completedData.length) {
+        setCompletedJobs(completedData.map(mapCompletedJobRow).filter(Boolean));
+      } else {
+        const fallback = readJson(COMPLETED_JOBS_KEY(authUser.key), createSeedApprovedJobs());
+        setCompletedJobs(Array.isArray(fallback) && fallback.length ? fallback : createSeedApprovedJobs());
+        if (completedError) console.warn("Supabase completed jobs load failed:", completedError?.message || completedError);
+      }
+    };
+
+    loadApprovedJobData();
+    return () => {
+      active = false;
+    };
+  }, [authUser?.key]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(COMPLETED_JOBS_KEY(authUser.key), completedJobs);
+  }, [authUser?.key, completedJobs]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(PROPOSALS_KEY(authUser.key), proposals);
+  }, [authUser?.key, proposals]);
+
+  useEffect(() => {
+    if (!authUser?.key) {
+      setCfoLiquidCashEntries([]);
+      setCfoLiquidCashDraft(createBlankCfoLiquidCashEntry());
+      setCfoLiquidCashEditingId("");
+      setCfoReceivableEntries([]);
+      setCfoReceivableDraft(createBlankCfoReceivableEntry());
+      setCfoReceivableEditingId("");
+      setCfoManualEntriesByCard(createBlankCfoManualEntriesByCard());
+      setCfoManualDraftsByCard(createBlankCfoManualDraftsByCard());
+      setCfoManualEditingByCard(createBlankCfoManualEditingByCard());
+      return;
+    }
+    const savedLiquidCashEntries = readJson(CFO_LIQUID_CASH_KEY(authUser.key), []);
+    const savedReceivableEntries = readJson(CFO_RECEIVABLES_KEY(authUser.key), []);
+    const savedManualEntriesByCard = readJson(CFO_MANUAL_ENTRIES_KEY(authUser.key), {});
+    setCfoLiquidCashEntries(Array.isArray(savedLiquidCashEntries) ? savedLiquidCashEntries.map(normalizeCfoLiquidCashEntry) : []);
+    setCfoLiquidCashDraft(createBlankCfoLiquidCashEntry());
+    setCfoLiquidCashEditingId("");
+    setCfoReceivableEntries(Array.isArray(savedReceivableEntries) ? savedReceivableEntries.map(normalizeCfoReceivableEntry) : []);
+    setCfoReceivableDraft(createBlankCfoReceivableEntry());
+    setCfoReceivableEditingId("");
+    setCfoManualEntriesByCard(normalizeCfoManualEntriesByCard(savedManualEntriesByCard));
+    setCfoManualDraftsByCard(createBlankCfoManualDraftsByCard());
+    setCfoManualEditingByCard(createBlankCfoManualEditingByCard());
+  }, [authUser?.key]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(CFO_LIQUID_CASH_KEY(authUser.key), cfoLiquidCashEntries);
+  }, [authUser?.key, cfoLiquidCashEntries]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(CFO_RECEIVABLES_KEY(authUser.key), cfoReceivableEntries);
+  }, [authUser?.key, cfoReceivableEntries]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(CFO_MANUAL_ENTRIES_KEY(authUser.key), cfoManualEntriesByCard);
+  }, [authUser?.key, cfoManualEntriesByCard]);
+
+  useEffect(() => {
+    if (!authUser?.key) {
+      setCrmLeads([]);
+      setCrmLeadDraft(createBlankCrmLead());
+      setCrmLeadEditingId("");
+      setCrmCustomers([]);
+      setCrmCustomerDraft(createBlankCrmCustomer());
+      setCrmCustomerEditingId("");
+      setCrmSelectedCustomerId("");
+      setCrmFollowups([]);
+      setCrmFollowupDraft(createBlankCrmFollowup());
+      setCrmFollowupEditingId("");
+      return;
+    }
+
+    setCrmLeads(readJson(CRM_LEADS_KEY(authUser.key), []).map(normalizeCrmLead));
+    setCrmCustomers(readJson(CRM_CUSTOMERS_KEY(authUser.key), []).map(normalizeCrmCustomer));
+    setCrmFollowups(readJson(CRM_FOLLOWUPS_KEY(authUser.key), []).map(normalizeCrmFollowup));
+    setCrmLeadDraft(createBlankCrmLead());
+    setCrmLeadEditingId("");
+    setCrmCustomerDraft(createBlankCrmCustomer());
+    setCrmCustomerEditingId("");
+    setCrmSelectedCustomerId("");
+    setCrmFollowupDraft(createBlankCrmFollowup());
+    setCrmFollowupEditingId("");
+  }, [authUser?.key]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(CRM_LEADS_KEY(authUser.key), crmLeads);
+  }, [authUser?.key, crmLeads]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(CRM_CUSTOMERS_KEY(authUser.key), crmCustomers);
+  }, [authUser?.key, crmCustomers]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(CRM_FOLLOWUPS_KEY(authUser.key), crmFollowups);
+  }, [authUser?.key, crmFollowups]);
 
   const [nextEstimateNumber, setNextEstimateNumber] = useState(() => {
     if (!authUser?.key) return 1;
@@ -2005,15 +8673,310 @@ function App() {
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
   });
 
-  const calculation = useMemo(() => calculateTpoEstimate(inputs, prices), [inputs, prices]);
+  const tpoCalculation = useMemo(() => calculateTpoEstimate(inputs, prices), [inputs, prices]);
+  const sprayFoamCalculation = useMemo(() => calculateSprayFoamEstimate(inputs), [inputs]);
+  const shingleCalculation = useMemo(() => calculateShingleEstimate(inputs, calculateTravelAndOvertime(inputs)), [inputs]);
+  const tileCalculation = useMemo(() => calculateTileEstimate(inputs, calculateTravelAndOvertime(inputs)), [inputs]);
+  const calculation = activeTemplate === "sprayFoam"
+    ? sprayFoamCalculation
+    : activeTemplate === "shingle"
+      ? shingleCalculation
+      : activeTemplate === "tile"
+        ? tileCalculation
+      : tpoCalculation;
   const missingScopeChecklist = useMemo(
-    () => buildMissingScopeChecklist(inputs, prices, calculation),
-    [inputs, prices, calculation],
+    () => (activeTemplate === "sprayFoam" || activeTemplate === "shingle" || activeTemplate === "tile" ? [] : buildMissingScopeChecklist(inputs, prices, tpoCalculation)),
+    [activeTemplate, inputs, prices, tpoCalculation],
   );
   const isEstimateComplete = missingScopeChecklist.length === 0;
-  const estimateStatusLabel = isEstimateComplete ? "Ready for bid" : "Incomplete";
-  const currentEstimateName = estimateName.trim() || buildEstimateName(inputs);
+  const estimateStatusLabel = activeTemplate === "sprayFoam" || activeTemplate === "shingle" || activeTemplate === "tile" ? "Draft" : isEstimateComplete ? "Ready for bid" : "Incomplete";
+  const currentEstimateName = estimateName.trim() || buildEstimateNameForTemplate(activeTemplate, inputs);
   const activeSavedEstimates = savedEstimates;
+  const filteredDashboardSavedEstimates = useMemo(() => {
+    const query = dashboardSavedEstimateSearch.trim().toLowerCase();
+    if (!query) return activeSavedEstimates;
+    return activeSavedEstimates.filter((estimate) => {
+      const haystack = [
+        estimate.name,
+        estimate.estimateCode,
+        estimate.estimateType,
+        estimate.inputs?.jobName,
+        estimate.inputs?.customerName,
+        estimate.inputs?.jobAddress,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [activeSavedEstimates, dashboardSavedEstimateSearch]);
+  const fieldDailyLogSelectedLog = useMemo(
+    () => fieldDailyLogs.find((log) => log.id === fieldDailyLogSelectedId) || null,
+    [fieldDailyLogs, fieldDailyLogSelectedId],
+  );
+  const activeFieldOperationEmployees = useMemo(
+    () =>
+      employeeDirectory.filter((employee) =>
+        employee.isActive && String(employee.department || "").toLowerCase() === "field operations",
+      ),
+    [employeeDirectory],
+  );
+  const activeFieldOperationForemen = useMemo(
+    () =>
+      employeeDirectory.filter(
+        (employee) =>
+          employee.isActive &&
+          employee.isForeman &&
+          String(employee.department || "").toLowerCase() === "field operations",
+      ),
+    [employeeDirectory],
+  );
+  const activeEmployeeDrivers = useMemo(
+    () => employeeDirectory.filter((employee) => employee.isActive && employee.isDriver),
+    [employeeDirectory],
+  );
+  const filteredFieldDailyLogs = useMemo(() => {
+    const query = fieldDailyLogReviewSearch.trim().toLowerCase();
+    return fieldDailyLogs.filter((log) => {
+      const totals = calculateFieldDailyLogTotals(log);
+      const haystack = [
+        log.jobNumber,
+        log.jobName,
+        log.jobAddress,
+        log.foreman,
+        log.workCompleted,
+        log.materialsUsedText,
+        log.equipmentUsed,
+        log.delaysOrProblems,
+        log.additionalNotes,
+        ...(log.crewRows || []).flatMap((row) => [row.employeeName, row.employeeId, row.role]),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (query && !haystack.includes(query)) return false;
+      if (fieldDailyLogFilters.dateStart && String(log.workDate || "") < fieldDailyLogFilters.dateStart) return false;
+      if (fieldDailyLogFilters.dateEnd && String(log.workDate || "") > fieldDailyLogFilters.dateEnd) return false;
+      if (fieldDailyLogFilters.job) {
+        const jobQuery = fieldDailyLogFilters.job.trim().toLowerCase();
+        if (!`${log.jobNumber || ""} ${log.jobName || ""}`.toLowerCase().includes(jobQuery)) return false;
+      }
+      if (fieldDailyLogFilters.foreman) {
+        const foremanQuery = fieldDailyLogFilters.foreman.trim().toLowerCase();
+        if (!String(log.foreman || "").toLowerCase().includes(foremanQuery)) return false;
+      }
+      if (fieldDailyLogFilters.employee) {
+        const employeeQuery = fieldDailyLogFilters.employee.trim().toLowerCase();
+        const employeeMatch = (log.crewRows || []).some((row) =>
+          `${row.employeeName || ""} ${row.employeeId || ""} ${row.role || ""}`.toLowerCase().includes(employeeQuery),
+        );
+        if (!employeeMatch) return false;
+      }
+      if (fieldDailyLogFilters.status !== "all" && String(log.status || "").toLowerCase() !== fieldDailyLogFilters.status) return false;
+      if (fieldDailyLogFilters.missingPhotos && fieldDailyLogHasProgressOrCompletedPhoto(log)) return false;
+      if (fieldDailyLogFilters.hasOvertime && totals.totalOvertimeHours <= 0) return false;
+      if (fieldDailyLogFilters.hasSafetyIncident && !log.safetyIncidents) return false;
+      return true;
+    });
+  }, [fieldDailyLogFilters, fieldDailyLogReviewSearch, fieldDailyLogs]);
+  const activeJobsSummary = useMemo(() => {
+    const active = activeJobs.filter((job) => isActiveJobStatus(job.status));
+    return {
+      totalJobs: activeJobs.length,
+      activeCount: active.length,
+      criticalCount: activeJobs.filter((job) => String(job.riskLevel || "").toLowerCase() === "critical").length,
+      upcoming: [...active]
+        .sort((a, b) => String(a.startDate || "").localeCompare(String(b.startDate || "")))
+        .slice(0, 3),
+    };
+  }, [activeJobs]);
+  const filteredActiveJobs = useMemo(() => {
+    const query = activeJobsSearch.trim().toLowerCase();
+    const filters = activeJobsFilters || {};
+    const sortDirection = String(filters.sortDirection || "asc").toLowerCase() === "desc" ? -1 : 1;
+    const sortBy = String(filters.sortBy || "startDate");
+    return [...activeJobs]
+      .filter((job) => {
+        if (query && !getActiveJobSearchText(job).includes(query)) return false;
+        if (filters.status !== "all" && String(job.status || "") !== filters.status) return false;
+        if (filters.riskLevel !== "all" && String(job.riskLevel || "") !== filters.riskLevel) return false;
+        if (filters.contact) {
+          const contactQuery = filters.contact.trim().toLowerCase();
+          const contactHaystack = [
+            job.projectContact,
+            job.customer,
+            job.propertyOwner,
+            ...(job.team || []).map((member) => member.name),
+            ...(job.outsideContacts || []).map((member) => member.name),
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          if (!contactHaystack.includes(contactQuery)) return false;
+        }
+        if (filters.supervisor) {
+          const supervisorQuery = filters.supervisor.trim().toLowerCase();
+          if (!String(job.fieldSupervisor || "").toLowerCase().includes(supervisorQuery)) return false;
+        }
+        if (filters.startDate && String(job.startDate || "") < filters.startDate) return false;
+        if (filters.customer) {
+          const customerQuery = filters.customer.trim().toLowerCase();
+          if (!String(job.customer || job.propertyOwner || "").toLowerCase().includes(customerQuery)) return false;
+        }
+        if (filters.openIssues !== "all") {
+          const openIssues = getActiveJobOpenIssuesCount(job);
+          if (filters.openIssues === "yes" && openIssues <= 0) return false;
+          if (filters.openIssues === "no" && openIssues > 0) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        let comparison = 0;
+        if (sortBy === "riskLevel") {
+          comparison = String(a.riskLevel || "").localeCompare(String(b.riskLevel || ""));
+        } else if (sortBy === "status") {
+          comparison = String(a.status || "").localeCompare(String(b.status || ""));
+        } else if (sortBy === "customer") {
+          comparison = String(a.customer || "").localeCompare(String(b.customer || ""));
+        } else if (sortBy === "openIssues") {
+          comparison = getActiveJobOpenIssuesCount(a) - getActiveJobOpenIssuesCount(b);
+        } else {
+          comparison = String(a.startDate || "").localeCompare(String(b.startDate || ""));
+        }
+        return comparison * sortDirection;
+      });
+  }, [activeJobs, activeJobsFilters, activeJobsSearch]);
+  const selectedActiveJob = useMemo(() => activeJobs.find((job) => job.id === activeJobSelectedId) || null, [activeJobs, activeJobSelectedId]);
+  const approvedJobsDashboardSource = useMemo(() => (completedJobs.length ? completedJobs : createSeedApprovedJobs()), [completedJobs]);
+  const approvedJobsDashboardSummary = useMemo(() => {
+    const active = approvedJobsDashboardSource.filter((job) => !["completed", "closed"].includes(String(job.projectStatus || job.status || "").toLowerCase()));
+    const upcoming = [...approvedJobsDashboardSource]
+      .sort((a, b) => {
+        const aDate = String(a.anticipatedStartDate || "");
+        const bDate = String(b.anticipatedStartDate || "");
+        if (!aDate && !bDate) return 0;
+        if (!aDate) return 1;
+        if (!bDate) return -1;
+        return aDate.localeCompare(bDate);
+      })
+      .slice(0, 8);
+    return {
+      totalJobs: approvedJobsDashboardSource.length,
+      activeCount: active.length,
+      upcoming,
+    };
+  }, [approvedJobsDashboardSource]);
+  const filteredApprovedJobs = useMemo(() => {
+    const query = approvedJobsSearch.trim().toLowerCase();
+    const filters = approvedJobsFilters || {};
+    return [...approvedJobsDashboardSource]
+      .filter((job) => {
+        if (query) {
+          const searchText = [
+            job.jobNumber,
+            job.customerName,
+            job.projectName,
+            job.projectAddress,
+            job.projectStatus,
+            job.projectContact,
+            job.fieldSupervisor,
+            job.permitStatus,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          if (!searchText.includes(query)) return false;
+        }
+        if (filters.customer) {
+          const customerQuery = filters.customer.trim().toLowerCase();
+          if (!String(job.customerName || "").toLowerCase().includes(customerQuery)) return false;
+        }
+        if (filters.address) {
+          const addressQuery = filters.address.trim().toLowerCase();
+          if (!String(job.projectAddress || "").toLowerCase().includes(addressQuery)) return false;
+        }
+        if (filters.status !== "all" && String(job.projectStatus || "").toLowerCase() !== String(filters.status).toLowerCase()) return false;
+        if (filters.contact) {
+          const contactQuery = filters.contact.trim().toLowerCase();
+          const contactText = [job.projectContact, job.fieldSupervisor, job.salesperson]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          if (!contactText.includes(contactQuery)) return false;
+        }
+        if (filters.startDate) {
+          const date = String(job.anticipatedStartDate || "");
+          if (!date) return false;
+          if (date < filters.startDate) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const aDate = String(a.anticipatedStartDate || "");
+        const bDate = String(b.anticipatedStartDate || "");
+        if (!aDate && !bDate) return 0;
+        if (!aDate) return 1;
+        if (!bDate) return -1;
+        return aDate.localeCompare(bDate);
+      });
+  }, [approvedJobsDashboardSource, approvedJobsFilters, approvedJobsSearch]);
+  const selectedProposal = useMemo(
+    () => proposals.find((proposal) => proposal.id === proposalSelectedId) || null,
+    [proposalSelectedId, proposals],
+  );
+  const filteredProposals = useMemo(() => {
+    const query = proposalSearch.trim().toLowerCase();
+    const filters = proposalFilters || {};
+    return [...proposals]
+      .filter((proposal) => {
+        if (query) {
+          const searchText = [
+            proposal.proposalNumber,
+            proposal.proposalTitle,
+            proposal.customerName,
+            proposal.projectName,
+            proposal.projectAddress,
+            proposal.salesperson,
+            proposal.status,
+            proposal.estimateNumber,
+            proposal.estimateCode,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          if (!searchText.includes(query)) return false;
+        }
+        if (filters.status !== "all" && String(proposal.status || "") !== filters.status) return false;
+        if (filters.customer) {
+          const customerQuery = filters.customer.trim().toLowerCase();
+          if (!String(proposal.customerName || "").toLowerCase().includes(customerQuery)) return false;
+        }
+        if (filters.address) {
+          const addressQuery = filters.address.trim().toLowerCase();
+          if (!String(proposal.projectAddress || "").toLowerCase().includes(addressQuery)) return false;
+        }
+        if (filters.salesperson) {
+          const salespersonQuery = filters.salesperson.trim().toLowerCase();
+          if (!String(proposal.salesperson || "").toLowerCase().includes(salespersonQuery)) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const sortDirection = String(filters.sortDirection || "desc").toLowerCase() === "asc" ? 1 : -1;
+        const sortBy = String(filters.sortBy || "updatedAt");
+        let comparison = 0;
+        if (sortBy === "proposalNumber") {
+          comparison = Number(a.proposalNumber || 0) - Number(b.proposalNumber || 0);
+        } else if (sortBy === "customer") {
+          comparison = String(a.customerName || "").localeCompare(String(b.customerName || ""));
+        } else if (sortBy === "status") {
+          comparison = String(a.status || "").localeCompare(String(b.status || ""));
+        } else {
+          comparison = String(a.updatedAt || a.createdAt || "").localeCompare(String(b.updatedAt || b.createdAt || ""));
+        }
+        return comparison * sortDirection;
+      });
+  }, [proposalFilters, proposalSearch, proposals]);
 
   useEffect(() => {
     if (!authUser?.key) return;
@@ -2046,6 +9009,118 @@ function App() {
 
   useEffect(() => {
     if (!authUser?.key) return;
+    writeJson(FIELD_DAILY_LOG_DEVICE_KEY, fieldOperationsDeviceId);
+  }, [authUser, fieldOperationsDeviceId]);
+
+  useEffect(() => {
+    if (!authUser?.key) {
+      setEmployeeDirectory([]);
+      setFieldOperationCompanyVehicles([]);
+      return;
+    }
+
+    const employeesKey = FIELD_OPERATION_EMPLOYEES_KEY(authUser.key);
+    const vehiclesKey = FIELD_OPERATION_COMPANY_VEHICLES_KEY(authUser.key);
+    const localEmployees = readJson(employeesKey, []);
+    const localVehicles = readJson(vehiclesKey, []);
+    const fallbackVehicles = TRAVEL_VEHICLE_OPTIONS.map((vehicle, index) => ({
+      id: vehicle.value || `vehicle-${index}`,
+      vehicleName: vehicle.label,
+      unitNumber: "",
+      licensePlate: "",
+      mpg: vehicle.mpg || 0,
+      active: true,
+      vehicleType: vehicle.value,
+    }));
+
+    setEmployeeDirectory(Array.isArray(localEmployees) ? localEmployees.map(normalizeEmployeeRecord) : []);
+    setFieldOperationCompanyVehicles(
+      Array.isArray(localVehicles) && localVehicles.length
+        ? localVehicles.map(mapCompanyVehicleRow).filter((row) => row.active)
+        : fallbackVehicles,
+    );
+
+    let active = true;
+    (async () => {
+      const [employeeResult, vehicleResult] = await Promise.all([
+        fetchFieldOperationEmployeesFromSupabase(authUser.key),
+        fetchCompanyVehiclesFromSupabase(authUser.key),
+      ]);
+      if (!active) return;
+      if (!employeeResult.error && Array.isArray(employeeResult.data) && employeeResult.data.length) {
+        setEmployeeDirectory(employeeResult.data.map(normalizeEmployeeRecord));
+      } else if (employeeResult.error) {
+        console.warn("Field operations employee load failed:", employeeResult.error.message || employeeResult.error);
+      }
+      if (!vehicleResult.error && Array.isArray(vehicleResult.data) && vehicleResult.data.length) {
+        setFieldOperationCompanyVehicles(vehicleResult.data);
+      } else if (vehicleResult.error) {
+        console.warn("Field operations vehicle load failed:", vehicleResult.error.message || vehicleResult.error);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [authUser?.key, users]);
+
+  useEffect(() => {
+    if (!authUser?.key) {
+      setFieldDailyLogDraft(createBlankFieldDailyLog(""));
+      setFieldDailyLogs([]);
+      setFieldDailyLogSelectedId("");
+      return;
+    }
+
+    const draftKey = FIELD_DAILY_LOG_DRAFT_KEY(authUser.key);
+    const logsKey = FIELD_DAILY_LOGS_KEY(authUser.key);
+    const draft = normalizeFieldDailyLogDraft(readJson(draftKey, createBlankFieldDailyLog(authUser.displayName || "")), authUser.displayName || "");
+    const localLogs = readJson(logsKey, []);
+
+    setFieldDailyLogDraft(draft);
+    setFieldDailyLogs(Array.isArray(localLogs) ? localLogs.map((log) => normalizeFieldDailyLogDraft(log, authUser.displayName || "")) : []);
+    setFieldDailyLogSelectedId((current) => current || (Array.isArray(localLogs) && localLogs[0]?.id ? localLogs[0].id : ""));
+    setFieldOperationsTab("dailyLog");
+
+    let active = true;
+    (async () => {
+      const { data, error } = await fetchFieldDailyLogsFromSupabase(authUser.key);
+      if (!active) return;
+      if (!error && Array.isArray(data)) {
+        setFieldDailyLogs(data);
+        setFieldDailyLogSelectedId((current) => current || data[0]?.id || "");
+      } else if (error) {
+        console.warn("Field operations load failed:", error.message || error);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [authUser?.key, authUser?.displayName]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(FIELD_DAILY_LOG_DRAFT_KEY(authUser.key), fieldDailyLogDraft);
+  }, [authUser, fieldDailyLogDraft]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(FIELD_DAILY_LOGS_KEY(authUser.key), fieldDailyLogs);
+  }, [authUser, fieldDailyLogs]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(FIELD_OPERATION_EMPLOYEES_KEY(authUser.key), employeeDirectory);
+  }, [authUser, employeeDirectory]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(FIELD_OPERATION_COMPANY_VEHICLES_KEY(authUser.key), fieldOperationCompanyVehicles);
+  }, [authUser, fieldOperationCompanyVehicles]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
     let active = true;
 
     const loadRemoteEstimateData = async () => {
@@ -2062,13 +9137,13 @@ function App() {
         console.warn("Supabase estimates load failed:", savedError?.message || savedError);
       }
 
-      const { data: completedData, error: completedError } = await fetchCompletedJobsFromSupabase(authUser.key);
+      const { data: metricsData, error: metricsError } = await fetchCompletedJobMetricsFromSupabase(authUser.key);
       if (!active) return;
-      if (!completedError && Array.isArray(completedData)) {
-        setCompletedJobs(completedData.map(mapCompletedJobRow).filter(Boolean));
+      if (!metricsError && Array.isArray(metricsData)) {
+        setCompletedJobMetrics(metricsData);
       } else {
-        setCompletedJobs([]);
-        if (completedError) console.warn("Supabase completed jobs load failed:", completedError?.message || completedError);
+        setCompletedJobMetrics([]);
+        if (metricsError) console.warn("Supabase metrics load failed:", metricsError?.message || metricsError);
       }
     };
 
@@ -2086,12 +9161,43 @@ function App() {
     if (!authUser?.key) {
       setFieldNotes(DEFAULT_FIELD_NOTES);
       setSavedInspections([]);
+      setProposals([]);
+      setProposalTemplate(createBlankProposalTemplate());
+      setProposalTemplateDraft(createBlankProposalTemplate());
       return;
     }
 
     setFieldNotes(normalizeFieldNotes(readJson(FIELD_NOTES_DRAFT_KEY(authUser.key), DEFAULT_FIELD_NOTES)));
     setSavedInspections(readJson(INSPECTIONS_KEY(authUser.key), []));
+    setProposals(readJson(PROPOSALS_KEY(authUser.key), []).map(normalizeProposalRecord));
+    const savedTemplate = normalizeProposalTemplate(readJson(PROPOSAL_TEMPLATE_KEY(authUser.key), DEFAULT_PROPOSAL_TEMPLATE));
+    setProposalTemplate(savedTemplate);
+    setProposalTemplateDraft(savedTemplate);
   }, [authUser?.key]);
+
+  useEffect(() => {
+    if (!authUser?.key) return;
+    writeJson(PROPOSAL_TEMPLATE_KEY(authUser.key), proposalTemplate);
+  }, [authUser?.key, proposalTemplate]);
+
+  useEffect(() => {
+    if (!authUser?.key || !proposals.length) return;
+    setProposals((current) => {
+      let hasChanges = false;
+      const nextProposals = current.map((proposal) => {
+        if (proposalIsFinalized(proposal)) return proposal;
+        const sourceEstimate = findEstimateForProposal(proposal, savedEstimates);
+        if (!sourceEstimate) return proposal;
+        const syncedProposal = syncProposalWithEstimate(proposal, sourceEstimate, proposalTemplate);
+        if (JSON.stringify(proposalComparableSnapshot(proposal)) === JSON.stringify(proposalComparableSnapshot(syncedProposal))) {
+          return proposal;
+        }
+        hasChanges = true;
+        return syncedProposal;
+      });
+      return hasChanges ? nextProposals : current;
+    });
+  }, [authUser?.key, proposals.length, savedEstimates, proposalTemplate]);
 
   useEffect(() => {
     if (!fieldNotesSyncInitializedRef.current) {
@@ -2110,6 +9216,20 @@ function App() {
       };
     });
   }, [fieldNotes.jobAddress]);
+
+  useEffect(() => {
+    const defaultHq = "18551 Orange Street, Bloomington, CA 92316";
+    setInputs((current) => {
+      const currentHq = String(current.companyHqAddress || "").trim();
+      if (!currentHq || currentHq === "Fontana, CA" || currentHq === "CRT Roofing office in Fontana, CA") {
+        return {
+          ...current,
+          companyHqAddress: defaultHq,
+        };
+      }
+      return current;
+    });
+  }, []);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -2144,6 +9264,12 @@ function App() {
     setInputs((current) => ({
       ...current,
       ...(key === "fieldSquares" ? { totalSquares: value } : null),
+      ...(key === "jobAddress"
+        ? {
+            jobSiteAddress: String(value || ""),
+            travelDistanceSource: "manual",
+          }
+        : null),
       [key]: value,
     }));
   };
@@ -2153,8 +9279,812 @@ function App() {
       ...current,
       [key]: value,
       travelDistanceSource: "manual",
+      ...(key === "numberOfJobDays" ? { sprayFoamEstimatedCompletionDays: value } : {}),
+      ...(key === "numberOfJobDays" ? { sprayFoamTotalLaborers: current.sprayFoamTotalLaborers } : {}),
     }));
     setTravelLookupMessage("");
+  };
+
+  const setTravelVehicleSelection = (index, vehicleKey) => {
+    setInputs((current) => {
+      const currentVehicles = normalizeTravelVehicles(current.travelVehicles || current.travelVehicle);
+      const sanitizedKey = TRAVEL_VEHICLE_OPTIONS.some((option) => option.value === vehicleKey)
+        ? vehicleKey
+        : DEFAULT_TRAVEL_VEHICLE_KEY;
+      const nextVehicles = currentVehicles.map((value, valueIndex) => (valueIndex === index ? sanitizedKey : value));
+      const uniqueVehicles = nextVehicles.filter((value, valueIndex) => nextVehicles.indexOf(value) === valueIndex);
+      const finalVehicles = uniqueVehicles.length > 0 ? uniqueVehicles : [DEFAULT_TRAVEL_VEHICLE_KEY];
+      return {
+        ...current,
+        travelVehicles: finalVehicles,
+        travelVehicle: finalVehicles[0],
+        numberOfDrivers: finalVehicles.length > 1 ? finalVehicles.length : 1,
+      };
+    });
+  };
+
+  const addTravelVehicleSelection = () => {
+    setInputs((current) => {
+      const currentVehicles = normalizeTravelVehicles(current.travelVehicles || current.travelVehicle);
+      const nextVehicles = [...currentVehicles, DEFAULT_TRAVEL_VEHICLE_KEY];
+      return {
+        ...current,
+        travelVehicles: nextVehicles,
+        travelVehicle: nextVehicles[0],
+        numberOfDrivers: nextVehicles.length > 1 ? nextVehicles.length : 1,
+      };
+    });
+  };
+
+  const removeTravelVehicleSelection = (index) => {
+    setInputs((current) => {
+      const currentVehicles = normalizeTravelVehicles(current.travelVehicles || current.travelVehicle);
+      const nextVehicles = currentVehicles.filter((_, valueIndex) => valueIndex !== index);
+      const finalVehicles = nextVehicles.length > 0 ? nextVehicles : [DEFAULT_TRAVEL_VEHICLE_KEY];
+      return {
+        ...current,
+        travelVehicles: finalVehicles,
+        travelVehicle: finalVehicles[0],
+        numberOfDrivers: finalVehicles.length > 1 ? finalVehicles.length : 1,
+      };
+    });
+  };
+
+  const setSprayFoamLayerConfig = (layerKey, key, value) => {
+    setInputs((current) => ({
+      ...current,
+      sprayFoamLayerConfig: {
+        ...normalizeSprayFoamLayerConfig(current.sprayFoamLayerConfig),
+        [layerKey]: {
+          ...normalizeSprayFoamLayerConfig(current.sprayFoamLayerConfig)[layerKey],
+          [key]: value,
+        },
+      },
+    }));
+  };
+
+  const setSprayFoamSubcontractorItem = (index, key, value) => {
+    setInputs((current) => {
+      const rows = normalizeSprayFoamSubcontractorItems(current.sprayFoamSubcontractorItems);
+      const nextRows = rows.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              [key]:
+                key === "licensed"
+                  ? Boolean(value)
+                  : key === "quantity" || key === "unitPrice"
+                  ? value
+                  : value,
+            }
+          : row,
+      );
+      return {
+        ...current,
+        sprayFoamSubcontractorItems: nextRows,
+      };
+    });
+  };
+
+  const setSprayFoamEstimatedDays = (value) => {
+    setInputs((current) => ({
+      ...current,
+      sprayFoamEstimatedCompletionDays: value,
+      numberOfJobDays: value,
+    }));
+  };
+
+  const setSprayFoamDetailMaterial = (itemKey, key, value) => {
+    setInputs((current) => ({
+      ...current,
+      sprayFoamDetailMaterials: {
+        ...normalizeSprayFoamDetailMaterials(current.sprayFoamDetailMaterials),
+        [itemKey]: {
+          ...normalizeSprayFoamDetailMaterials(current.sprayFoamDetailMaterials)[itemKey],
+          [key]: value,
+        },
+      },
+    }));
+  };
+
+  const addSprayFoamAdditionalDetailMaterial = () => {
+    setInputs((current) => ({
+      ...current,
+      sprayFoamAdditionalDetailMaterials: [
+        ...(normalizeSprayFoamAdditionalDetailMaterials(current.sprayFoamAdditionalDetailMaterials) || []),
+        createBlankSprayFoamAdditionalDetailMaterial(),
+      ],
+    }));
+  };
+
+  const setSprayFoamAdditionalDetailMaterial = (index, key, value) => {
+    setInputs((current) => {
+      const rows = normalizeSprayFoamAdditionalDetailMaterials(current.sprayFoamAdditionalDetailMaterials);
+      const nextRows = rows.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              [key]:
+                key === "quantity" || key === "unitCost"
+                  ? value
+                  : String(value || ""),
+            }
+          : row,
+      );
+      return {
+        ...current,
+        sprayFoamAdditionalDetailMaterials: nextRows,
+      };
+    });
+  };
+
+  const setSprayFoamEquipmentRental = (index, key, value) => {
+    setInputs((current) => {
+      const rows = normalizeSprayFoamEquipmentRentals(current.sprayFoamEquipmentRentals);
+      const nextRows = rows.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              [key]:
+                key === "quantity" || key === "days" || key === "hours" || key === "rateAmount"
+                  ? value
+                  : String(value || ""),
+            }
+          : row,
+      );
+      return {
+        ...current,
+        sprayFoamEquipmentRentals: nextRows,
+      };
+    });
+  };
+
+  const addSprayFoamEquipmentRental = () => {
+    setInputs((current) => ({
+      ...current,
+      sprayFoamEquipmentRentals: [
+        ...normalizeSprayFoamEquipmentRentals(current.sprayFoamEquipmentRentals),
+        createBlankSprayFoamEquipmentRental(),
+      ],
+    }));
+  };
+
+  const setShingleLaborSection = (index, key, value) => {
+    setInputs((current) => {
+      const rows = normalizeShingleLaborSections(current.shingleLaborSections);
+      const nextRows = rows.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              [key]:
+                key === "licensed" || key === "workersComp"
+                  ? Boolean(value)
+                  : key === "installSquares" || key === "costPerInstallSq"
+                    ? Math.max(0, toNumber(value, 0))
+                    : String(value || ""),
+            }
+          : row,
+      );
+      return {
+        ...current,
+        shingleLaborSections: nextRows,
+      };
+    });
+  };
+
+  const addShingleLaborSection = () => {
+    setInputs((current) => {
+      const rows = normalizeShingleLaborSections(current.shingleLaborSections);
+      return {
+        ...current,
+        shingleLaborSections: [...rows, createBlankShingleLaborSection(rows.length)],
+      };
+    });
+  };
+
+  const removeShingleLaborSection = (index) => {
+    setInputs((current) => {
+      const rows = normalizeShingleLaborSections(current.shingleLaborSections);
+      const nextRows = rows.length > 1 ? rows.filter((_, rowIndex) => rowIndex !== index) : [createBlankShingleLaborSection()];
+      return {
+        ...current,
+        shingleLaborSections: nextRows,
+      };
+    });
+  };
+
+  const setShingleTearOffSection = (index, key, value) => {
+    setInputs((current) => {
+      const rows = normalizeShingleTearOffSections(current.shingleTearOffSections);
+      const nextRows = rows.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              [key]:
+                key === "layers"
+                  ? Math.max(1, Math.round(toNumber(value, 1)))
+                  : key === "squares" || key === "tearOffCostPerSquare" || key === "disposalFee" || key === "dryRotAllowance"
+                    ? Math.max(0, toNumber(value, 0))
+                    : String(value || ""),
+            }
+          : row,
+      );
+      return {
+        ...current,
+        shingleTearOffSections: nextRows,
+      };
+    });
+  };
+
+  const addShingleTearOffSection = () => {
+    setInputs((current) => {
+      const rows = normalizeShingleTearOffSections(current.shingleTearOffSections);
+      return {
+        ...current,
+        shingleTearOffSections: [...rows, createBlankShingleTearOffSection(rows.length)],
+      };
+    });
+  };
+
+  const removeShingleTearOffSection = (index) => {
+    setInputs((current) => {
+      const rows = normalizeShingleTearOffSections(current.shingleTearOffSections);
+      const nextRows = rows.length > 1 ? rows.filter((_, rowIndex) => rowIndex !== index) : [createBlankShingleTearOffSection()];
+      return {
+        ...current,
+        shingleTearOffSections: nextRows,
+      };
+    });
+  };
+
+  const setTileTearOffSection = (index, key, value) => {
+    setInputs((current) => {
+      const rows = normalizeShingleTearOffSections(current.tileTearOffSections);
+      const nextRows = rows.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              [key]:
+                key === "layers"
+                  ? Math.max(1, Math.round(toNumber(value, 1)))
+                  : key === "squares" || key === "tearOffCostPerSquare" || key === "disposalFee" || key === "dryRotAllowance"
+                    ? Math.max(0, toNumber(value, 0))
+                    : String(value || ""),
+            }
+          : row,
+      );
+      return {
+        ...current,
+        tileTearOffSections: nextRows,
+      };
+    });
+  };
+
+  const addTileTearOffSection = () => {
+    setInputs((current) => {
+      const rows = normalizeShingleTearOffSections(current.tileTearOffSections);
+      return {
+        ...current,
+        tileTearOffSections: [...rows, createBlankTileTearOffSection(rows.length)],
+      };
+    });
+  };
+
+  const removeTileTearOffSection = (index) => {
+    setInputs((current) => {
+      const rows = normalizeShingleTearOffSections(current.tileTearOffSections);
+      const nextRows = rows.length > 1 ? rows.filter((_, rowIndex) => rowIndex !== index) : [createBlankTileTearOffSection()];
+      return {
+        ...current,
+        tileTearOffSections: nextRows,
+      };
+    });
+  };
+
+  const setTileLaborSection = (index, key, value) => {
+    setInputs((current) => {
+      const rows = normalizeShingleLaborSections(current.tileSubcontractorSections);
+      const nextRows = rows.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              [key]:
+                key === "licensed" || key === "workersComp"
+                  ? Boolean(value)
+                  : key === "installSquares" || key === "costPerInstallSq"
+                    ? Math.max(0, toNumber(value, 0))
+                    : String(value || ""),
+            }
+          : row,
+      );
+      return {
+        ...current,
+        tileSubcontractorSections: nextRows,
+      };
+    });
+  };
+
+  const addTileLaborSection = () => {
+    setInputs((current) => {
+      const rows = normalizeShingleLaborSections(current.tileSubcontractorSections);
+      return {
+        ...current,
+        tileSubcontractorSections: [...rows, createBlankTileLaborSection(rows.length)],
+      };
+    });
+  };
+
+  const removeTileLaborSection = (index) => {
+    setInputs((current) => {
+      const rows = normalizeShingleLaborSections(current.tileSubcontractorSections);
+      const nextRows = rows.length > 1 ? rows.filter((_, rowIndex) => rowIndex !== index) : [createBlankTileLaborSection()];
+      return {
+        ...current,
+        tileSubcontractorSections: nextRows,
+      };
+    });
+  };
+
+  const addTileCustomMaterial = () => {
+    setInputs((current) => ({
+      ...current,
+      tileCustomMaterials: [
+        ...(Array.isArray(current.tileCustomMaterials) ? current.tileCustomMaterials : []),
+        { id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, name: "", quantity: 0, unit: "piece", unitPrice: 0 },
+      ],
+    }));
+  };
+
+  const updateTileCustomMaterial = (index, key, value) => {
+    setInputs((current) => {
+      const list = Array.isArray(current.tileCustomMaterials) ? [...current.tileCustomMaterials] : [];
+      list[index] = {
+        ...list[index],
+        [key]: key === "quantity" || key === "unitPrice" ? Math.max(0, toNumber(value, 0)) : String(value || ""),
+      };
+      return { ...current, tileCustomMaterials: list };
+    });
+  };
+
+  const removeTileCustomMaterial = (index) => {
+    setInputs((current) => {
+      const list = Array.isArray(current.tileCustomMaterials) ? [...current.tileCustomMaterials] : [];
+      list.splice(index, 1);
+      return { ...current, tileCustomMaterials: list };
+    });
+  };
+
+  const deleteSprayFoamEquipmentRental = (index) => {
+    setInputs((current) => {
+      const rows = normalizeSprayFoamEquipmentRentals(current.sprayFoamEquipmentRentals);
+      const nextRows = rows.length > 1 ? rows.filter((_, rowIndex) => rowIndex !== index) : [createBlankSprayFoamEquipmentRental()];
+      return {
+        ...current,
+        sprayFoamEquipmentRentals: nextRows,
+      };
+    });
+  };
+
+  const deleteSprayFoamAdditionalDetailMaterial = (index) => {
+    setInputs((current) => {
+      const rows = normalizeSprayFoamAdditionalDetailMaterials(current.sprayFoamAdditionalDetailMaterials);
+      rows.splice(index, 1);
+      return {
+        ...current,
+        sprayFoamAdditionalDetailMaterials: rows,
+      };
+    });
+  };
+
+  const setSprayFoamParapetMeasurement = (index, key, value) => {
+    setInputs((current) => {
+      const rows = normalizeSprayFoamParapetMeasurements(current.sprayFoamParapetMeasurements);
+      const nextRows = rows.map((row, rowIndex) =>
+        rowIndex === index ? { ...row, [key]: value } : row,
+      );
+      return {
+        ...current,
+        sprayFoamParapetMeasurements: nextRows,
+        sprayFoamParapetWallSquares: calculateSprayFoamParapetMeasurementTotals(nextRows).totalParapetSquares,
+      };
+    });
+  };
+
+  const deleteSprayFoamParapetMeasurement = (index) => {
+    setInputs((current) => {
+      const rows = normalizeSprayFoamParapetMeasurements(current.sprayFoamParapetMeasurements);
+      const nextRows = rows.length > 1 ? rows.filter((_, rowIndex) => rowIndex !== index) : [createBlankSprayFoamParapetMeasurement()];
+      return {
+        ...current,
+        sprayFoamParapetMeasurements: nextRows,
+        sprayFoamParapetWallSquares: calculateSprayFoamParapetMeasurementTotals(nextRows).totalParapetSquares,
+      };
+    });
+  };
+
+  const addSprayFoamParapetMeasurement = () => {
+    setInputs((current) => ({
+      ...current,
+      sprayFoamParapetMeasurements: (() => {
+        const nextRows = [
+          ...normalizeSprayFoamParapetMeasurements(current.sprayFoamParapetMeasurements),
+          createBlankSprayFoamParapetMeasurement(),
+        ];
+        return nextRows;
+      })(),
+      sprayFoamUseMultipleParapetMeasurements: true,
+      sprayFoamParapetWallSquares: calculateSprayFoamParapetMeasurementTotals([
+        ...normalizeSprayFoamParapetMeasurements(current.sprayFoamParapetMeasurements),
+        createBlankSprayFoamParapetMeasurement(),
+      ]).totalParapetSquares,
+    }));
+  };
+
+  const setSprayFoamRoofArea = (index, key, value) => {
+    setInputs((current) => {
+      const rows = normalizeSprayFoamRoofAreas(current.sprayFoamRoofAreas);
+      const nextRows = rows.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              [key]:
+                key === "fieldRoofSquares" || key === "foamThicknessInches" || key === "parapetWallSquares"
+                  ? value
+                  : key === "hasParapetWalls"
+                    ? Boolean(value)
+                    : String(value || ""),
+            }
+          : row,
+      );
+      return {
+        ...current,
+        sprayFoamRoofAreas: nextRows,
+      };
+    });
+  };
+
+  const deleteSprayFoamRoofArea = (index) => {
+    setInputs((current) => {
+      const rows = normalizeSprayFoamRoofAreas(current.sprayFoamRoofAreas);
+      const nextRows = rows.length > 1 ? rows.filter((_, rowIndex) => rowIndex !== index) : [createBlankSprayFoamRoofArea()];
+      return {
+        ...current,
+        sprayFoamRoofAreas: nextRows,
+      };
+    });
+  };
+
+  const addSprayFoamRoofArea = () => {
+    setInputs((current) => ({
+      ...current,
+      sprayFoamSeparateRoofAreas: true,
+      sprayFoamRoofAreas: [
+        ...normalizeSprayFoamRoofAreas(current.sprayFoamRoofAreas),
+        createBlankSprayFoamRoofArea(),
+      ],
+    }));
+  };
+
+  const triggerQuickMeasureUpload = () => {
+    quickMeasureFileInputRef.current?.click();
+  };
+
+  const handleQuickMeasureFileChange = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    if (!/pdf$/i.test(file.name) && file.type !== "application/pdf") {
+      setQuickMeasureStatus("Please upload a PDF file.");
+      return;
+    }
+
+    setQuickMeasureIsProcessing(true);
+    setQuickMeasureStatus("Reading QuickMeasure PDF...");
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await getDocument({ data: arrayBuffer }).promise;
+      let extractedText = "";
+
+      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+        const page = await pdf.getPage(pageNumber);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map((item) => item.str || "").join(" ");
+        extractedText += `${pageText}\n`;
+      }
+
+      const fields = extractQuickMeasureFields(extractedText);
+      setQuickMeasureReport({
+        fileName: file.name,
+        uploadedAt: new Date().toISOString(),
+        pageCount: pdf.numPages,
+        extractedText,
+        fields,
+        appliedTo: "",
+      });
+      setQuickMeasureStatus(`QuickMeasure report uploaded: ${file.name}. Review before applying.`);
+      setSessionMessageType("success");
+      setSessionMessage("QuickMeasure report ready for review.");
+    } catch (error) {
+      console.error("QuickMeasure upload failed:", error);
+      setQuickMeasureReport(null);
+      setQuickMeasureStatus(`QuickMeasure upload failed: ${error?.message || String(error)}`);
+      setSessionMessageType("error");
+      setSessionMessage(`QuickMeasure upload failed: ${error?.message || String(error)}`);
+    } finally {
+      setQuickMeasureIsProcessing(false);
+    }
+  };
+
+  const applyQuickMeasureToTemplate = (templateKey) => {
+    if (!quickMeasureReport) return;
+
+    const report = quickMeasureReport;
+    const fields = report.fields || {};
+    const propertyAddress = String(fields.propertyAddress || "").trim();
+    const roofSquares =
+      toNumber(fields.totalSquares, 0) > 0
+        ? toNumber(fields.totalSquares, 0)
+        : toNumber(fields.totalRoofArea, 0) > 0
+          ? Math.ceil(toNumber(fields.totalRoofArea, 0) / 100)
+          : 0;
+    const perimeterLf = toNumber(
+      fields.perimeterLinearFeet,
+      toNumber(fields.dripEdgeLinearFeet, toNumber(fields.eaveLinearFeet, 0) + toNumber(fields.rakeLinearFeet, 0)),
+    );
+    const ridgeHipLf = toNumber(fields.ridgeHipLinearFeet, 0);
+    const ridgeLf = fields.ridgeLinearFeet !== null && fields.ridgeLinearFeet !== undefined ? toNumber(fields.ridgeLinearFeet, 0) : ridgeHipLf;
+    const hipLf = fields.hipLinearFeet !== null && fields.hipLinearFeet !== undefined ? toNumber(fields.hipLinearFeet, 0) : ridgeHipLf > 0 && fields.ridgeLinearFeet === null ? 0 : 0;
+    const valleyLf = toNumber(fields.valleyLinearFeet, 0);
+    const rakeLf = toNumber(fields.rakeLinearFeet, 0);
+    const eaveLf = toNumber(fields.eaveLinearFeet, 0);
+    const dripEdgeLf = toNumber(fields.dripEdgeLinearFeet, 0);
+    const starterLf = toNumber(fields.starterLinearFeet, dripEdgeLf);
+    const starterQuantitySuggested = toNumber(fields.shingleStarterQuantity, 0);
+    const dripEdgePiecesSuggested = toNumber(fields.shingleDripEdgePieces, 0);
+    const rapidRidgeBoxesSuggested = toNumber(fields.shingleRapidRidgeBoxes, 0);
+    const hdzBundlesSuggested = toNumber(fields.shingleHdzBundlesNeeded, 0);
+    const underlaymentRollsSuggested = toNumber(fields.shingleSyntheticUnderlaymentSuggestedRolls || fields.shingleSyntheticUnderlaymentRolls, 0);
+    const currentWastePercent = Math.max(0, toNumber(quickMeasureReport?.appliedValues?.wastePercent ?? fields.wastePercent, 15));
+    const nextProductionSquares = roofSquares * (1 + currentWastePercent / 100);
+    const underlaymentRollsCalculated = Math.max(0, Math.ceil(nextProductionSquares / 10));
+    const underlaymentRollsFinal = underlaymentRollsSuggested > 0 ? underlaymentRollsSuggested : underlaymentRollsCalculated;
+    const starterQuantityFallback = dripEdgeLf > 0 ? dripEdgeLf : perimeterLf;
+    const starterQuantityFinal = starterQuantitySuggested > 0 ? starterQuantitySuggested : starterQuantityFallback;
+    const dripEdgePiecesCalculated = Math.max(0, Math.ceil((dripEdgeLf > 0 ? dripEdgeLf : perimeterLf) / 10));
+    const dripEdgePiecesFinal = dripEdgePiecesSuggested > 0 ? dripEdgePiecesSuggested : dripEdgePiecesCalculated;
+    const totalRidgeCapLf = ridgeHipLf > 0 ? ridgeHipLf : ridgeLf + hipLf;
+    const rapidRidgeBoxesCalculated = totalRidgeCapLf > 0 ? Math.ceil(totalRidgeCapLf / 20) : 0;
+    const rapidRidgeBoxesFinal = rapidRidgeBoxesSuggested > 0 ? rapidRidgeBoxesSuggested : rapidRidgeBoxesCalculated;
+    const quickMeasureData = {
+      address: propertyAddress,
+      totalSquares: roofSquares,
+      dripEdgePieces: dripEdgePiecesFinal,
+      dripEdgeLinearFeet: dripEdgeLf,
+      proStartQuantity: starterQuantityFinal,
+      rapidRidgeBoxes: rapidRidgeBoxesFinal,
+      ridgeHipLinearFeet: ridgeHipLf,
+      ridgeLinearFeet: ridgeLf,
+      hipLinearFeet: hipLf,
+      valleyLinearFeet: valleyLf,
+      rakeLinearFeet: rakeLf,
+      eaveLinearFeet: eaveLf,
+    };
+    const appliedFieldPairs = [
+      ["shingleHdzBundlesNeeded", hdzBundlesSuggested > 0 ? hdzBundlesSuggested : 0],
+      ["shingleStarterQuantity", starterQuantityFinal],
+      ["shingleDripEdgePieces", dripEdgePiecesFinal],
+      ["shingleRapidRidgeBoxes", rapidRidgeBoxesFinal],
+      ["shingleSyntheticUnderlaymentSuggestedRolls", underlaymentRollsSuggested > 0 ? underlaymentRollsSuggested : 0],
+      ["shingleSyntheticUnderlaymentCalculatedRolls", underlaymentRollsCalculated],
+      ["shingleSyntheticUnderlaymentRolls", underlaymentRollsFinal],
+      ["shingleTotalRoofSquares", roofSquares],
+      ["shingleProductionSquares", nextProductionSquares],
+    ];
+    const nextAppliedAt = new Date().toISOString();
+    console.log("QuickMeasure extracted values", fields);
+    console.log("QuickMeasure material suggestions", shingleMaterialSuggestions);
+    console.log("QuickMeasure values being applied", {
+      templateKey,
+      propertyAddress,
+      roofSquares,
+      perimeterLf,
+      ridgeHipLf,
+      ridgeLf,
+      hipLf,
+      valleyLf,
+      rakeLf,
+      eaveLf,
+      dripEdgeLf,
+      starterLf,
+      starterQuantitySuggested,
+      starterQuantityFallback,
+      starterQuantityFinal,
+      dripEdgePiecesSuggested,
+      dripEdgePiecesCalculated,
+      dripEdgePiecesFinal,
+      rapidRidgeBoxesSuggested,
+      totalRidgeCapLf,
+      rapidRidgeBoxesCalculated,
+      rapidRidgeBoxesFinal,
+      hdzBundlesSuggested,
+      underlaymentRollsSuggested,
+      underlaymentRollsCalculated,
+      underlaymentRollsFinal,
+      appliedFieldPairs,
+    });
+
+    if (templateKey === "shingle") {
+      setInputs((current) => ({
+        ...current,
+        jobName: quickMeasureData.address || current.jobName,
+        jobAddress: quickMeasureData.address || current.jobAddress,
+        shingleJobName: quickMeasureData.address || current.shingleJobName || current.jobName,
+        shingleJobAddress: quickMeasureData.address || current.shingleJobAddress || current.jobAddress,
+        shingleTotalRoofSquares: quickMeasureData.totalSquares || current.shingleTotalRoofSquares,
+        shingleProductionSquares: quickMeasureData.totalSquares || current.shingleProductionSquares,
+        shingleDripEdgePieces: quickMeasureData.dripEdgePieces || quickMeasureData.dripEdgeLinearFeet || current.shingleDripEdgePieces,
+        shingleStarterQuantity: quickMeasureData.proStartQuantity || current.shingleStarterQuantity,
+        shingleRapidRidgeBoxes: quickMeasureData.rapidRidgeBoxes || current.shingleRapidRidgeBoxes,
+        shingleRidgeHipLinearFeet: quickMeasureData.ridgeHipLinearFeet || current.shingleRidgeHipLinearFeet,
+        shingleValleyLinearFeet: quickMeasureData.valleyLinearFeet || current.shingleValleyLinearFeet,
+        shingleRakeLinearFeet: quickMeasureData.rakeLinearFeet || current.shingleRakeLinearFeet,
+        shingleEaveLinearFeet: quickMeasureData.eaveLinearFeet || current.shingleEaveLinearFeet,
+        shingleRidgeLinearFeet: quickMeasureData.ridgeLinearFeet || current.shingleRidgeLinearFeet,
+        shingleHipLinearFeet: quickMeasureData.hipLinearFeet || current.shingleHipLinearFeet,
+        shinglePerimeterLinearFeet: quickMeasureData.dripEdgeLinearFeet || current.shinglePerimeterLinearFeet,
+        shingleDripEdgeLinearFeet: quickMeasureData.dripEdgeLinearFeet || current.shingleDripEdgeLinearFeet,
+        shingleHdzBundlesNeeded: hdzBundlesSuggested > 0 ? hdzBundlesSuggested : current.shingleHdzBundlesNeeded,
+        shingleSyntheticUnderlaymentSuggestedRolls: underlaymentRollsSuggested > 0 ? underlaymentRollsSuggested : current.shingleSyntheticUnderlaymentSuggestedRolls,
+        shingleSyntheticUnderlaymentCalculatedRolls: underlaymentRollsCalculated || current.shingleSyntheticUnderlaymentCalculatedRolls,
+        shingleSyntheticUnderlaymentRolls: underlaymentRollsFinal || current.shingleSyntheticUnderlaymentRolls,
+      }));
+
+      setQuickMeasureReport((current) =>
+        current
+          ? {
+              ...current,
+              appliedTo: templateKey,
+              appliedAt: nextAppliedAt,
+              appliedValues: {
+                ...appliedFieldPairs.reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {}),
+              },
+            }
+          : current,
+      );
+
+      console.log("Applied QuickMeasure to shingle", quickMeasureData);
+      setActiveTemplate("shingle");
+      setQuickMeasureStatus("QuickMeasure data applied to Shingle Estimate.");
+      setSessionMessageType("success");
+      setSessionMessage("QuickMeasure data applied to Shingle Estimate.");
+      return;
+    }
+
+    setInputs((current) => {
+      const next = { ...current };
+      const currentWastePercent = Math.max(0, toNumber(current.shingleWastePercent, 15));
+      const nextProductionSquares = roofSquares * (1 + currentWastePercent / 100);
+
+      if (templateKey === "tpo") {
+        next.fieldSquares = roofSquares;
+        next.totalSquares = roofSquares;
+        next.roofPerimeterLf = perimeterLf || next.roofPerimeterLf;
+      } else if (templateKey === "sprayFoam") {
+        next.sprayFoamFieldRoofSquares = roofSquares;
+        next.sprayFoamParapetWallSquares = 0;
+        next.sprayFoamUseMultipleParapetMeasurements = false;
+        next.sprayFoamParapetMeasurements = [createBlankSprayFoamParapetMeasurement()];
+        next.sprayFoamTotalFieldSquares = roofSquares;
+        next.sprayFoamTotalRoofSquares = roofSquares;
+        next.totalSquares = roofSquares;
+        next.fieldSquares = roofSquares;
+      } else if (templateKey === "tile" || templateKey === "shingle" || templateKey === "coating" || templateKey === "repair") {
+        next.totalSquares = roofSquares;
+        next.fieldSquares = roofSquares;
+      }
+
+      if (templateKey === "shingle") {
+        if (propertyAddress) {
+          next.jobName = propertyAddress;
+          next.shingleJobName = propertyAddress;
+          next.jobAddress = propertyAddress;
+          next.shingleJobAddress = propertyAddress;
+        }
+        next.shingleTotalRoofSquares = roofSquares;
+        next.shingleProductionSquares = nextProductionSquares;
+        next.shingleHdzBundlesNeeded = hdzBundlesSuggested > 0 ? hdzBundlesSuggested : next.shingleHdzBundlesNeeded || 0;
+        next.shingleSyntheticUnderlaymentSuggestedRolls = underlaymentRollsSuggested > 0 ? underlaymentRollsSuggested : 0;
+        next.shingleSyntheticUnderlaymentCalculatedRolls = underlaymentRollsCalculated;
+        next.shingleSyntheticUnderlaymentRolls = underlaymentRollsFinal;
+        next.shingleStarterQuantity = starterQuantityFinal;
+        next.shingleDripEdgePieces = dripEdgePiecesFinal;
+        next.shingleRapidRidgeBoxes = rapidRidgeBoxesFinal;
+        next.shinglePerimeterLinearFeet = perimeterLf;
+        next.shingleDripEdgeLinearFeet = dripEdgeLf || perimeterLf;
+        next.shingleStarterLinearFeet = starterLf || dripEdgeLf || perimeterLf;
+        next.shingleRidgeLinearFeet = ridgeLf;
+        next.shingleHipLinearFeet = hipLf;
+        next.shingleRidgeHipLinearFeet = ridgeHipLf;
+        next.shingleValleyLinearFeet = valleyLf;
+        next.shingleRakeLinearFeet = rakeLf;
+        next.shingleEaveLinearFeet = eaveLf;
+        next.shingleDripEdgeLf = dripEdgeLf || perimeterLf;
+        next.shingleStarterLf = starterLf || dripEdgeLf || perimeterLf;
+        next.shingleRidgeLf = ridgeLf;
+        next.shingleHipLf = hipLf;
+        next.shingleValleyLf = valleyLf;
+        next.shingleRakeLf = rakeLf;
+        next.shingleEaveLf = eaveLf;
+        next.shingleTotalRoofSquares = roofSquares;
+
+        console.log("Updated shingle input state", {
+          jobName: next.jobName,
+          jobAddress: next.jobAddress,
+          shingleJobName: next.shingleJobName,
+          shingleJobAddress: next.shingleJobAddress,
+          shingleTotalRoofSquares: next.shingleTotalRoofSquares,
+          shingleProductionSquares: next.shingleProductionSquares,
+          shingleHdzBundlesNeeded: next.shingleHdzBundlesNeeded,
+          shingleSyntheticUnderlaymentSuggestedRolls: next.shingleSyntheticUnderlaymentSuggestedRolls,
+          shingleSyntheticUnderlaymentCalculatedRolls: next.shingleSyntheticUnderlaymentCalculatedRolls,
+          shingleSyntheticUnderlaymentRolls: next.shingleSyntheticUnderlaymentRolls,
+          shingleStarterQuantity: next.shingleStarterQuantity,
+          shingleDripEdgePieces: next.shingleDripEdgePieces,
+          shingleRapidRidgeBoxes: next.shingleRapidRidgeBoxes,
+          shinglePerimeterLinearFeet: next.shinglePerimeterLinearFeet,
+          shingleDripEdgeLinearFeet: next.shingleDripEdgeLinearFeet,
+          shingleStarterLinearFeet: next.shingleStarterLinearFeet,
+          shingleRidgeLinearFeet: next.shingleRidgeLinearFeet,
+          shingleHipLinearFeet: next.shingleHipLinearFeet,
+          shingleRidgeHipLinearFeet: next.shingleRidgeHipLinearFeet,
+          shingleValleyLinearFeet: next.shingleValleyLinearFeet,
+          shingleRakeLinearFeet: next.shingleRakeLinearFeet,
+          shingleEaveLinearFeet: next.shingleEaveLinearFeet,
+        });
+      }
+
+      return next;
+    });
+
+    setQuickMeasureReport((current) =>
+      current
+        ? {
+            ...current,
+            appliedTo: templateKey,
+            appliedAt: nextAppliedAt,
+            appliedValues: {
+              appliedFieldPairs,
+              roofSquares,
+              perimeterLinearFeet: perimeterLf,
+              propertyAddress,
+              shingleHdzBundlesNeeded: hdzBundlesSuggested > 0 ? hdzBundlesSuggested : 0,
+              shingleSyntheticUnderlaymentRolls: underlaymentRollsSuggested > 0 ? underlaymentRollsSuggested : 0,
+              shingleStarterQuantity: starterQuantityFinal,
+              shingleDripEdgePieces: dripEdgePiecesFinal,
+              shingleRapidRidgeBoxes: rapidRidgeBoxesFinal,
+              ridgeLinearFeet: ridgeLf,
+              hipLinearFeet: hipLf,
+              ridgeHipLinearFeet: ridgeHipLf,
+              valleyLinearFeet: valleyLf,
+              rakeLinearFeet: rakeLf,
+              eaveLinearFeet: eaveLf,
+              dripEdgeLinearFeet: dripEdgeLf,
+              starterLinearFeet: starterLf,
+            },
+          }
+        : current,
+    );
+
+    setActiveTemplate(templateKey);
+    setQuickMeasureStatus(
+      templateKey === "shingle"
+        ? "QuickMeasure data applied to Shingle Estimate."
+        : `Applied QuickMeasure report to ${templateKey === "sprayFoam" ? "Spray Foam" : templateKey === "tpo" ? "TPO" : templateKey.charAt(0).toUpperCase() + templateKey.slice(1)} estimate.`,
+    );
+    setSessionMessageType("success");
+    setSessionMessage(templateKey === "shingle" ? "QuickMeasure data applied to Shingle Estimate." : `QuickMeasure applied to ${templateKey}.`);
   };
 
   const handleGoogleTimeout = (label) => {
@@ -2170,13 +10100,160 @@ function App() {
     }));
   };
 
+  const handleSelectZeroOnFocus = (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (String(target.value).trim() !== "0") return;
+    window.requestAnimationFrame(() => target.select());
+  };
+
+  const updateQuickMeasureField = (key, value) => {
+    setQuickMeasureReport((current) =>
+      current
+        ? {
+            ...current,
+            fields: {
+              ...(current.fields || {}),
+              [key]: value,
+            },
+          }
+        : current,
+    );
+  };
+
+  const geocodeGoogleAddress = (address) =>
+    new Promise((resolve, reject) => {
+      if (!window.google?.maps?.Geocoder) {
+        reject(new Error("Google Maps API unavailable for Geocoder."));
+        return;
+      }
+
+      const geocoder = new window.google.maps.Geocoder();
+      let finished = false;
+      const timeoutId = window.setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        reject(new Error("Google Geocoder callback did not return."));
+      }, 10000);
+
+      geocoder.geocode({ address }, (results, status) => {
+        console.log("Geocode status", status, address);
+        console.log("Geocode results", results);
+        if (timeoutId) clearTimeout(timeoutId);
+        if (finished) return;
+        finished = true;
+
+        const location = results?.[0]?.geometry?.location || null;
+        if (status === "OK" && location) {
+          resolve({
+            status,
+            location,
+            formattedAddress: results?.[0]?.formatted_address || address,
+          });
+          return;
+        }
+
+        reject(new Error(`Geocoder status: ${status}`));
+      });
+    });
+
+  const routeGoogleDirections = async (originAddress, destinationAddress, timeoutLabel = "Google Directions") => {
+    if (!window.google?.maps?.DirectionsService) {
+      throw new Error("Google Maps API unavailable for DirectionsService.");
+    }
+
+    const [{ location: originLocation, formattedAddress: resolvedOrigin }, { location: destinationLocation, formattedAddress: resolvedDestination }] =
+      await Promise.all([geocodeGoogleAddress(originAddress), geocodeGoogleAddress(destinationAddress)]);
+
+    const directionsService = new window.google.maps.DirectionsService();
+    return new Promise((resolve, reject) => {
+      let finished = false;
+      const timeoutId = window.setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        reject(new Error(`${timeoutLabel}: Google callback did not return. Check billing, browser blocker, API restrictions, or Google Cloud billing activation.`));
+      }, 15000);
+
+      directionsService.route(
+        {
+          origin: originLocation,
+          destination: destinationLocation,
+          travelMode: window.google.maps.TravelMode.DRIVING,
+        },
+        (response, status) => {
+          console.log("Directions status", status);
+          console.log("Directions response", response);
+          if (timeoutId) clearTimeout(timeoutId);
+          if (finished) return;
+          finished = true;
+
+          if (status === window.google.maps.DirectionsStatus.OK && response?.routes?.[0]?.legs?.[0]) {
+            resolve({
+              status,
+              response,
+              originAddress: resolvedOrigin,
+              destinationAddress: resolvedDestination,
+            });
+            return;
+          }
+
+          reject(new Error(`Google Directions failed: ${status}`));
+        },
+      );
+    });
+  };
+
+  const routeGoogleDirectionsDirect = async (originAddress, destinationAddress, timeoutLabel = "Google Directions") => {
+    if (!window.google?.maps?.DirectionsService) {
+      throw new Error("Google Maps API unavailable for DirectionsService.");
+    }
+
+    const directionsService = new window.google.maps.DirectionsService();
+    return new Promise((resolve, reject) => {
+      let finished = false;
+      const timeoutId = window.setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        reject(new Error(`${timeoutLabel}: Google callback did not return. Check billing, browser blocker, API restrictions, or Google Cloud billing activation.`));
+      }, 15000);
+
+      directionsService.route(
+        {
+          origin: originAddress,
+          destination: destinationAddress,
+          travelMode: window.google.maps.TravelMode.DRIVING,
+        },
+        (response, status) => {
+          console.log("Directions status", status);
+          console.log("Directions response", response);
+          if (timeoutId) clearTimeout(timeoutId);
+          if (finished) return;
+          finished = true;
+
+          if (status === window.google.maps.DirectionsStatus.OK && response?.routes?.[0]?.legs?.[0]) {
+            resolve({
+              status,
+              response,
+              originAddress,
+              destinationAddress,
+            });
+            return;
+          }
+
+          reject(new Error(`Google Directions failed: ${status}`));
+        },
+      );
+    });
+  };
+
   const handleTestGoogleGeocoder = async () => {
+    const safeInputs = inputs || {};
     if (!window.google?.maps?.Geocoder) {
       setTravelLookupMessage("Google Maps API unavailable for Geocoder.");
       return;
     }
 
-    const hqAddress = String(inputs.companyHqAddress || "").trim();
+    const hqAddress = String(safeInputs.companyHqAddress || "").trim();
     if (!hqAddress) {
       setTravelLookupMessage("Enter the HQ address first.");
       return;
@@ -2228,8 +10305,9 @@ function App() {
   };
 
   const handleTestDirections = async () => {
-    const companyHqAddress = String(inputs.companyHqAddress || "").trim();
-    const jobSiteAddress = String(inputs.jobSiteAddress || "").trim();
+    const safeInputs = inputs || {};
+    const companyHqAddress = String(safeInputs.companyHqAddress || "").trim();
+    const jobSiteAddress = String(safeInputs.jobSiteAddress || "").trim();
 
     if (!companyHqAddress || !jobSiteAddress) {
       setTravelLookupMessage("Enter both the HQ address and the job site address.");
@@ -2253,49 +10331,34 @@ function App() {
       lastError: "Running",
     }));
 
-    let completed = false;
-    let timeoutId = window.setTimeout(() => {
-      if (completed) return;
-      completed = true;
-      handleGoogleTimeout("Directions");
-    }, 10000);
-
     try {
-      const directionsService = new window.google.maps.DirectionsService();
-      directionsService.route(
-        {
-          origin: companyHqAddress,
-          destination: jobSiteAddress,
-          travelMode: window.google.maps.TravelMode.DRIVING,
-        },
-        (response, status) => {
-          console.log("Directions status", status);
-          console.log("Directions response", response);
-          if (timeoutId) clearTimeout(timeoutId);
-          setIsLookingUpDistance(false);
-          if (completed) return;
-          completed = true;
-
-          setGoogleDebug((current) => ({
-            ...current,
-            lastGoogleStatus: status || "UNKNOWN",
-            lastElementStatus: response?.routes?.[0]?.legs?.[0] ? "OK" : "UNKNOWN",
-            lastError: status || "UNKNOWN",
-          }));
-
-          setTravelLookupMessage(`Directions status: ${status}`);
-        },
-      );
+      const { status, response } = await routeGoogleDirections(companyHqAddress, jobSiteAddress, "Directions");
+      setGoogleDebug((current) => ({
+        ...current,
+        lastGoogleStatus: status || "UNKNOWN",
+        lastElementStatus: response?.routes?.[0]?.legs?.[0] ? "OK" : "UNKNOWN",
+        lastError: status || "UNKNOWN",
+      }));
+      setTravelLookupMessage(`Directions status: ${status}`);
     } catch (error) {
-      if (timeoutId) clearTimeout(timeoutId);
       setIsLookingUpDistance(false);
       setTravelLookupMessage(error instanceof Error ? `Directions failed: ${error.message}` : "Directions failed.");
     }
   };
 
   const handleCalculateDistance = async () => {
-    const companyHqAddress = String(inputs.companyHqAddress || "").trim();
-    const jobSiteAddress = String(inputs.jobSiteAddress || "").trim();
+    const safeInputs = inputs || {};
+    const companyHqAddress = String(safeInputs.companyHqAddress || "").trim();
+    const jobSiteAddress = String(safeInputs.jobSiteAddress || "").trim();
+
+    if (!isLoaded) {
+      setTravelLookupMessage("Google Maps is still loading. Please try again in a moment.");
+      setInputs((current) => ({
+        ...current,
+        travelDistanceSource: "manual",
+      }));
+      return;
+    }
 
     if (!companyHqAddress || !jobSiteAddress) {
       setTravelLookupMessage("Enter both the HQ address and the job site address.");
@@ -2329,94 +10392,48 @@ function App() {
     }));
 
     try {
-      if (!window.google) {
-        throw new Error("Google Maps not loaded");
-      }
-      if (!window.google.maps) {
-        throw new Error("Google Maps API unavailable");
-      }
-      if (!window.google.maps.DirectionsService) {
-        throw new Error("DirectionsService unavailable");
+      let response;
+      try {
+        ({ response } = await routeGoogleDirections(companyHqAddress, jobSiteAddress, "Google Directions"));
+      } catch (directError) {
+        console.warn("Geocoded directions lookup failed, trying direct fallback:", directError);
+        ({ response } = await routeGoogleDirectionsDirect(companyHqAddress, jobSiteAddress, "Google Directions"));
       }
 
-      const directionsService = new window.google.maps.DirectionsService();
-      let finished = false;
+      const leg = response?.routes?.[0]?.legs?.[0];
 
-      const timeoutId = window.setTimeout(() => {
-        if (finished) return;
-        finished = true;
-        setIsLookingUpDistance(false);
-        setTravelLookupMessage(
-          "Google callback did not return. Check billing, browser blocker, API restrictions, or Google Cloud billing activation.",
-        );
-        setInputs((current) => ({
-          ...current,
-          travelDistanceSource: "manual",
-        }));
-        setGoogleDebug((current) => ({
-          ...current,
-          lastGoogleStatus: "TIMEOUT",
-          lastElementStatus: "TIMEOUT",
-          lastError: "Google callback did not return",
-        }));
-      }, 10000);
+      if (!leg?.distance?.value || !leg?.duration?.value) {
+        throw new Error("Google Directions failed: missing route distance or duration.");
+      }
 
-      directionsService.route(
-        {
-          origin: companyHqAddress,
-          destination: jobSiteAddress,
-          travelMode: window.google.maps.TravelMode.DRIVING,
-        },
-        (result, status) => {
-          if (timeoutId) clearTimeout(timeoutId);
-          setIsLookingUpDistance(false);
-          if (finished) return;
-          finished = true;
+      const oneWayMiles = leg.distance.value / 1609.344;
+      const oneWayDriveTime = leg.duration.value / 3600;
 
-          setGoogleDebug((current) => ({
-            ...current,
-            lastGoogleStatus: status || "UNKNOWN",
-            lastElementStatus: result?.routes?.[0]?.legs?.[0] ? "OK" : "UNKNOWN",
-            lastError: status || "UNKNOWN",
-          }));
+      setGoogleDebug((current) => ({
+        ...current,
+        lastGoogleStatus: "OK",
+        lastElementStatus: "OK",
+        lastError: "",
+      }));
 
-          if (status !== window.google.maps.DirectionsStatus.OK) {
-            setTravelLookupMessage(`Google Directions failed: ${status}`);
-            setInputs((current) => ({
-              ...current,
-              travelDistanceSource: "manual",
-            }));
-            return;
-          }
+      setInputs((current) => ({
+        ...current,
+        oneWayMiles: round(oneWayMiles, 2),
+        oneWayDriveTime: round(oneWayDriveTime, 2),
+        oneWayDriveTimeHours: round(oneWayDriveTime, 2),
+        travelDistanceSource: "google",
+      }));
 
-          const leg = result?.routes?.[0]?.legs?.[0];
-
-          if (!leg?.distance?.value || !leg?.duration?.value) {
-            setTravelLookupMessage("Google Directions failed: missing route distance or duration.");
-            setInputs((current) => ({
-              ...current,
-              travelDistanceSource: "manual",
-            }));
-            return;
-          }
-
-          const oneWayMiles = leg.distance.value / 1609.344;
-          const oneWayDriveTime = leg.duration.value / 3600;
-
-          setInputs((current) => ({
-            ...current,
-            oneWayMiles: round(oneWayMiles, 2),
-            oneWayDriveTime: round(oneWayDriveTime, 2),
-            oneWayDriveTimeHours: round(oneWayDriveTime, 2),
-            travelDistanceSource: "google",
-          }));
-
-          setTravelLookupMessage(`Google Maps loaded: ${leg.distance.text}, ${leg.duration.text}`);
-        },
-      );
+      setIsLookingUpDistance(false);
+      setTravelLookupMessage(`Google Maps loaded: ${leg.distance.text}, ${leg.duration.text}`);
     } catch (error) {
       setIsLookingUpDistance(false);
-      setTravelLookupMessage(error instanceof Error ? `Google Maps lookup failed: ${error.message}` : "Unable to calculate distance. Using manual entry.");
+      const message = error instanceof Error ? error.message : "Unable to calculate distance.";
+      setTravelLookupMessage(
+        message.includes("callback did not return")
+          ? "Google Maps did not return a route in time. Please try manual miles input."
+          : `Google Maps lookup failed: ${message}`,
+      );
       setInputs((current) => ({
         ...current,
         travelDistanceSource: "manual",
@@ -2429,6 +10446,29 @@ function App() {
       ...current,
       [key]: value,
     }));
+  };
+
+  const addCustomMaterial = () => {
+    setInputs((current) => ({
+      ...current,
+      customMaterials: [...(current.customMaterials || []), { id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, name: "", quantity: 0, unit: "ea", unitPrice: 0 }],
+    }));
+  };
+
+  const updateCustomMaterial = (index, key, value) => {
+    setInputs((current) => {
+      const list = Array.isArray(current.customMaterials) ? [...current.customMaterials] : [];
+      list[index] = { ...list[index], [key]: value };
+      return { ...current, customMaterials: list };
+    });
+  };
+
+  const deleteCustomMaterial = (index) => {
+    setInputs((current) => {
+      const list = Array.isArray(current.customMaterials) ? [...current.customMaterials] : [];
+      list.splice(index, 1);
+      return { ...current, customMaterials: list };
+    });
   };
 
   const setAdminPricingField = (key, value) => {
@@ -2456,6 +10496,139 @@ function App() {
       subcontractorAddOnItems: [...normalizeSubcontractorAddOnItems(current.subcontractorAddOnItems), createBlankSubcontractorAddOnItem()],
     }));
   };
+
+  const getCompanyVehicleChoice = (vehicleId) =>
+    fieldOperationCompanyVehicles.find((vehicle) => vehicle.id === vehicleId) ||
+    TRAVEL_VEHICLE_OPTIONS.find((vehicle) => vehicle.value === vehicleId) ||
+    null;
+
+  const handleAddFieldDailyLogVehicleRow = () => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      vehicleRows: [...(current.vehicleRows || []), createBlankFieldDailyLogVehicleRow()],
+    }));
+  };
+
+  const handleRemoveFieldDailyLogVehicleRow = (rowId) => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      vehicleRows: (current.vehicleRows || []).filter((row) => row.id !== rowId),
+    }));
+  };
+
+  const handleFieldDailyLogVehicleRowChange = (rowId, key, value) => {
+    setFieldDailyLogDraft((current) => {
+      const nextRows = (current.vehicleRows || []).map((row) => {
+        if (row.id !== rowId) return row;
+        const nextRow = { ...row, [key]: value };
+        if (key === "vehicleId") {
+          const selectedVehicle = getCompanyVehicleChoice(value);
+          if (selectedVehicle && value) {
+            nextRow.truckName = selectedVehicle.vehicleName || selectedVehicle.label || nextRow.truckName;
+            nextRow.unitNumber = selectedVehicle.unitNumber || nextRow.unitNumber;
+            nextRow.licensePlate = selectedVehicle.licensePlate || nextRow.licensePlate;
+            nextRow.vehicleType = selectedVehicle.value || selectedVehicle.vehicleType || nextRow.vehicleType;
+          } else if (value === "__other__") {
+            nextRow.truckName = nextRow.truckName || "Other / Rental";
+            nextRow.vehicleType = "other";
+          } else {
+            nextRow.truckName = nextRow.truckName || "";
+            nextRow.vehicleType = "";
+          }
+        }
+        if (key === "driverEmployeeId") {
+          const matchedDriver = employeeDirectory.find((employee) => employee.id === value) || null;
+          nextRow.driverEmployeeId = value;
+          nextRow.driverEmployeeName =
+            matchedDriver?.displayName ||
+            [matchedDriver?.firstName, matchedDriver?.lastName].filter(Boolean).join(" ").trim() ||
+            (value ? nextRow.driverEmployeeName : "") ||
+            "";
+        }
+        if (key === "startingMileage" || key === "endingMileage") {
+          const startingMileage = key === "startingMileage" ? toNumber(value, 0) : toNumber(row.startingMileage, 0);
+          const endingMileage = key === "endingMileage" ? toNumber(value, 0) : toNumber(row.endingMileage, 0);
+          nextRow.milesDriven = Math.max(0, endingMileage - startingMileage);
+          nextRow.mileageFlag = endingMileage < startingMileage || nextRow.milesDriven >= FIELD_DAILY_LOG_HIGH_MILEAGE_THRESHOLD;
+        }
+        return nextRow;
+      });
+      return { ...current, vehicleRows: nextRows };
+    });
+  };
+
+  const handleAddFieldDailyLogFuelReceiptRow = () => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      fuelPurchased: true,
+      fuelReceipts: [...(current.fuelReceipts || []), createBlankFieldDailyLogFuelReceiptRow()],
+    }));
+  };
+
+  const handleRemoveFieldDailyLogFuelReceiptRow = (rowId) => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      fuelReceipts: (current.fuelReceipts || []).filter((row) => row.id !== rowId),
+    }));
+  };
+
+  const handleFieldDailyLogFuelReceiptRowChange = (rowId, key, value) => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      fuelReceipts: (current.fuelReceipts || []).map((row) => {
+        if (row.id !== rowId) return row;
+        const nextRow = { ...row, [key]: value };
+        const gallons = key === "gallonsPumped" ? toNumber(value, 0) : toNumber(row.gallonsPumped, 0);
+        const receiptAmount = key === "totalReceiptAmount" ? toNumber(value, 0) : toNumber(row.totalReceiptAmount, 0);
+        nextRow.pricePerGallon = gallons > 0 ? round(receiptAmount / gallons, 2) : 0;
+        return nextRow;
+      }),
+    }));
+  };
+
+  const handleFieldDailyLogFuelReceiptPhotoUpload = async (rowId, event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    const file = files[0];
+    const uploaded = await uploadFieldDailyLogPhotoToStorage(file, authUser?.key || "guest", fieldDailyLogDraft.id, "fuel-receipt");
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      fuelReceipts: (current.fuelReceipts || []).map((row) =>
+        row.id === rowId
+          ? {
+              ...row,
+              receiptPhoto: file,
+              receiptPhotoUrl: uploaded.photoUrl || "",
+              receiptPhotoPath: uploaded.storagePath || "",
+              receiptPhotoName: uploaded.fileName || file.name || "",
+            }
+          : row,
+      ),
+    }));
+    event.target.value = "";
+  };
+
+  const handleRemoveFuelReceiptPhoto = (rowId) => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      fuelReceipts: (current.fuelReceipts || []).map((row) =>
+        row.id === rowId
+          ? {
+              ...row,
+              receiptPhoto: null,
+              receiptPhotoUrl: "",
+              receiptPhotoPath: "",
+              receiptPhotoName: "",
+            }
+          : row,
+      ),
+    }));
+  };
+
+  const totalFuelPurchasedAmount = useMemo(
+    () => (fieldDailyLogDraft.fuelReceipts || []).reduce((sum, row) => sum + Math.max(0, toNumber(row.totalReceiptAmount, 0)), 0),
+    [fieldDailyLogDraft.fuelReceipts],
+  );
 
   const handleLogin = (event) => {
     event.preventDefault();
@@ -2510,10 +10683,809 @@ function App() {
     setSavedEstimates([]);
     setFieldNotes(DEFAULT_FIELD_NOTES);
     setSavedInspections([]);
+    setFieldDailyLogDraft(createBlankFieldDailyLog(""));
+    setFieldDailyLogs([]);
+    setFieldDailyLogSelectedId("");
+    setFieldDailyLogFilters({
+      dateStart: "",
+      dateEnd: "",
+      job: "",
+      foreman: "",
+      employee: "",
+      status: "all",
+      missingPhotos: false,
+      hasOvertime: false,
+      hasSafetyIncident: false,
+    });
+    setFieldDailyLogReviewSearch("");
+    setFieldOperationsTab("dailyLog");
+    setEmployeeDirectory([]);
+    setEmployeeManagementDraft(createBlankEmployeeRecord());
+    setEmployeeManagementSearch("");
+    setFieldOperationCompanyVehicles([]);
+    setActiveJobs(createSeedActiveJobs());
+    setActiveJobSelectedId("");
+    setActiveJobsSearch("");
+    setActiveJobsFilters({
+      status: "all",
+      contact: "",
+      supervisor: "",
+      riskLevel: "all",
+      startDate: "",
+      customer: "",
+      openIssues: "all",
+      sortBy: "startDate",
+      sortDirection: "asc",
+    });
+    setApprovedJobsSearch("");
+    setApprovedJobsFilters({
+      customer: "",
+      address: "",
+      status: "all",
+      contact: "",
+      startDate: "",
+    });
+    setActiveJobIssueModalOpen(false);
+    setActiveJobIssueDraft(createBlankActiveJobIssue());
+    setActiveJobIssueResponse("");
+    setProposals([]);
+    setProposalSelectedId("");
+    setProposalSearch("");
+    setProposalFilters({
+      status: "all",
+      customer: "",
+      address: "",
+      salesperson: "",
+      sortBy: "updatedAt",
+      sortDirection: "desc",
+    });
+    setProposalDraft(createBlankProposal());
+    setSelectedCfoCard("");
+    setCfoDashboardFilters({
+      search: "",
+      dateFrom: "",
+      dateTo: "",
+      customer: "",
+      supplier: "",
+      subcontractor: "",
+      job: "",
+      currentOverdue: "all",
+      agingBucket: "all",
+      status: "all",
+      sortBy: "lastUpdated",
+      sortDirection: "desc",
+    });
+    setQuickMeasureReport(null);
+    setQuickMeasureStatus("");
+    setQuickMeasureIsProcessing(false);
     setNextEstimateNumber(1);
     setActiveTemplate("dashboard");
     setInspectionTemplateChooserOpen(false);
     setSessionMessage("Signed out.");
+  };
+
+  const resetFieldDailyLogDraft = (preserveForeman = true) => {
+    setFieldDailyLogDraft((current) =>
+      createBlankFieldDailyLog(
+        preserveForeman ? current.foreman || authUser?.displayName || "" : authUser?.displayName || "",
+      ),
+    );
+    setFieldOperationsTab("dailyLog");
+  };
+
+  const handleFieldDailyLogFieldChange = (key, value) => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const handleAddFieldDailyLogCrewRow = () => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      crewRows: [...(current.crewRows || []), createBlankFieldDailyLogCrewRow()],
+    }));
+  };
+
+  const handleRemoveFieldDailyLogCrewRow = (rowId) => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      crewRows: (current.crewRows || []).filter((row) => row.id !== rowId),
+    }));
+  };
+
+  const handleFieldDailyLogCrewRowChange = (rowId, key, value) => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      crewRows: (current.crewRows || []).map((row) => {
+        if (row.id !== rowId) return row;
+        const nextRow = { ...row, [key]: value };
+        if (key === "employeeLookupId") {
+          const matchedEmployee = employeeDirectory.find((employee) => employee.id === value) || null;
+          nextRow.employeeLookupId = value;
+          nextRow.employeeName =
+            matchedEmployee?.displayName ||
+            [matchedEmployee?.firstName, matchedEmployee?.lastName].filter(Boolean).join(" ").trim() ||
+            (value ? nextRow.employeeName : "") ||
+            "";
+          nextRow.employeeId = matchedEmployee?.employeeNumber || nextRow.employeeId || "";
+          nextRow.role = matchedEmployee?.occupation || nextRow.role || "";
+        }
+        return nextRow;
+      }),
+    }));
+  };
+
+  const startNewEmployeeDraft = () => {
+    setEmployeeManagementDraft(createBlankEmployeeRecord());
+  };
+
+  const editEmployeeRecord = (employee) => {
+    setEmployeeManagementDraft(normalizeEmployeeRecord(employee));
+  };
+
+  const updateEmployeeDraftField = (key, value) => {
+    setEmployeeManagementDraft((current) => {
+      const next = { ...current, [key]: value };
+      if (key === "firstName" || key === "lastName") {
+        next.displayName = buildEmployeeDisplayName(next);
+      }
+      if (key === "displayName") {
+        next.displayName = String(value || "");
+      }
+      return next;
+    });
+  };
+
+  const saveEmployeeDraft = async () => {
+    if (!authUser?.key) return;
+    const normalized = normalizeEmployeeRecord(employeeManagementDraft);
+    if (!normalized.displayName) {
+      setSessionMessageType("error");
+      setSessionMessage("Enter at least a first name or display name before saving.");
+      return;
+    }
+
+    const nextEmployees = [...employeeDirectory.filter((employee) => employee.id !== normalized.id), normalized].sort(
+      (a, b) => toNumber(a.displayOrder, 0) - toNumber(b.displayOrder, 0),
+    );
+    setEmployeeDirectory(nextEmployees);
+    setEmployeeManagementDraft(normalized);
+    setSessionMessageType("success");
+    setSessionMessage(`Saved employee: ${normalized.displayName || "Employee"}`);
+
+    const result = await upsertEmployeeToSupabase(normalized, authUser.key);
+    if (result?.error) {
+      console.warn("Employee save sync failed:", result.error.message || result.error);
+      setSessionMessageType("error");
+      setSessionMessage(`Saved locally, but Supabase sync failed: ${result.error.message || result.error}`);
+    }
+  };
+
+  const crmActiveStaffOptions = useMemo(
+    () =>
+      employeeDirectory
+        .filter((employee) => employee.isActive)
+        .map((employee) => ({
+          value: employee.id,
+          label: [
+            employee.displayName || buildEmployeeDisplayName(employee) || "Unnamed employee",
+            employee.department ? `${employee.department}` : "",
+            employee.isForeman ? "Foreman" : "",
+          ]
+            .filter(Boolean)
+            .join(" • "),
+        })),
+    [employeeDirectory],
+  );
+
+  const crmSelectedCustomer = useMemo(
+    () => crmCustomers.find((customer) => customer.id === crmSelectedCustomerId) || null,
+    [crmCustomers, crmSelectedCustomerId],
+  );
+
+  const crmLeadDisplayName = (lead = {}) =>
+    [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim() ||
+    lead.companyName ||
+    lead.propertyAddress ||
+    "Untitled lead";
+
+  const crmCustomerDisplayName = (customer = {}) =>
+    customer.customerName ||
+    [customer.firstName, customer.lastName].filter(Boolean).join(" ").trim() ||
+    customer.companyName ||
+    "Untitled customer";
+
+  const addCrmLeadHistory = (lead, label, note = "", changedBy = authUser?.displayName || "") => {
+    const entry = {
+      id: createFieldDailyLogId(),
+      label,
+      note,
+      createdAt: new Date().toISOString(),
+      createdBy: changedBy,
+    };
+    return {
+      ...lead,
+      history: [...(Array.isArray(lead.history) ? lead.history : []), entry],
+      lastActivityDate: entry.createdAt,
+      updatedAt: entry.createdAt,
+    };
+  };
+
+  const startNewCrmLeadDraft = () => {
+    setCrmLeadDraft(createBlankCrmLead());
+    setCrmLeadEditingId("");
+    setCrmTab("newLead");
+  };
+
+  const editCrmLead = (lead) => {
+    const normalized = normalizeCrmLead(lead);
+    setCrmLeadDraft(normalized);
+    setCrmLeadEditingId(normalized.id);
+    setCrmTab("newLead");
+  };
+
+  const updateCrmLeadDraftField = (key, value) => {
+    setCrmLeadDraft((current) => ({
+      ...current,
+      [key]: value,
+      updatedAt: new Date().toISOString(),
+    }));
+  };
+
+  const saveCrmLeadDraft = (statusMessage = "Saved lead.") => {
+    const normalized = normalizeCrmLead(crmLeadDraft);
+    if (!normalized.firstName && !normalized.lastName && !normalized.companyName) {
+      setSessionMessageType("error");
+      setSessionMessage("Enter a lead name or company before saving.");
+      return null;
+    }
+
+    const assignedStaff = crmActiveStaffOptions.find((item) => item.value === normalized.assignedStaffId);
+    const leadWithHistory = addCrmLeadHistory(
+      normalized,
+      normalized.leadStatus || "Lead updated",
+      `${crmLeadDisplayName(normalized)} · ${normalized.propertyAddress || "No address"}`,
+    );
+    const nextLead = {
+      ...leadWithHistory,
+      assignedStaffId: assignedStaff?.value || normalized.assignedStaffId || "",
+      updatedAt: new Date().toISOString(),
+    };
+
+    setCrmLeads((current) => {
+      const next = [...current.filter((lead) => lead.id !== nextLead.id), nextLead];
+      return next.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+    });
+    setCrmLeadDraft(nextLead);
+    setCrmLeadEditingId(nextLead.id);
+    setSessionMessageType("success");
+    setSessionMessage(statusMessage);
+    return nextLead;
+  };
+
+  const handleCrmLeadAction = (action) => {
+    const saved = saveCrmLeadDraft();
+    if (!saved) return;
+    if (action === "scheduleAppointment") {
+      setCrmLeadDraft((current) => ({ ...current, leadStatus: "Appointment Scheduled", appointmentDate: current.appointmentDate || new Date().toISOString().slice(0, 10) }));
+      setSessionMessageType("success");
+      setSessionMessage("Lead marked as Appointment Scheduled.");
+    } else if (action === "createEstimate") {
+      setCrmLeadDraft((current) => ({ ...current, leadStatus: "Estimate in Progress" }));
+      setSessionMessageType("success");
+      setSessionMessage("Lead marked as Estimate in Progress.");
+    }
+  };
+
+  const deleteCrmLead = (leadId) => {
+    setCrmLeads((current) => current.filter((lead) => lead.id !== leadId));
+    if (crmLeadEditingId === leadId) startNewCrmLeadDraft();
+  };
+
+  const convertCrmLeadToCustomer = () => {
+    const savedLead = saveCrmLeadDraft("Lead saved and ready to convert.");
+    if (!savedLead) return;
+    const customerName = [savedLead.firstName, savedLead.lastName].filter(Boolean).join(" ").trim() || savedLead.companyName || savedLead.propertyAddress || "New customer";
+    const nextCustomer = normalizeCrmCustomer({
+      ...createBlankCrmCustomer(),
+      id: savedLead.convertedCustomerId || createFieldDailyLogId(),
+      customerName,
+      firstName: savedLead.firstName,
+      lastName: savedLead.lastName,
+      companyName: savedLead.companyName,
+      phone: savedLead.phone,
+      email: savedLead.email,
+      secondaryPhone: savedLead.secondaryPhone,
+      billingAddress: savedLead.propertyAddress,
+      city: savedLead.city,
+      zipCode: savedLead.zipCode,
+      propertyType: savedLead.propertyType,
+      sourceLeadId: savedLead.id,
+      assignedStaffId: savedLead.assignedStaffId,
+      assignedStaffName: crmActiveStaffOptions.find((item) => item.value === savedLead.assignedStaffId)?.label || "",
+      nextFollowUpDate: savedLead.nextFollowUpDate,
+      properties: [
+        normalizeCrmProperty({
+          propertyName: savedLead.companyName || customerName,
+          propertyAddress: savedLead.propertyAddress,
+          city: savedLead.city,
+          zipCode: savedLead.zipCode,
+          propertyType: savedLead.propertyType,
+          roofType: savedLead.roofType,
+          approximateRoofSize: savedLead.approximateRoofSize,
+          notes: savedLead.description,
+        }),
+      ],
+      contacts: [
+        normalizeCrmContact({
+          name: customerName,
+          role: "Primary contact",
+          phone: savedLead.phone,
+          email: savedLead.email,
+          isPrimary: true,
+        }),
+      ],
+      timeline: [
+        normalizeCrmTimelineEntry({
+          label: "Lead converted",
+          summary: `${customerName} converted from lead`,
+          details: savedLead.description || "Converted from CRM / Leads",
+          createdBy: authUser?.displayName || "",
+        }),
+        ...(savedLead.history || []).map((entry) =>
+          normalizeCrmTimelineEntry({
+            ...entry,
+            label: entry.label || "Lead activity",
+          }),
+        ),
+      ],
+      files: [],
+      notes: savedLead.internalNotes || savedLead.description || "",
+    });
+
+    setCrmCustomers((current) => {
+      const next = [...current.filter((customer) => customer.id !== nextCustomer.id), nextCustomer];
+      return next.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+    });
+    setCrmSelectedCustomerId(nextCustomer.id);
+    setCrmCustomerDraft(nextCustomer);
+    setCrmLeadDraft({ ...savedLead, convertedCustomerId: nextCustomer.id, leadStatus: "Approved", updatedAt: new Date().toISOString() });
+    setCrmLeads((current) =>
+      current.map((lead) => (lead.id === savedLead.id ? { ...lead, convertedCustomerId: nextCustomer.id, leadStatus: "Approved", updatedAt: new Date().toISOString() } : lead)),
+    );
+    setCrmTab("customers");
+    setSessionMessageType("success");
+    setSessionMessage("Lead converted to customer.");
+  };
+
+  const startNewCrmCustomerDraft = () => {
+    setCrmCustomerDraft(createBlankCrmCustomer());
+    setCrmCustomerEditingId("");
+    setCrmSelectedCustomerId("");
+  };
+
+  const editCrmCustomer = (customer) => {
+    const normalized = normalizeCrmCustomer(customer);
+    setCrmCustomerDraft(normalized);
+    setCrmCustomerEditingId(normalized.id);
+    setCrmSelectedCustomerId(normalized.id);
+  };
+
+  const updateCrmCustomerDraftField = (key, value) => {
+    setCrmCustomerDraft((current) => ({
+      ...current,
+      [key]: value,
+      updatedAt: new Date().toISOString(),
+    }));
+  };
+
+  const saveCrmCustomerDraft = (statusMessage = "Saved customer.") => {
+    const normalized = normalizeCrmCustomer({
+      ...crmCustomerDraft,
+      customerName:
+        crmCustomerDraft.customerName ||
+        [crmCustomerDraft.firstName, crmCustomerDraft.lastName].filter(Boolean).join(" ").trim() ||
+        crmCustomerDraft.companyName ||
+        "",
+    });
+    if (!normalized.customerName) {
+      setSessionMessageType("error");
+      setSessionMessage("Enter a customer name before saving.");
+      return null;
+    }
+    const nextCustomer = {
+      ...normalized,
+      updatedAt: new Date().toISOString(),
+    };
+    setCrmCustomers((current) => {
+      const next = [...current.filter((customer) => customer.id !== nextCustomer.id), nextCustomer];
+      return next.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+    });
+    setCrmCustomerDraft(nextCustomer);
+    setCrmCustomerEditingId(nextCustomer.id);
+    setCrmSelectedCustomerId(nextCustomer.id);
+    setSessionMessageType("success");
+    setSessionMessage(statusMessage);
+    return nextCustomer;
+  };
+
+  const updateCrmCustomerArrayField = (field, updater) => {
+    setCrmCustomerDraft((current) => ({
+      ...current,
+      [field]: typeof updater === "function" ? updater(current[field] || []) : updater,
+      updatedAt: new Date().toISOString(),
+    }));
+  };
+
+  const addCrmPropertyToCustomer = () => {
+    updateCrmCustomerArrayField("properties", (current) => [...current, createBlankCrmProperty()]);
+  };
+
+  const updateCrmPropertyField = (propertyId, key, value) => {
+    updateCrmCustomerArrayField("properties", (current) =>
+      current.map((property) => (property.id === propertyId ? { ...property, [key]: value } : property)),
+    );
+  };
+
+  const removeCrmProperty = (propertyId) => {
+    updateCrmCustomerArrayField("properties", (current) => current.filter((property) => property.id !== propertyId));
+  };
+
+  const addCrmContactToCustomer = () => {
+    updateCrmCustomerArrayField("contacts", (current) => [...current, createBlankCrmContact()]);
+  };
+
+  const updateCrmContactField = (contactId, key, value) => {
+    updateCrmCustomerArrayField("contacts", (current) => current.map((contact) => (contact.id === contactId ? { ...contact, [key]: value } : contact)));
+  };
+
+  const removeCrmContact = (contactId) => {
+    updateCrmCustomerArrayField("contacts", (current) => current.filter((contact) => contact.id !== contactId));
+  };
+
+  const addCrmJobToCustomer = () => {
+    updateCrmCustomerArrayField("jobs", (current) => [...current, createBlankCrmJob()]);
+  };
+
+  const updateCrmJobField = (jobId, key, value) => {
+    updateCrmCustomerArrayField("jobs", (current) => current.map((job) => (job.id === jobId ? { ...job, [key]: value } : job)));
+  };
+
+  const removeCrmJob = (jobId) => {
+    updateCrmCustomerArrayField("jobs", (current) => current.filter((job) => job.id !== jobId));
+  };
+
+  const addCrmTimelineEntry = () => {
+    const timelineEntry = createBlankCrmTimelineEntry();
+    updateCrmCustomerArrayField("timeline", (current) => [...current, timelineEntry]);
+  };
+
+  const updateCrmTimelineField = (timelineId, key, value) => {
+    updateCrmCustomerArrayField("timeline", (current) =>
+      current.map((entry) => (entry.id === timelineId ? { ...entry, [key]: value } : entry)),
+    );
+  };
+
+  const removeCrmTimelineEntry = (timelineId) => {
+    updateCrmCustomerArrayField("timeline", (current) => current.filter((entry) => entry.id !== timelineId));
+  };
+
+  const handleCrmCustomerFileUpload = (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    updateCrmCustomerArrayField("files", (current) => [
+      ...current,
+      ...files.map((file) =>
+        normalizeCrmFile({
+          fileName: file.name,
+          category: "Other",
+          uploadedAt: new Date().toISOString(),
+          uploadedBy: authUser?.displayName || "",
+          notes: "Uploaded locally",
+        }),
+      ),
+    ]);
+    event.target.value = "";
+  };
+
+  const removeCrmFile = (fileId) => {
+    updateCrmCustomerArrayField("files", (current) => current.filter((file) => file.id !== fileId));
+  };
+
+  const updateCrmFollowupDraftField = (key, value) => {
+    setCrmFollowupDraft((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const startNewCrmFollowupDraft = () => {
+    setCrmFollowupDraft(createBlankCrmFollowup());
+    setCrmFollowupEditingId("");
+  };
+
+  const editCrmFollowup = (followup) => {
+    const normalized = normalizeCrmFollowup(followup);
+    setCrmFollowupDraft(normalized);
+    setCrmFollowupEditingId(normalized.id);
+  };
+
+  const saveCrmFollowupDraft = () => {
+    const normalized = normalizeCrmFollowup(crmFollowupDraft);
+    if (!normalized.title.trim() || !normalized.dueDate) {
+      setSessionMessageType("error");
+      setSessionMessage("Enter a follow-up title and due date.");
+      return null;
+    }
+    const nextFollowup = {
+      ...normalized,
+      updatedAt: new Date().toISOString(),
+    };
+    setCrmFollowups((current) => {
+      const next = [...current.filter((followup) => followup.id !== nextFollowup.id), nextFollowup];
+      return next.sort((a, b) => String(a.dueDate || a.createdAt || "").localeCompare(String(b.dueDate || b.createdAt || "")));
+    });
+    setCrmFollowupDraft(nextFollowup);
+    setCrmFollowupEditingId(nextFollowup.id);
+    setSessionMessageType("success");
+    setSessionMessage("Saved follow-up task.");
+    return nextFollowup;
+  };
+
+  const deleteCrmFollowup = (followupId) => {
+    setCrmFollowups((current) => current.filter((followup) => followup.id !== followupId));
+    if (crmFollowupEditingId === followupId) startNewCrmFollowupDraft();
+  };
+
+  const handleAddFieldDailyLogMaterialRow = () => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      materialsRows: [...(current.materialsRows || []), createBlankFieldDailyLogMaterialRow()],
+    }));
+  };
+
+  const handleRemoveFieldDailyLogMaterialRow = (rowId) => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      materialsRows: (current.materialsRows || []).filter((row) => row.id !== rowId),
+    }));
+  };
+
+  const handleFieldDailyLogMaterialRowChange = (rowId, key, value) => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      materialsRows: (current.materialsRows || []).map((row) => (row.id === rowId ? { ...row, [key]: value } : row)),
+    }));
+  };
+
+  const handleFieldDailyLogPhotoUpload = async (category, event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+
+    const uploaded = [];
+    for (const file of files) {
+      const photoData = await uploadFieldDailyLogPhotoToStorage(file, authUser?.key || "guest", fieldDailyLogDraft.id, category);
+      uploaded.push(
+        normalizeFieldDailyLogPhotoRow({
+          photoCategory: category,
+          fileName: photoData.fileName || file.name || "",
+          storagePath: photoData.storagePath || "",
+          photoUrl: photoData.photoUrl || "",
+          uploadedAt: new Date().toISOString(),
+          uploadedBy: authUser?.displayName || authUser?.key || "",
+          deviceIdentifier: fieldOperationsDeviceId,
+        }),
+      );
+    }
+
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      photos: [...(current.photos || []), ...uploaded],
+    }));
+    event.target.value = "";
+  };
+
+  const handleRemoveFieldDailyLogPhoto = (photoId) => {
+    setFieldDailyLogDraft((current) => ({
+      ...current,
+      photos: (current.photos || []).filter((photo) => photo.id !== photoId),
+    }));
+  };
+
+  const persistFieldDailyLog = async (status = "draft") => {
+    if (!authUser?.key) {
+      setSessionMessageType("error");
+      setSessionMessage("Please sign in before saving a daily log.");
+      return { ok: false };
+    }
+
+    const nextDraft = normalizeFieldDailyLogDraft(
+      {
+        ...fieldDailyLogDraft,
+        status,
+        submittedAt: status === "submitted" ? fieldDailyLogDraft.submittedAt || new Date().toISOString() : "",
+        submittedBy: status === "submitted" ? fieldDailyLogDraft.submittedBy || authUser.displayName || authUser.key : "",
+        deviceIdentifier: fieldOperationsDeviceId,
+        crewRows: fieldDailyLogDraft.crewRows && fieldDailyLogDraft.crewRows.length ? fieldDailyLogDraft.crewRows : [createBlankFieldDailyLogCrewRow()],
+        materialsRows: fieldDailyLogDraft.materialsRows && fieldDailyLogDraft.materialsRows.length ? fieldDailyLogDraft.materialsRows : [],
+        vehicleRows: fieldDailyLogDraft.vehicleRows && fieldDailyLogDraft.vehicleRows.length ? fieldDailyLogDraft.vehicleRows : [createBlankFieldDailyLogVehicleRow()],
+        fuelReceipts: fieldDailyLogDraft.fuelReceipts || [],
+      },
+      authUser.displayName || "",
+    );
+    const totals = calculateFieldDailyLogTotals(nextDraft);
+    const photosHaveRequiredCoverage = fieldDailyLogHasProgressOrCompletedPhoto(nextDraft);
+    const invalidMileageRow = (nextDraft.vehicleRows || []).find((row) => toNumber(row.endingMileage, 0) < toNumber(row.startingMileage, 0));
+    if (status === "submitted" && !photosHaveRequiredCoverage) {
+      setSessionMessageType("error");
+      setSessionMessage("Add at least one progress or completed-work photo before submission.");
+      return { ok: false };
+    }
+    if (status === "submitted" && invalidMileageRow) {
+      setSessionMessageType("error");
+      setSessionMessage("Ending mileage cannot be less than starting mileage.");
+      return { ok: false };
+    }
+
+    const nextLog = {
+      ...nextDraft,
+      status,
+      submittedAt: status === "submitted" ? nextDraft.submittedAt || new Date().toISOString() : "",
+      submittedBy: status === "submitted" ? nextDraft.submittedBy || authUser.displayName || authUser.key : "",
+      deviceIdentifier: fieldOperationsDeviceId,
+      totalRegularHours: totals.totalRegularHours,
+      totalOvertimeHours: totals.totalOvertimeHours,
+      totalDoubleTimeHours: totals.totalDoubleTimeHours,
+      totalCrewHours: totals.totalCrewHours,
+      vehicleMilesDriven: totals.vehicleMilesDriven,
+      totalFuelReceipts: totals.totalFuelReceipts,
+      totalFuelGallons: totals.totalFuelGallons,
+      calculatedLunchDurationHours: totals.calculatedLunchDurationHours,
+      calculatedTimeOnSiteHours: totals.calculatedTimeOnSiteHours,
+      highMileageCount: totals.highMileageCount,
+      photoCount: totals.photoCount,
+    };
+
+    setSessionMessageType("");
+    setSessionMessage(status === "submitted" ? "Submitting daily log..." : "Saving draft...");
+
+    try {
+      const { error } = await upsertFieldDailyLogToSupabase(nextLog, authUser.key, {
+        submittedBy: authUser.displayName || authUser.key,
+        changedBy: authUser.displayName || authUser.key,
+        deviceIdentifier: fieldOperationsDeviceId,
+        photoCount: totals.photoCount,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      const persistedLog = {
+        ...nextLog,
+        submittedAt: nextLog.submittedAt || (status === "submitted" ? new Date().toISOString() : ""),
+      };
+
+      setFieldDailyLogs((current) => [persistedLog, ...current.filter((item) => item.id !== persistedLog.id)]);
+      if (status === "submitted") {
+        setFieldDailyLogSelectedId(persistedLog.id);
+        resetFieldDailyLogDraft(true);
+        setSessionMessageType("success");
+        setSessionMessage("Daily log submitted and locked.");
+      } else {
+        setFieldDailyLogDraft(nextLog);
+        setSessionMessageType("success");
+        setSessionMessage("Daily log draft saved.");
+      }
+      return { ok: true, log: persistedLog };
+    } catch (error) {
+      console.error("Field daily log save failed:", error);
+      setSessionMessageType("error");
+      setSessionMessage(`Unable to save daily log: ${error?.message || String(error)}`);
+      return { ok: false, error };
+    }
+  };
+
+  const handleSaveFieldDailyLogDraft = () => persistFieldDailyLog("draft");
+
+  const handleSubmitDailyLog = () => persistFieldDailyLog("submitted");
+
+  const handleExportPayrollCsv = () => {
+  const exportRows = fieldDailyLogs
+      .filter((log) => String(log.status || "").toLowerCase() === "submitted")
+      .flatMap((log) => {
+        const crewRows = Array.isArray(log.crewRows) ? log.crewRows : [];
+        return crewRows.map((row) => ({
+          workDate: log.workDate || "",
+          jobNumber: log.jobNumber || "",
+          jobName: log.jobName || "",
+          employeeName: row.employeeName || "",
+          employeeId: row.employeeId || "",
+          startTime: row.startTime || "",
+          endTime: row.endTime || "",
+          lunchDuration: num(row.lunchDurationHours, 2),
+          regularHours: num(row.regularHours, 2),
+          overtimeHours: num(row.overtimeHours, 2),
+          doubleTimeHours: num(row.doubleTimeHours, 2),
+          foreman: log.foreman || "",
+          logId: log.id || "",
+        }));
+      });
+
+    const header = [
+      "Work date",
+      "Job number",
+      "Job name",
+      "Employee name",
+      "Employee ID",
+      "Start time",
+      "End time",
+      "Lunch duration",
+      "Regular hours",
+      "Overtime hours",
+      "Double-time hours",
+      "Foreman",
+      "Log ID",
+    ];
+    const csv = [
+      header.join(","),
+      ...exportRows.map((row) =>
+        [
+          row.workDate,
+          row.jobNumber,
+          row.jobName,
+          row.employeeName,
+          row.employeeId,
+          row.startTime,
+          row.endTime,
+          row.lunchDuration,
+          row.regularHours,
+          row.overtimeHours,
+          row.doubleTimeHours,
+          row.foreman,
+          row.logId,
+        ]
+          .map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`)
+          .join(","),
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `field-operations-payroll-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+    setSessionMessageType("success");
+    setSessionMessage("Payroll CSV exported.");
+  };
+
+  const handleOpenFieldDailyLogReview = (logId) => {
+    setFieldOperationsTab("officeReview");
+    setFieldDailyLogSelectedId(logId);
+  };
+
+  const handleFieldDailyLogFilterChange = (key, value) => {
+    setFieldDailyLogFilters((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const handleClearEstimate = () => {
+    setInputs(DEFAULT_INPUTS);
+    setPrices({ ...DEFAULT_MATERIAL_PRICES });
+    setEstimateName("");
+    setFieldNotes(DEFAULT_FIELD_NOTES);
+    setQuickMeasureReport(null);
+    setQuickMeasureStatus("");
+    setTravelLookupMessage("");
+    setSessionMessageType("success");
+    setSessionMessage("Estimate cleared.");
   };
 
   const handleSaveEstimate = async () => {
@@ -2529,6 +11501,22 @@ function App() {
     const estimateNumber = nextEstimateNumber;
     const estimateCodeValue = estimateCode(estimateNumber);
     const status = String(inputs.estimateStatus || "draft").toLowerCase();
+    const savedQuickMeasureReport = quickMeasureReport
+      ? {
+          fileName: quickMeasureReport.fileName || "",
+          uploadedAt: quickMeasureReport.uploadedAt || "",
+          pageCount: quickMeasureReport.pageCount || 0,
+          fields: quickMeasureReport.fields || {},
+          appliedTo: quickMeasureReport.appliedTo || "",
+          appliedAt: quickMeasureReport.appliedAt || "",
+          appliedValues: quickMeasureReport.appliedValues || {},
+        }
+      : null;
+    const savedInputs = {
+      ...inputs,
+      estimateType: estimateTypeForTemplate(activeTemplate),
+      quickMeasureReport: savedQuickMeasureReport,
+    };
 
     const savedEstimate = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -2538,13 +11526,39 @@ function App() {
       name: currentEstimateName,
       savedAt: new Date().toISOString(),
       status,
-      inputs,
+      quickMeasureReport: savedQuickMeasureReport,
+      inputs: savedInputs,
       prices,
       summary: {
-        totalSquares: calculation.scope.totalSquares,
+        totalSquares: calculation?.scope?.totalSquares ?? calculation?.totalSquares ?? calculation?.tileTotalRoofSquares ?? calculation?.productionSquares ?? calculation?.totalRoofSquares ?? 0,
+        foamMaterialCost: calculation.foamMaterialCost,
+        dripEdgeRequired: calculation.dripEdgeRequired,
+        foamStopDripEdgeCost: calculation.foamStopDripEdgeCost,
+        foamKitsNeeded: calculation.foamKitsNeeded,
+        yieldPerKitAtSelectedThickness: calculation.yieldPerKitAtSelectedThickness,
+        selectedFoamThicknessInches: calculation.selectedFoamThicknessInches,
         materialPricingCost: calculation.materialPricingCost,
         materialCost: calculation.materialCost,
+        totalDetailMaterialCost: calculation.totalDetailMaterialCost,
+        detailMaterialItems: calculation.detailMaterialItems,
+        equipmentRentalItems: calculation.equipmentRentalItems,
+        equipmentRentalTotal: calculation.equipmentRentalTotal,
+        rooftopDeliveryFee: calculation.rooftopDeliveryFee,
+        skylightCurbLumberOrderItem: calculation.skylightCurbLumberOrderItem,
+        skylightCurbLumberBoardQuantity: calculation.skylightCurbLumberBoardQuantity,
+        skylightCurbLumberBoardUnitCost: calculation.skylightCurbLumberBoardUnitCost,
         laborCost: calculation.laborCost,
+        prevailingWageJob: calculation.prevailingWageJob,
+        prevailingWageHourlyRate: calculation.prevailingWageHourlyRate,
+        prevailingWageCrewSize: calculation.prevailingWageCrewSize,
+        prevailingWageHoursPerDay: calculation.prevailingWageHoursPerDay,
+        prevailingWageJobDays: calculation.prevailingWageJobDays,
+        prevailingWageLaborCost: calculation.prevailingWageLaborCost,
+        lodgingNeeded: calculation.lodgingNeeded,
+        lodgingName: calculation.lodgingName,
+        nightlyLodgingCost: calculation.nightlyLodgingCost,
+        lodgingNights: calculation.lodgingNights,
+        lodgingTotal: calculation.lodgingTotal,
         overheadOperatingCost: calculation.overheadOperatingCost,
         totalCostBeforeProfit: calculation.totalCostBeforeProfit,
         totalCost: calculation.totalCost,
@@ -2552,13 +11566,14 @@ function App() {
         selectedBidAmount: calculation.selectedBidAmount,
         selectedPricePerSq: calculation.selectedPricePerSq,
         selectedProfitDollars: calculation.selectedProfitDollars,
+        quickMeasureReport: savedQuickMeasureReport,
       },
     };
 
     try {
           const { data, error } = await upsertEstimateToSupabase(
         savedEstimate,
-        inputs,
+        savedInputs,
         prices,
         savedEstimate.summary,
         calculation,
@@ -2621,6 +11636,7 @@ function App() {
     setInputs(normalizeDraftInputs(estimate.inputs || DEFAULT_INPUTS));
     setPrices(estimate.prices || prices);
     setEstimateName(estimate.name || "");
+    setQuickMeasureReport(estimate.quickMeasureReport || estimate.inputs?.quickMeasureReport || null);
     const typeKey = String(estimate.estimateType || "").trim().toLowerCase();
     const templateKey =
       typeKey === "tpo"
@@ -2749,19 +11765,1322 @@ function App() {
     setSessionMessage("Saved estimate deleted.");
   };
 
+  const handleCompleteJob = (estimate) => {
+    if (!estimate) return;
+    setInputs(normalizeDraftInputs(estimate.inputs || DEFAULT_INPUTS));
+    setPrices(estimate.prices || prices);
+    setEstimateName(estimate.name || "");
+    setQuickMeasureReport(estimate.quickMeasureReport || estimate.inputs?.quickMeasureReport || null);
+    handleOpenMetricsForm(estimate);
+  };
+
+  const handleOpenMetricsForm = (estimate) => {
+    if (!estimate) return;
+    const existingMetrics = completedJobMetrics.find((m) => m.estimate_id === estimate.id);
+    setSelectedMetricsEstimate(estimate);
+    setMetricsFormData(
+      existingMetrics || {
+        estimateId: estimate.id,
+        localEstimateId: estimate.id,
+        estimateCode: estimate.estimateCode,
+        jobName: estimate.inputs?.jobName || "",
+        customerName: estimate.inputs?.customerName || "",
+        roofType: estimate.inputs?.roofType || estimate.summary?.roofType || estimate.estimateType || buildEstimateRoofType(estimate.inputs || {}),
+        totalSquares: estimate.summary?.totalSquares || estimate.inputs?.totalSquares || 0,
+        estimateFinalBid: estimate.summary?.selectedBidAmount || 0,
+        estimateMaterialCost: estimate.summary?.materialCost || 0,
+        estimateLaborCost: estimate.summary?.laborCost || 0,
+        estimateTravelCost: estimate.summary?.travelCost || 0,
+        actualMaterialCost: existingMetrics?.actual_material_cost || 0,
+        actualLaborCost: existingMetrics?.actual_labor_cost || 0,
+        actualLaborHours: existingMetrics?.actual_labor_hours || 0,
+        actualTravelCost: existingMetrics?.actual_travel_cost || 0,
+        changeOrders: existingMetrics?.change_orders || 0,
+        finalInvoiceAmount: existingMetrics?.final_invoice_amount || 0,
+        actualProfit: existingMetrics?.actual_profit || 0,
+        actualMarginPercent: existingMetrics?.actual_margin_percent || 0,
+        notes: existingMetrics?.notes || "",
+        lessonsLearned: existingMetrics?.lessons_learned || "",
+      }
+    );
+    setActiveTemplate("jobMetrics");
+  };
+
+  const handleMetricsFormChange = (key, value) => {
+    setMetricsFormData((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const handleSaveMetrics = async () => {
+    if (!authUser?.key || !metricsFormData) {
+      setSessionMessageType("error");
+      setSessionMessage("Please sign in and select an estimate.");
+      return;
+    }
+
+    setSessionMessageType("");
+    setSessionMessage("Saving job metrics...");
+
+    const profitAmount = toNumber(metricsFormData.finalInvoiceAmount) - toNumber(metricsFormData.actualMaterialCost) - toNumber(metricsFormData.actualLaborCost) - toNumber(metricsFormData.actualTravelCost);
+    const marginPercent = toNumber(metricsFormData.finalInvoiceAmount) > 0 ? round((profitAmount / toNumber(metricsFormData.finalInvoiceAmount)) * 100, 1) : 0;
+
+    const metricsPayload = {
+      ...metricsFormData,
+      actualProfit: profitAmount,
+      actualMarginPercent: marginPercent,
+    };
+
+    try {
+      const { error } = await upsertCompletedJobMetricsToSupabase(metricsPayload, authUser.key);
+
+      if (error) {
+        const cloudErrorMessage = error.message || String(error);
+        console.warn("Metrics save failed:", cloudErrorMessage);
+        setSessionMessageType("error");
+        setSessionMessage(`Metrics save failed: ${cloudErrorMessage}`);
+      } else {
+        setSessionMessageType("success");
+        setSessionMessage("Completed job saved.");
+        const { data: metricsData } = await fetchCompletedJobMetricsFromSupabase(authUser.key);
+        if (metricsData) setCompletedJobMetrics(metricsData);
+      }
+    } catch (error) {
+      console.error("handleSaveMetrics failed:", error);
+      setSessionMessageType("error");
+      setSessionMessage(`Save failed: ${error?.message || String(error)}`);
+    }
+  };
+
+  const createBlankEmployeeRow = () => ({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    employeeName: "",
+    hoursWorked: 0,
+    hourlyRate: 0,
+  });
+
+  const createBlankMaterialItem = () => ({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    description: "",
+    quantity: 0,
+    unitCost: 0,
+  });
+
+  const createBlankDailyProgress = () => ({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    date: new Date().toISOString().slice(0, 10),
+    crewSize: 0,
+    employeeRows: [createBlankEmployeeRow()],
+    materialsUsed: [createBlankMaterialItem()],
+    notes: "",
+    issues: "",
+  });
+
+  const calculateApprovedJobTotals = (logs) => {
+    const totals = {
+      totalActualLaborHours: 0,
+      totalActualLaborCost: 0,
+      totalJobDays: logs.length,
+      totalMaterialCost: 0,
+      runningActualCost: 0,
+      laborLog: [],
+      materialUsageLog: [],
+    };
+
+    logs.forEach((day) => {
+      (day.employeeRows || []).forEach((employee) => {
+        const hours = toNumber(employee.hoursWorked);
+        const rate = toNumber(employee.hourlyRate);
+        const cost = hours * rate;
+        totals.totalActualLaborHours += hours;
+        totals.totalActualLaborCost += cost;
+        totals.laborLog.push({
+          dayId: day.id,
+          date: day.date,
+          employeeName: employee.employeeName,
+          hoursWorked: hours,
+          hourlyRate: rate,
+          laborCost: cost,
+        });
+      });
+      (day.materialsUsed || []).forEach((material) => {
+        const quantity = toNumber(material.quantity);
+        const unitCost = toNumber(material.unitCost);
+        const cost = quantity * unitCost;
+        totals.totalMaterialCost += cost;
+        totals.materialUsageLog.push({
+          dayId: day.id,
+          date: day.date,
+          description: material.description,
+          quantity,
+          unitCost,
+          totalCost: cost,
+        });
+      });
+    });
+
+    totals.runningActualCost = totals.totalActualLaborCost + totals.totalMaterialCost;
+    return totals;
+  };
+
+  const handleApproveJob = (estimate) => {
+    if (!estimate) return;
+    const existingJob = completedJobs.find((job) => job.estimateId === estimate.id || job.id === estimate.id);
+    const baseJob = existingJob || {
+      estimateId: estimate.id,
+      localEstimateId: estimate.id,
+      estimateCode: estimate.estimateCode,
+      jobName: estimate.inputs?.jobName || "",
+      customerName: estimate.inputs?.customerName || "",
+      roofType: estimate.inputs?.roofType || estimate.summary?.roofType || buildEstimateRoofType(estimate.inputs),
+      totalSquares: estimate.summary?.totalSquares || estimate.inputs?.totalSquares || 0,
+      approvedBidAmount: estimate.summary?.selectedBidAmount || 0,
+      status: "approved",
+    };
+
+    setSelectedApprovedJob(estimate);
+    setApprovedJobData({ ...baseJob, status: baseJob.status || "approved" });
+    setApprovedDailyProgressLogs(existingJob?.dailyProgressLog || []);
+    setActiveTemplate("approvedJob");
+  };
+
+  const handleOpenApprovedJob = (job) => {
+    if (!job) return;
+    const matchingEstimate = savedEstimates.find((estimate) => estimate.id === job.estimateId || estimate.id === job.id);
+    const data = {
+      estimateId: job.estimateId || job.id,
+      localEstimateId: job.localEstimateId || job.id,
+      estimateCode: job.estimateCode,
+      jobName: job.jobName || matchingEstimate?.inputs?.jobName || "",
+      customerName: job.customerName || matchingEstimate?.inputs?.customerName || "",
+      roofType: job.roofType || matchingEstimate?.summary?.roofType || buildEstimateRoofType(matchingEstimate?.inputs || {}),
+      totalSquares: job.squareCount || matchingEstimate?.summary?.totalSquares || 0,
+      approvedBidAmount: job.finalBid || matchingEstimate?.summary?.selectedBidAmount || 0,
+      status: job.status || "approved",
+    };
+    setSelectedApprovedJob(matchingEstimate || job);
+    setApprovedJobData(data);
+    setApprovedDailyProgressLogs(job.dailyProgressLog || []);
+    setActiveTemplate("approvedJob");
+  };
+
+  const handleApprovedJobFormChange = (key, value) => {
+    setApprovedJobData((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const handleAddDailyProgressDay = () => {
+    setApprovedDailyProgressLogs((current) => [...current, createBlankDailyProgress()]);
+  };
+
+  const handleDeleteDailyProgressDay = (dayId) => {
+    setApprovedDailyProgressLogs((current) => current.filter((day) => day.id !== dayId));
+  };
+
+  const handleDailyProgressFieldChange = (dayId, key, value) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => (day.id === dayId ? { ...day, [key]: value } : day)));
+  };
+
+  const handleAddEmployeeRow = (dayId) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => {
+      if (day.id !== dayId) return day;
+      return { ...day, employeeRows: [...(day.employeeRows || []), createBlankEmployeeRow()] };
+    }));
+  };
+
+  const handleDeleteEmployeeRow = (dayId, rowId) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => {
+      if (day.id !== dayId) return day;
+      return { ...day, employeeRows: (day.employeeRows || []).filter((row) => row.id !== rowId) };
+    }));
+  };
+
+  const handleEmployeeRowChange = (dayId, rowId, key, value) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => {
+      if (day.id !== dayId) return day;
+      return {
+        ...day,
+        employeeRows: (day.employeeRows || []).map((row) => (row.id === rowId ? { ...row, [key]: value } : row)),
+      };
+    }));
+  };
+
+  const handleAddMaterialItem = (dayId) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => {
+      if (day.id !== dayId) return day;
+      return { ...day, materialsUsed: [...(day.materialsUsed || []), createBlankMaterialItem()] };
+    }));
+  };
+
+  const handleRemoveMaterialItem = (dayId, itemId) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => {
+      if (day.id !== dayId) return day;
+      return { ...day, materialsUsed: (day.materialsUsed || []).filter((item) => item.id !== itemId) };
+    }));
+  };
+
+  const handleMaterialItemChange = (dayId, itemId, key, value) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => {
+      if (day.id !== dayId) return day;
+      return {
+        ...day,
+        materialsUsed: (day.materialsUsed || []).map((item) => (item.id === itemId ? { ...item, [key]: value } : item)),
+      };
+    }));
+  };
+
+  const updateActiveJobsFilter = (key, value) => {
+    setActiveJobsFilters((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const updateApprovedJobsFilter = (key, value) => {
+    setApprovedJobsFilters((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const updateProposalFilter = (key, value) => {
+    setProposalFilters((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const openActiveJobDetail = (jobId) => {
+    setActiveJobSelectedId(jobId || "");
+    setActiveTemplate("activeJob");
+  };
+
+  const openApprovedJobDetail = (job) => {
+    if (!job) return;
+    setSelectedApprovedJob(job);
+    setApprovedJobData({
+      estimateId: job.estimateId || job.id,
+      localEstimateId: job.localEstimateId || job.id,
+      estimateCode: job.estimateCode || estimateCode(Number(job.jobNumber || 1)),
+      jobName: job.projectName || job.jobName || "",
+      customerName: job.customerName || "",
+      roofType: job.roofType || "",
+      totalSquares: toNumber(job.squareCount || job.totalSquares || 0),
+      approvedBidAmount: toNumber(job.contractAmount || job.finalBid || 0),
+      status: job.projectStatus || job.status || "Approved",
+      jobAddress: job.projectAddress || job.jobAddress || "",
+      projectContact: job.projectContact || "",
+      fieldSupervisor: job.fieldSupervisor || "",
+      permitStatus: job.permitStatus || "",
+      materialOrderIncomplete: Boolean(job.materialOrderIncomplete),
+      customerDocumentIncomplete: Boolean(job.customerDocumentIncomplete),
+      subcontractorIncomplete: Boolean(job.subcontractorIncomplete),
+      documentsIncomplete: Boolean(job.documentsIncomplete),
+    });
+    setApprovedDailyProgressLogs(job.dailyProgressLog || []);
+    setActiveTemplate("approvedJob");
+  };
+
+  const getProposalSourceEstimate = (proposal = {}) => findEstimateForProposal(proposal, savedEstimates);
+
+  const archiveProposalForCustomer = (proposalRecord = {}, estimate = null, pdfArchive = {}) => {
+    const archivedAt = new Date().toISOString();
+    const archiveEntry = buildProposalArchiveEntryFromProposal(proposalRecord, {
+      ...pdfArchive,
+      archivedAt,
+      updatedAt: proposalRecord.updatedAt || archivedAt,
+    });
+
+    let syncedCustomer = null;
+    setCrmCustomers((current) => {
+      const sourceCustomer = findCrmCustomerForProposal(current, proposalRecord, estimate);
+      const nextCustomer = sourceCustomer
+        ? normalizeCrmCustomer({
+            ...sourceCustomer,
+            proposalArchive: mergeProposalArchiveEntries(sourceCustomer.proposalArchive, archiveEntry),
+            updatedAt: archivedAt,
+          })
+        : createCustomerFromProposal(proposalRecord, estimate, archiveEntry);
+      syncedCustomer = nextCustomer;
+
+      if (sourceCustomer) {
+        return current.map((customer) => (customer.id === sourceCustomer.id ? nextCustomer : customer));
+      }
+      return [nextCustomer, ...current];
+    });
+
+    if (syncedCustomer && (crmSelectedCustomerId === syncedCustomer.id || !crmSelectedCustomerId)) {
+      setCrmCustomerDraft(syncedCustomer);
+      setCrmSelectedCustomerId(syncedCustomer.id);
+    }
+
+    return archiveEntry;
+  };
+
+  const openProposalBuilder = (proposal) => {
+    if (!proposal) return;
+    const sourceEstimate = getProposalSourceEstimate(proposal);
+    const syncedProposal = proposalIsFinalized(proposal) ? normalizeProposalRecord(proposal) : syncProposalWithEstimate(proposal, sourceEstimate, proposalTemplate);
+    setProposalDraft({ ...createBlankProposal(), ...syncedProposal });
+    setProposalSelectedId(syncedProposal.id || proposal.id || "");
+    setActiveTemplate("proposalBuilder");
+  };
+
+  const handleConvertEstimateToProposal = (estimate) => {
+    if (!estimate) return;
+    const proposal = createProposalFromEstimate(estimate, proposalTemplate);
+    const syncedProposal = syncProposalWithEstimate(proposal, estimate, proposalTemplate);
+    setProposals((current) => {
+      const next = [syncedProposal, ...current.filter((item) => item.sourceEstimateId !== syncedProposal.sourceEstimateId || item.version !== syncedProposal.version)];
+      return next;
+    });
+    generateProposalPdfArchive(syncedProposal, { saveToCustomer: true });
+    setProposalDraft(syncedProposal);
+    setProposalSelectedId(syncedProposal.id);
+    setSessionMessageType("success");
+    setSessionMessage("Proposal generated from the estimate.");
+    setActiveTemplate("proposalBuilder");
+  };
+
+  const buildCurrentEstimateSnapshot = () => ({
+    id: `draft-estimate-${activeTemplate}-${Date.now()}`,
+    estimateNumber: nextEstimateNumber,
+    estimateCode: estimateCode(nextEstimateNumber),
+    estimateType: estimateTypeForTemplate(activeTemplate),
+    name: currentEstimateName,
+    savedAt: new Date().toISOString(),
+    inputs,
+    prices,
+    summary: {
+      totalSquares: calculation?.scope?.totalSquares ?? calculation?.totalSquares ?? calculation?.tileTotalRoofSquares ?? calculation?.productionSquares ?? calculation?.totalRoofSquares ?? 0,
+      selectedBidAmount: calculation?.selectedBidAmount ?? 0,
+      selectedMarkupPercent: calculation?.selectedMarkupPercent ?? 0,
+      roofType: buildEstimateRoofType(inputs),
+    },
+  });
+
+  const handleConvertCurrentEstimateToProposal = () => {
+    handleConvertEstimateToProposal(buildCurrentEstimateSnapshot());
+  };
+
+  const handleProposalDraftChange = (key, value) => {
+    setProposalDraft((current) => ({
+      ...current,
+      [key]: value,
+      updatedAt: new Date().toISOString(),
+    }));
+  };
+
+  const handleProposalTemplateDraftChange = (key, value) => {
+    setProposalTemplateDraft((current) => ({
+      ...current,
+      [key]: value,
+      updatedAt: new Date().toISOString(),
+    }));
+  };
+
+  const saveProposalTemplateDraft = () => {
+    const normalizedTemplate = normalizeProposalTemplate(proposalTemplateDraft);
+    setProposalTemplate(normalizedTemplate);
+    setProposalTemplateDraft(normalizedTemplate);
+    setSessionMessageType("success");
+    setSessionMessage("Proposal template saved.");
+    return normalizedTemplate;
+  };
+
+  const resetProposalTemplateDraft = () => {
+    const nextTemplate = createBlankProposalTemplate();
+    setProposalTemplate(nextTemplate);
+    setProposalTemplateDraft(nextTemplate);
+    setSessionMessageType("success");
+    setSessionMessage("Proposal template reset to the CRT baseline.");
+    return nextTemplate;
+  };
+
+  const generateProposalPdfArchive = (proposalRecord = proposalDraft, { saveToCustomer = true } = {}) => {
+    if (!proposalRecord) return null;
+    const sourceEstimate = getProposalSourceEstimate(proposalRecord);
+    const syncedProposal = proposalIsFinalized(proposalRecord)
+      ? normalizeProposalRecord(proposalRecord)
+      : syncProposalWithEstimate(proposalRecord, sourceEstimate, proposalTemplate);
+    const { pdfFileName, pdfDataUrl } = generateProposalPDF(syncedProposal, sourceEstimate, proposalTemplate);
+    const archivedAt = new Date().toISOString();
+    const nextProposal = {
+      ...syncedProposal,
+      pdfArchiveName: pdfFileName,
+      pdfArchiveDataUrl: pdfDataUrl,
+      pdfArchiveUpdatedAt: archivedAt,
+      updatedAt: archivedAt,
+    };
+
+    setProposalDraft(nextProposal);
+    setProposals((current) => {
+      const index = current.findIndex((item) => item.id === nextProposal.id);
+      if (index >= 0) {
+        const next = [...current];
+        next[index] = { ...next[index], ...nextProposal };
+        return next;
+      }
+      return [nextProposal, ...current];
+    });
+    if (saveToCustomer) {
+      archiveProposalForCustomer(nextProposal, sourceEstimate, {
+        pdfArchiveName: pdfFileName,
+        pdfArchiveDataUrl: pdfDataUrl,
+        pdfArchiveUpdatedAt: archivedAt,
+      });
+    }
+    return nextProposal;
+  };
+
+  const saveProposalDraft = (nextStatus = null) => {
+    if (!proposalDraft) return;
+    const now = new Date().toISOString();
+    const status = nextStatus || proposalDraft.status || "Draft";
+    const currentVersion = Number(proposalDraft.version || 1);
+    const sourceEstimate = getProposalSourceEstimate(proposalDraft);
+    const syncedProposal = proposalIsFinalized(proposalDraft)
+      ? normalizeProposalRecord(proposalDraft)
+      : syncProposalWithEstimate(proposalDraft, sourceEstimate, proposalTemplate);
+    const existing = proposals.find((item) => item.id === syncedProposal.id);
+    const isLockedVersion = existing && ["sent", "viewed", "accepted", "declined", "expired"].includes(String(existing.status || "").toLowerCase());
+    let pdfArchiveName = syncedProposal.pdfArchiveName || "";
+    let pdfArchiveDataUrl = syncedProposal.pdfArchiveDataUrl || "";
+    let pdfArchiveUpdatedAt = syncedProposal.pdfArchiveUpdatedAt || "";
+    try {
+      const pdfArchive = generateProposalPDF(syncedProposal, sourceEstimate, proposalTemplate);
+      pdfArchiveName = pdfArchive.pdfFileName;
+      pdfArchiveDataUrl = pdfArchive.pdfDataUrl;
+      pdfArchiveUpdatedAt = now;
+    } catch (error) {
+      console.warn("Proposal PDF archive generation failed:", error);
+    }
+    const savedProposal = {
+      ...syncedProposal,
+      status,
+      sentAt: status.toLowerCase() === "sent" ? syncedProposal.sentAt || now : syncedProposal.sentAt || "",
+      sentBy: status.toLowerCase() === "sent" ? syncedProposal.sentBy || authUser.displayName || "" : syncedProposal.sentBy || "",
+      updatedAt: now,
+      pdfArchiveName,
+      pdfArchiveDataUrl,
+      pdfArchiveUpdatedAt,
+      proposalHistory: [...(syncedProposal.proposalHistory || [])],
+    };
+
+    if (isLockedVersion && existing.id === syncedProposal.id) {
+      const newVersion = {
+        ...savedProposal,
+        id: `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        version: currentVersion + 1,
+        proposalNumber: Number(syncedProposal.proposalNumber || 1),
+        proposalHistory: [
+          ...(existing.proposalHistory || []),
+          {
+            status: existing.status,
+            updatedAt: existing.updatedAt || existing.createdAt || now,
+            supersededBy: savedProposal.status,
+          },
+        ],
+      };
+      setProposals((current) => [
+        newVersion,
+        ...current.map((item) => (item.id === existing.id ? { ...item, status: "Superseded", updatedAt: now } : item)),
+      ]);
+      setProposalDraft(newVersion);
+      setProposalSelectedId(newVersion.id);
+      archiveProposalForCustomer(newVersion, sourceEstimate, { pdfArchiveName, pdfArchiveDataUrl, pdfArchiveUpdatedAt });
+      setSessionMessageType("success");
+      setSessionMessage("Proposal version saved and archived.");
+      return;
+    }
+
+    setProposals((current) => {
+      const index = current.findIndex((item) => item.id === savedProposal.id);
+      if (index >= 0) {
+        const next = [...current];
+        next[index] = { ...next[index], ...savedProposal };
+        return next;
+      }
+      return [savedProposal, ...current];
+    });
+    setProposalDraft(savedProposal);
+    setProposalSelectedId(savedProposal.id);
+    archiveProposalForCustomer(savedProposal, sourceEstimate, { pdfArchiveName, pdfArchiveDataUrl, pdfArchiveUpdatedAt });
+    setSessionMessageType("success");
+    setSessionMessage("Proposal saved and archived.");
+  };
+
+  const handleSendProposal = () => {
+    if (!proposalDraft) return;
+    if (!proposalDraft.customerName || !proposalDraft.projectAddress || !proposalDraft.totalPrice) {
+      setSessionMessageType("error");
+      setSessionMessage("Fill in the proposal basics before sending.");
+      return;
+    }
+    saveProposalDraft("Sent");
+    setSessionMessageType("success");
+    setSessionMessage("Proposal marked as sent. Email delivery is coming in the next phase.");
+  };
+
+  const handleConvertProposalToApprovedJob = (proposal) => {
+    if (!proposal) return;
+    const sourceEstimate = savedEstimates.find((estimate) => estimate.id === proposal.sourceEstimateId || estimate.estimateCode === proposal.sourceEstimateCode) || null;
+    const approvedJob = {
+      id: `approved-${proposal.id}`,
+      estimateId: proposal.sourceEstimateId || proposal.id,
+      localEstimateId: proposal.sourceEstimateId || proposal.id,
+      estimateCode: proposal.sourceEstimateCode || proposal.estimateCode || estimateCode(Number(proposal.proposalNumber || 1)),
+      jobNumber: proposal.estimateNumber || proposal.proposalNumber || "",
+      customerName: proposal.customerName || sourceEstimate?.inputs?.customerName || "",
+      projectName: proposal.projectName || sourceEstimate?.inputs?.jobName || "",
+      projectAddress: proposal.projectAddress || sourceEstimate?.inputs?.jobAddress || "",
+      roofType: proposal.roofSystem || sourceEstimate?.summary?.roofType || "",
+      squareCount: toNumber(sourceEstimate?.summary?.totalSquares || 0),
+      finalBid: toNumber(proposal.totalPrice || 0),
+      status: "approved",
+      projectStatus: "Pre-construction",
+      approvalDate: new Date().toISOString().slice(0, 10),
+      anticipatedStartDate: proposal.estimatedSchedule || "",
+      projectContact: proposal.customerContact || "",
+      fieldSupervisor: "",
+      permitStatus: "Pending",
+      documentsIncomplete: true,
+      subcontractorIncomplete: true,
+      materialOrderIncomplete: true,
+      customerDocumentIncomplete: true,
+      warningText: "Approved from accepted proposal; pre-construction items still needed.",
+      salesperson: proposal.salesperson || "",
+      estimatedStartDays: proposal.estimatedSchedule ? 0 : 999,
+      isActive: true,
+      createdAt: new Date().toISOString(),
+    };
+    setCompletedJobs((current) => [approvedJob, ...current.filter((item) => item.estimateId !== approvedJob.estimateId)]);
+    setSessionMessageType("success");
+    setSessionMessage("Proposal converted to an approved job.");
+    setApprovedJobData({
+      estimateId: approvedJob.estimateId,
+      localEstimateId: approvedJob.localEstimateId,
+      estimateCode: approvedJob.estimateCode,
+      jobName: approvedJob.projectName,
+      customerName: approvedJob.customerName,
+      roofType: approvedJob.roofType,
+      totalSquares: approvedJob.squareCount,
+      approvedBidAmount: approvedJob.finalBid,
+      status: "approved",
+      jobAddress: approvedJob.projectAddress,
+    });
+    setSelectedApprovedJob(sourceEstimate);
+    setApprovedDailyProgressLogs([]);
+    setActiveJobSelectedId("");
+    setActiveTemplate("approvedJob");
+  };
+
+  const openActiveJobIssueModal = (project) => {
+    if (!project) return;
+    setActiveJobSelectedId(project.id);
+    setActiveJobIssueDraft({
+      ...createBlankActiveJobIssue(project),
+      projectId: project.id,
+      projectName: project.projectName || "",
+      jobNumber: project.jobNumber || "",
+    });
+    setActiveJobIssueResponse(buildActiveJobSuggestedResponse(project));
+    setActiveJobIssueModalOpen(true);
+  };
+
+  const closeActiveJobIssueModal = () => {
+    setActiveJobIssueModalOpen(false);
+    setActiveJobIssueDraft(createBlankActiveJobIssue(selectedActiveJob));
+    setActiveJobIssueResponse("");
+  };
+
+  const saveActiveJobIssue = () => {
+    const projectId = activeJobIssueDraft.projectId || activeJobSelectedId;
+    const project = activeJobs.find((job) => job.id === projectId) || null;
+    if (!project) {
+      setSessionMessageType("error");
+      setSessionMessage("Select a project before reporting an issue.");
+      return;
+    }
+    if (!String(activeJobIssueDraft.description || "").trim()) {
+      setSessionMessageType("error");
+      setSessionMessage("Please enter an issue description before saving.");
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    const nextIssueIndex = (project.issues || []).length + 1;
+    const issue = {
+      id: createFieldDailyLogId(),
+      issueNumber: `ISS-${String(nextIssueIndex).padStart(4, "0")}`,
+      projectId: project.id,
+      projectName: project.projectName || "",
+      jobNumber: project.jobNumber || "",
+      dateTime: activeJobIssueDraft.dateTime || createdAt.slice(0, 16),
+      callerName: activeJobIssueDraft.callerName || authUser?.displayName || "",
+      callerCompany: activeJobIssueDraft.callerCompany || "",
+      phone: activeJobIssueDraft.phone || "",
+      email: activeJobIssueDraft.email || "",
+      category: activeJobIssueDraft.issueCategory || "Other",
+      description: activeJobIssueDraft.description || "",
+      priority: activeJobIssueDraft.priority || "Normal",
+      status: activeJobIssueDraft.currentStatus || "New",
+      assignedEmployeeId: activeJobIssueDraft.assignedEmployeeId || "",
+      assignedEmployeeName: activeJobIssueDraft.assignedEmployeeName || "",
+      followUpDeadline: activeJobIssueDraft.followUpDeadline || "",
+      reason: activeJobIssueDraft.reason || "",
+      response: activeJobIssueResponse || "",
+      notifications: {
+        officeReview: true,
+        escalationPlaceholder: true,
+      },
+      createdAt,
+      updatedAt: createdAt,
+    };
+
+    const activityEntry = {
+      id: `activity-${issue.id}`,
+      summary: `Issue ${issue.issueNumber} reported: ${issue.description}`,
+      changedBy: authUser?.displayName || "Unknown",
+      createdAt,
+    };
+
+    setActiveJobs((current) =>
+      current.map((job) => {
+        if (job.id !== project.id) return job;
+        const issues = [...(job.issues || []), issue];
+        return {
+          ...job,
+          issues,
+          openIssuesCount: getActiveJobOpenIssuesCount({ ...job, issues }),
+          activityLog: [activityEntry, ...(job.activityLog || [])],
+          riskLevel: issue.priority === "Emergency" || issue.priority === "High" ? "Critical" : job.riskLevel,
+        };
+      }),
+    );
+
+    setSessionMessageType("success");
+    setSessionMessage(`Issue ${issue.issueNumber} saved to ${project.projectName || "the project"}.`);
+    closeActiveJobIssueModal();
+  };
+
+  const handleSaveApprovedJob = async () => {
+    if (!authUser?.key || !approvedJobData) {
+      setSessionMessageType("error");
+      setSessionMessage("Please sign in and select a job.");
+      return;
+    }
+
+    setSessionMessageType("");
+    setSessionMessage("Saving approved job...");
+
+    const totals = calculateApprovedJobTotals(approvedDailyProgressLogs);
+    const actualProfit = toNumber(approvedJobData.approvedBidAmount) - totals.totalActualLaborCost - totals.totalMaterialCost;
+    const marginPercent = toNumber(approvedJobData.approvedBidAmount) > 0 ? round((actualProfit / toNumber(approvedJobData.approvedBidAmount)) * 100, 1) : 0;
+
+    const dbRow = {
+      user_key: authUser.key,
+      local_estimate_id: approvedJobData.localEstimateId,
+      estimate_id: approvedJobData.estimateId,
+      estimate_code: approvedJobData.estimateCode,
+      job_name: approvedJobData.jobName,
+      customer_name: approvedJobData.customerName,
+      roof_type: approvedJobData.roofType,
+      square_count: approvedJobData.totalSquares,
+      final_bid: approvedJobData.approvedBidAmount,
+      status: approvedJobData.status,
+      saved_at: new Date().toISOString(),
+      daily_progress_log: approvedDailyProgressLogs,
+      labor_log: totals.laborLog,
+      material_usage_log: totals.materialUsageLog,
+      actual_labor_hours: totals.totalActualLaborHours,
+      actual_labor_cost: totals.totalActualLaborCost,
+      actual_cost: totals.runningActualCost,
+      actual_material_cost: totals.totalMaterialCost,
+    };
+
+    try {
+      const { data, error } = await upsertRowWithMissingColumnFallback("completed_jobs", dbRow, "estimate_id");
+      if (error) {
+        const cloudErrorMessage = error.message || String(error);
+        console.warn("Approved job save failed:", cloudErrorMessage);
+        setSessionMessageType("error");
+        setSessionMessage(`Approved job save failed: ${cloudErrorMessage}`);
+        return;
+      }
+
+      const persistedJob = Array.isArray(data) ? data[0] : data?.[0] || dbRow;
+      const normalizedJob = {
+        ...dbRow,
+        id: persistedJob.local_estimate_id || persistedJob.estimate_id || persistedJob.id,
+        estimateId: persistedJob.estimate_id || persistedJob.local_estimate_id,
+        dailyProgressLog: persistedJob.daily_progress_log || approvedDailyProgressLogs,
+        laborLog: persistedJob.labor_log || totals.laborLog,
+        materialUsageLog: persistedJob.material_usage_log || totals.materialUsageLog,
+      };
+
+      setCompletedJobs((current) => [normalizedJob, ...current.filter((item) => item.estimateId !== normalizedJob.estimateId)]);
+
+      if (approvedJobData.status === "completed") {
+        const metricsPayload = {
+          estimateId: approvedJobData.estimateId,
+          localEstimateId: approvedJobData.localEstimateId,
+          estimateCode: approvedJobData.estimateCode,
+          jobName: approvedJobData.jobName,
+          customerName: approvedJobData.customerName,
+          roofType: approvedJobData.roofType,
+          totalSquares: approvedJobData.totalSquares,
+          estimateFinalBid: approvedJobData.approvedBidAmount,
+          estimateMaterialCost: selectedApprovedJob?.summary?.materialCost || 0,
+          estimateLaborCost: selectedApprovedJob?.summary?.laborCost || 0,
+          estimateTravelCost: selectedApprovedJob?.summary?.travelCost || 0,
+          actualMaterialCost: totals.totalMaterialCost,
+          actualLaborCost: totals.totalActualLaborCost,
+          actualLaborHours: totals.totalActualLaborHours,
+          actualTravelCost: 0,
+          changeOrders: 0,
+          finalInvoiceAmount: approvedJobData.approvedBidAmount,
+          actualProfit,
+          actualMarginPercent: marginPercent,
+          notes: "Auto-generated from daily progress; edit manually if needed.",
+          lessonsLearned: "",
+        };
+        const { error: metricsError } = await upsertCompletedJobMetricsToSupabase(metricsPayload, authUser.key);
+        if (metricsError) {
+          console.warn("Completed metrics save failed:", metricsError.message || metricsError);
+        } else {
+          const { data: metricsData } = await fetchCompletedJobMetricsFromSupabase(authUser.key);
+          if (metricsData) setCompletedJobMetrics(metricsData);
+        }
+      }
+
+      setSessionMessageType("success");
+      setSessionMessage("Approved job saved.");
+    } catch (error) {
+      console.error("handleSaveApprovedJob failed:", error);
+      setSessionMessageType("error");
+      setSessionMessage(`Save failed: ${error?.message || String(error)}`);
+    }
+  };
+
+  const buildJobInsights = () => {
+    if (!completedJobMetrics.length) {
+      return {
+        totalJobs: 0,
+        averagePricePerSq: 0,
+        averageMaterialCostPerSq: 0,
+        averageLaborCostPerSq: 0,
+        averageProfitMargin: 0,
+        averageEstimateVariance: 0,
+        byRoofType: {},
+        jobsBySize: [],
+      };
+    }
+
+    const metrics = completedJobMetrics.filter((m) => m.total_squares > 0);
+    if (!metrics.length) return {};
+
+    const byRoofType = {};
+    let totalPricePerSq = 0;
+    let totalMaterialPerSq = 0;
+    let totalLaborPerSq = 0;
+    let totalMargin = 0;
+    let totalVariance = 0;
+
+    metrics.forEach((m) => {
+      const roofType = m.roof_type || "Unknown";
+      if (!byRoofType[roofType]) {
+        byRoofType[roofType] = {
+          count: 0,
+          totalSquares: 0,
+          totalBid: 0,
+          totalActualMaterial: 0,
+          totalActualLabor: 0,
+          totalProfit: 0,
+        };
+      }
+
+      const rt = byRoofType[roofType];
+      rt.count += 1;
+      rt.totalSquares += toNumber(m.total_squares);
+      rt.totalBid += toNumber(m.final_invoice_amount || m.estimate_final_bid);
+      rt.totalActualMaterial += toNumber(m.actual_material_cost);
+      rt.totalActualLabor += toNumber(m.actual_labor_cost);
+      rt.totalProfit += toNumber(m.actual_profit);
+
+      totalPricePerSq += toNumber(m.final_invoice_amount || m.estimate_final_bid) / toNumber(m.total_squares);
+      totalMaterialPerSq += toNumber(m.actual_material_cost) / toNumber(m.total_squares);
+      totalLaborPerSq += toNumber(m.actual_labor_cost) / toNumber(m.total_squares);
+      totalMargin += toNumber(m.actual_margin_percent);
+      totalVariance += Math.abs(toNumber(m.material_variance) + toNumber(m.labor_variance));
+    });
+
+    const roofTypeStats = Object.entries(byRoofType).map(([type, data]) => ({
+      roofType: type,
+      count: data.count,
+      avgPricePerSq: round(data.totalBid / data.totalSquares, 2),
+      avgMaterialPerSq: round(data.totalActualMaterial / data.totalSquares, 2),
+      avgLaborPerSq: round(data.totalActualLabor / data.totalSquares, 2),
+      avgMargin: round((data.totalProfit / data.totalBid) * 100, 1),
+    }));
+
+    return {
+      totalJobs: metrics.length,
+      averagePricePerSq: round(totalPricePerSq / metrics.length, 2),
+      averageMaterialCostPerSq: round(totalMaterialPerSq / metrics.length, 2),
+      averageLaborCostPerSq: round(totalLaborPerSq / metrics.length, 2),
+      averageProfitMargin: round(totalMargin / metrics.length, 1),
+      averageEstimateVariance: round(totalVariance / metrics.length, 2),
+      roofTypeStats,
+    };
+  };
+
   const handleSelectedMarkup = (percent) => {
-    setField("selectedMarkupPercent", percent);
+    setInputs((current) => ({
+      ...current,
+      selectedMarkupPercent: percent,
+      sprayFoamCustomBidSelected: false,
+    }));
+  };
+
+  const handleUseCustomBid = () => {
+    setInputs((current) => ({
+      ...current,
+      sprayFoamCustomBidSelected: true,
+    }));
   };
 
   const handleDownloadEstimatePDF = async () => {
     if (!inputs.jobName && !inputs.customerName) {
+      setSessionMessageType("error");
+      setSessionMessage("Please enter at least a job name or customer name before downloading the PDF.");
       alert("Please enter at least a job name or customer name before downloading the PDF.");
       return;
     }
-    await generateEstimatePDF(inputs, calculation, fieldNotes, currentEstimateName);
+    setSessionMessageType("");
+    setSessionMessage("Preparing PDF...");
+    const previewWindow = window.open("", "_blank");
+    const pdfOpened = await generateEstimatePDF(
+      inputs,
+      calculation,
+      fieldNotes,
+      currentEstimateName,
+      estimateTypeForTemplate(activeTemplate),
+      previewWindow
+    );
+    if (pdfOpened) {
+      setSessionMessageType("success");
+      setSessionMessage("PDF saved successfully. If you were prompted for a file location, choose where to save it.");
+    } else {
+      setSessionMessageType("error");
+      setSessionMessage("PDF generation failed. Please check the console for details.");
+    }
   };
 
   const priceFields = MATERIAL_PRICE_FIELDS;
+
+  const formatQuickMeasureValue = (value, digits = 1, suffix = "") => {
+    if (value === null || value === undefined || value === "") return "Not found";
+    return `${num(value, digits)}${suffix}`;
+  };
+
+  const renderQuickMeasureUploadControl = () => (
+    <>
+      <button type="button" className="secondaryButton" onClick={triggerQuickMeasureUpload} disabled={quickMeasureIsProcessing}>
+        {quickMeasureIsProcessing ? "Uploading..." : "Upload QuickMeasure Report"}
+      </button>
+      <input
+        ref={quickMeasureFileInputRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        style={{ display: "none" }}
+        onChange={handleQuickMeasureFileChange}
+      />
+    </>
+  );
+
+  const renderQuickMeasureReviewPanel = () =>
+    quickMeasureReport ? (
+      <Section
+        title="QuickMeasure Review"
+        subtitle="Review the extracted measurements before applying them to an estimate."
+      >
+        <div className="formGrid" style={{ marginBottom: 14 }}>
+          <Field label="Property address">
+            <input
+              type="text"
+              value={quickMeasureReport.fields?.propertyAddress || ""}
+              onChange={(e) => updateQuickMeasureField("propertyAddress", e.target.value)}
+            />
+          </Field>
+          <Field label="Total roof area">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.totalRoofArea ?? ""}
+              onChange={(e) => updateQuickMeasureField("totalRoofArea", e.target.value)}
+            />
+          </Field>
+          <Field label="Total squares">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.totalSquares ?? ""}
+              onChange={(e) => updateQuickMeasureField("totalSquares", e.target.value)}
+            />
+          </Field>
+          <Field label="Perimeter linear feet">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.perimeterLinearFeet ?? ""}
+              onChange={(e) => updateQuickMeasureField("perimeterLinearFeet", e.target.value)}
+            />
+          </Field>
+          <Field label="Ridges/Hips linear feet">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.ridgeHipLinearFeet ?? ""}
+              onChange={(e) => updateQuickMeasureField("ridgeHipLinearFeet", e.target.value)}
+            />
+          </Field>
+          <Field label="Ridge linear feet">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.ridgeLinearFeet ?? ""}
+              onChange={(e) => updateQuickMeasureField("ridgeLinearFeet", e.target.value)}
+            />
+          </Field>
+          <Field label="Hip linear feet">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.hipLinearFeet ?? ""}
+              onChange={(e) => updateQuickMeasureField("hipLinearFeet", e.target.value)}
+            />
+          </Field>
+          <Field label="Valley linear feet">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.valleyLinearFeet ?? ""}
+              onChange={(e) => updateQuickMeasureField("valleyLinearFeet", e.target.value)}
+            />
+          </Field>
+          <Field label="Rake linear feet">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.rakeLinearFeet ?? ""}
+              onChange={(e) => updateQuickMeasureField("rakeLinearFeet", e.target.value)}
+            />
+          </Field>
+          <Field label="Eave linear feet">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.eaveLinearFeet ?? ""}
+              onChange={(e) => updateQuickMeasureField("eaveLinearFeet", e.target.value)}
+            />
+          </Field>
+          <Field label="Starter linear feet">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.starterLinearFeet ?? ""}
+              onChange={(e) => updateQuickMeasureField("starterLinearFeet", e.target.value)}
+            />
+          </Field>
+          <Field label="Drip edge linear feet">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.dripEdgeLinearFeet ?? ""}
+              onChange={(e) => updateQuickMeasureField("dripEdgeLinearFeet", e.target.value)}
+            />
+          </Field>
+          <Field label="Pitch">
+            <input type="text" value={quickMeasureReport.fields?.pitch || ""} onChange={(e) => updateQuickMeasureField("pitch", e.target.value)} />
+          </Field>
+          <Field label="Roof facets / sections">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={quickMeasureReport.fields?.roofFacets ?? ""}
+              onChange={(e) => updateQuickMeasureField("roofFacets", e.target.value)}
+            />
+          </Field>
+          <Field label="Pro-Start Starter">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.shingleStarterQuantity ?? ""}
+              onChange={(e) => updateQuickMeasureField("shingleStarterQuantity", e.target.value)}
+            />
+          </Field>
+          <Field label='2"x2" Drip Edge 10 ft Pieces'>
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.shingleDripEdgePieces ?? ""}
+              onChange={(e) => updateQuickMeasureField("shingleDripEdgePieces", e.target.value)}
+            />
+          </Field>
+          <Field label='Rapid Ridge 8" Ridge Cap'>
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={quickMeasureReport.fields?.shingleRapidRidgeBoxes ?? ""}
+              onChange={(e) => updateQuickMeasureField("shingleRapidRidgeBoxes", e.target.value)}
+            />
+          </Field>
+        </div>
+        <div className="detailList">
+          <DetailRow label="File name" value={quickMeasureReport.fileName || "Unknown file"} />
+          <DetailRow label="Uploaded" value={new Date(quickMeasureReport.uploadedAt).toLocaleString()} />
+          <DetailRow label="Total roof area" value={formatQuickMeasureValue(quickMeasureReport.fields?.totalRoofArea, 0, " SQ FT")} />
+          <DetailRow
+            label="Total squares"
+            value={formatQuickMeasureValue(quickMeasureReport.fields?.totalSquares, 0, " SQ")}
+            note={quickMeasureReport.fields?.totalSquaresSource === "calculated from roof area" ? "Calculated from roof area" : ""}
+          />
+          <DetailRow
+            label="Total HDZ RS+ Bundles Needed"
+            value={formatQuickMeasureValue(quickMeasureReport.fields?.shingleHdzBundlesNeeded, 0)}
+            note={Array.isArray(quickMeasureReport.fields?.notes) && quickMeasureReport.fields.notes.includes("Using calculated fallback.") ? "Using calculated fallback." : ""}
+          />
+          <DetailRow
+            label="Pro-Start Starter"
+            value={formatQuickMeasureValue(quickMeasureReport.fields?.shingleStarterQuantity, 0)}
+            note={quickMeasureReport.fields?.shingleStarterSuggestedQuantity > 0 ? "" : "Using calculated fallback."}
+          />
+          <DetailRow
+            label='2"x2" Drip Edge 10 ft Pieces'
+            value={formatQuickMeasureValue(quickMeasureReport.fields?.shingleDripEdgePieces, 0)}
+            note={quickMeasureReport.fields?.shingleDripEdgeSuggestedPieces > 0 ? "" : "Using calculated fallback."}
+          />
+          <DetailRow
+            label='Rapid Ridge 8" Ridge Cap'
+            value={formatQuickMeasureValue(quickMeasureReport.fields?.shingleRapidRidgeBoxes, 0)}
+            note={
+              quickMeasureReport.fields?.shingleRapidRidgeLFUsed !== null && quickMeasureReport.fields?.shingleRapidRidgeLFUsed !== undefined
+                ? `${formatQuickMeasureValue(quickMeasureReport.fields?.shingleRapidRidgeLFUsed, 0, " LF")} used`
+                : ""
+            }
+          />
+          <DetailRow
+            label="Synthetic Underlayment Rolls"
+            value={formatQuickMeasureValue(quickMeasureReport.fields?.shingleSyntheticUnderlaymentRolls, 0)}
+            note={Array.isArray(quickMeasureReport.fields?.notes) && quickMeasureReport.fields.notes.includes("Using calculated fallback.") ? "Using calculated fallback." : ""}
+          />
+          <DetailRow
+            label="Calculated fallback quantity"
+            value={formatQuickMeasureValue(
+              Math.ceil(
+                (
+                  quickMeasureReport.fields?.totalSquares > 0
+                    ? Number(quickMeasureReport.fields.totalSquares)
+                    : Math.ceil(Number(quickMeasureReport.fields?.totalRoofArea || 0) / 100)
+                ) / 10,
+              ),
+              0,
+            )}
+            note={quickMeasureReport.fields?.shingleSyntheticUnderlaymentSuggestedRolls > 0 ? "" : "Using calculated fallback."}
+          />
+          <DetailRow
+            label="Final underlayment rolls used"
+            value={formatQuickMeasureValue(
+              quickMeasureReport.fields?.shingleSyntheticUnderlaymentSuggestedRolls > 0
+                ? quickMeasureReport.fields?.shingleSyntheticUnderlaymentSuggestedRolls
+                : Math.ceil(
+                    (
+                      quickMeasureReport.fields?.totalSquares > 0
+                        ? Number(quickMeasureReport.fields.totalSquares)
+                        : Math.ceil(Number(quickMeasureReport.fields?.totalRoofArea || 0) / 100)
+                    ) / 10,
+                  ),
+              0,
+            )}
+            note={quickMeasureReport.fields?.shingleSyntheticUnderlaymentSuggestedRolls > 0 ? "" : "Using calculated fallback."}
+          />
+          <DetailRow
+            label="Perimeter linear feet"
+            value={formatQuickMeasureValue(quickMeasureReport.fields?.perimeterLinearFeet, 0, " LF")}
+            note={
+              quickMeasureReport.fields?.perimeterLinearFeetSource === "using drip edge as perimeter fallback"
+                ? "Using Drip Edge as perimeter fallback."
+                : quickMeasureReport.fields?.perimeterLinearFeetSource === "using eaves as perimeter fallback"
+                  ? "Using Eaves as perimeter fallback."
+                  : quickMeasureReport.fields?.perimeterLinearFeetSource === "using eaves/rakes as perimeter fallback"
+                    ? "Using Eaves + Rakes as perimeter fallback."
+                  : ""
+            }
+          />
+          {quickMeasureReport.fields?.ridgeHipLinearFeet !== null && quickMeasureReport.fields?.ridgeHipLinearFeet !== undefined ? (
+            <DetailRow label="Ridges/Hips linear feet" value={formatQuickMeasureValue(quickMeasureReport.fields?.ridgeHipLinearFeet, 0, " LF")} />
+          ) : null}
+          <DetailRow label="Valley linear feet" value={formatQuickMeasureValue(quickMeasureReport.fields?.valleyLinearFeet, 0, " LF")} />
+          <DetailRow label="Eave linear feet" value={formatQuickMeasureValue(quickMeasureReport.fields?.eaveLinearFeet, 0, " LF")} />
+          <DetailRow label="Rake linear feet" value={formatQuickMeasureValue(quickMeasureReport.fields?.rakeLinearFeet, 0, " LF")} />
+          <DetailRow label="Pitch" value={quickMeasureReport.fields?.pitch || "Not found"} />
+          <DetailRow label="Roof facets / sections" value={formatQuickMeasureValue(quickMeasureReport.fields?.roofFacets, 0)} />
+          {Array.isArray(quickMeasureReport.fields?.notes) && quickMeasureReport.fields.notes.length ? (
+            <DetailRow label="Notes" value={quickMeasureReport.fields.notes.join(" • ")} />
+          ) : null}
+          <DetailRow label="Raw Drip Edge Match" value={quickMeasureReport.fields?.rawDripEdgeMatch || "Not found"} />
+          <DetailRow label="Drip Edge Snippet" value={quickMeasureReport.fields?.dripEdgeSnippet || "Not found"} />
+          {Array.isArray(quickMeasureReport.fields?.shingleMaterialSuggestions) && quickMeasureReport.fields.shingleMaterialSuggestions.length ? (
+            <>
+              <DetailRow label="Extracted HDZ bundles" value={formatQuickMeasureValue(quickMeasureReport.fields?.shingleHdzBundlesNeeded, 0)} />
+              <DetailRow label="Extracted Pro-Start quantity" value={formatQuickMeasureValue(quickMeasureReport.fields?.shingleStarterQuantity, 0)} />
+              <DetailRow label='Extracted Drip Edge 10 ft pieces' value={formatQuickMeasureValue(quickMeasureReport.fields?.shingleDripEdgePieces, 0)} />
+              <DetailRow label="Extracted Rapid Ridge boxes" value={formatQuickMeasureValue(quickMeasureReport.fields?.shingleRapidRidgeBoxes, 0)} />
+              {quickMeasureReport.fields.shingleMaterialSuggestions.map((item) => (
+                <div className="detailRow" key={`${item.mappedField}-${item.matchedProductName || "material"}`} style={{ alignItems: "flex-start", gap: 18 }}>
+                  <div>
+                    <span>{item.matchedProductName || item.mappedField}</span>
+                    <strong style={{ display: "block", marginTop: 2 }}>{item.snippet || "No matching text snippet found"}</strong>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <strong style={{ display: "block" }}>{item.matchedQuantity !== null && item.matchedQuantity !== undefined ? num(item.matchedQuantity, 0) : "Not found"}</strong>
+                    <span>{item.mappedField}</span>
+                  </div>
+                </div>
+              ))}
+              {Array.isArray(quickMeasureReport.appliedValues?.appliedFieldPairs) && quickMeasureReport.appliedValues.appliedFieldPairs.length ? (
+                <>
+                  <DetailRow label="Applied input key/value pairs" value="" />
+                  {quickMeasureReport.appliedValues.appliedFieldPairs.map(([key, value]) => (
+                    <DetailRow key={key} label={key} value={String(value)} />
+                  ))}
+                </>
+              ) : null}
+            </>
+          ) : null}
+          <DetailRow
+            label="Applied to"
+            value={
+              quickMeasureReport.appliedTo
+                ? `${quickMeasureReport.appliedTo}${quickMeasureReport.appliedAt ? ` at ${new Date(quickMeasureReport.appliedAt).toLocaleString()}` : ""}`
+                : "Not applied yet"
+            }
+          />
+          {Array.isArray(quickMeasureReport.fields?.shingleMaterialSuggestions) && quickMeasureReport.fields.shingleMaterialSuggestions.length
+            ? quickMeasureReport.fields.shingleMaterialSuggestions.map((item) => (
+                <div
+                  className="detailRow"
+                  key={`${item.mappedField}-${item.matchedProductName || "material"}`}
+                  style={{ alignItems: "flex-start", gap: 18 }}
+                >
+                  <div>
+                    <span>{item.matchedProductName || item.mappedField}</span>
+                    <strong style={{ display: "block", marginTop: 2 }}>{item.snippet || "No matching text snippet found"}</strong>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <strong style={{ display: "block" }}>{item.matchedQuantity !== null && item.matchedQuantity !== undefined ? num(item.matchedQuantity, 0) : "Not found"}</strong>
+                    <span>{item.mappedField}</span>
+                  </div>
+                </div>
+              ))
+            : null}
+          {quickMeasureStatus ? <DetailRow label="Status" value={quickMeasureStatus} /> : null}
+        </div>
+
+        <div className="actionRow" style={{ marginTop: 14, flexWrap: "wrap" }}>
+          <button type="button" className="primaryButton" onClick={() => applyQuickMeasureToTemplate("tpo")}>
+            Apply to TPO estimate
+          </button>
+          <button type="button" className="primaryButton" onClick={() => applyQuickMeasureToTemplate("sprayFoam")}>
+            Apply to Spray Foam estimate
+          </button>
+          <button
+            type="button"
+            className="primaryButton"
+            onClick={() => {
+              if (!quickMeasureReport) return;
+              const fields = quickMeasureReport.fields || {};
+              const propertyAddress = String(fields.propertyAddress || "").trim();
+              const roofSquares =
+                toNumber(fields.totalSquares, 0) > 0
+                  ? toNumber(fields.totalSquares, 0)
+                  : toNumber(fields.totalRoofArea, 0) > 0
+                    ? Math.ceil(toNumber(fields.totalRoofArea, 0) / 100)
+                    : 0;
+              const quickMeasureData = {
+                address: propertyAddress,
+                totalSquares: roofSquares,
+                dripEdgePieces: toNumber(fields.shingleDripEdgePieces, 0),
+                dripEdgeLinearFeet: toNumber(fields.dripEdgeLinearFeet, 0),
+                proStartQuantity: toNumber(fields.shingleStarterQuantity, 0),
+                rapidRidgeBoxes: toNumber(fields.shingleRapidRidgeBoxes, 0),
+                hdzBundlesNeeded: toNumber(fields.shingleHdzBundlesNeeded, 0),
+                syntheticUnderlaymentRolls: toNumber(fields.shingleSyntheticUnderlaymentRolls, 0),
+                ridgeHipLinearFeet: toNumber(fields.ridgeHipLinearFeet, 0),
+                valleyLinearFeet: toNumber(fields.valleyLinearFeet, 0),
+                rakeLinearFeet: toNumber(fields.rakeLinearFeet, 0),
+                eaveLinearFeet: toNumber(fields.eaveLinearFeet, 0),
+              };
+              console.log("QuickMeasure extracted object", fields);
+              console.log("Applied QuickMeasure to shingle", quickMeasureData);
+              setInputs((current) => ({
+                ...current,
+                jobName: quickMeasureData.address || current.jobName,
+                jobAddress: quickMeasureData.address || current.jobAddress,
+                shingleJobName: quickMeasureData.address || current.shingleJobName || current.jobName,
+                shingleJobAddress: quickMeasureData.address || current.shingleJobAddress || current.jobAddress,
+                shingleTotalRoofSquares: quickMeasureData.totalSquares || current.shingleTotalRoofSquares,
+                shingleProductionSquares: quickMeasureData.totalSquares || current.shingleProductionSquares,
+                shingleDripEdgePieces: quickMeasureData.dripEdgePieces || quickMeasureData.dripEdgeLinearFeet || current.shingleDripEdgePieces,
+                shingleStarterQuantity:
+                  quickMeasureData.proStartQuantity ||
+                  Math.ceil((quickMeasureData.dripEdgeLinearFeet || 0) / Math.max(1, toNumber(current.shingleStarterRollCoverageLf, 115))) ||
+                  current.shingleStarterQuantity,
+                shingleRapidRidgeBoxes: quickMeasureData.rapidRidgeBoxes || current.shingleRapidRidgeBoxes,
+                shingleHdzBundlesNeeded: quickMeasureData.hdzBundlesNeeded || current.shingleHdzBundlesNeeded,
+                shingleSyntheticUnderlaymentRolls: quickMeasureData.syntheticUnderlaymentRolls || current.shingleSyntheticUnderlaymentRolls,
+                shingleRidgeHipLinearFeet: quickMeasureData.ridgeHipLinearFeet || current.shingleRidgeHipLinearFeet,
+                shingleValleyLinearFeet: quickMeasureData.valleyLinearFeet || current.shingleValleyLinearFeet,
+                shingleRakeLinearFeet: quickMeasureData.rakeLinearFeet || current.shingleRakeLinearFeet,
+                shingleEaveLinearFeet: quickMeasureData.eaveLinearFeet || current.shingleEaveLinearFeet,
+                shingleRidgeLinearFeet: quickMeasureData.ridgeHipLinearFeet || current.shingleRidgeLinearFeet,
+                shingleHipLinearFeet: 0 || current.shingleHipLinearFeet,
+                shinglePerimeterLinearFeet: quickMeasureData.dripEdgeLinearFeet || current.shinglePerimeterLinearFeet,
+                shingleDripEdgeLinearFeet: quickMeasureData.dripEdgeLinearFeet || current.shingleDripEdgeLinearFeet,
+              }));
+              setActiveTemplate("shingle");
+              setQuickMeasureStatus("QuickMeasure data applied to Shingle Estimate.");
+              setSessionMessageType("success");
+              setSessionMessage("QuickMeasure data applied to Shingle Estimate.");
+            }}
+          >
+            Apply to Shingle estimate
+          </button>
+          <button type="button" className="primaryButton" onClick={() => applyQuickMeasureToTemplate("tile")}>
+            Apply to Tile estimate
+          </button>
+        </div>
+      </Section>
+    ) : null;
 
   const renderTemplateScreen = (title) => (
     <div className="appShell">
@@ -2788,10 +13107,16 @@ function App() {
       </header>
 
       <div className="actionRow" style={{ marginBottom: 16 }}>
+        <button type="button" className="dangerButton" onClick={handleClearEstimate}>
+          Clear estimate
+        </button>
         <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
           Back to dashboard
         </button>
+        {renderQuickMeasureUploadControl()}
       </div>
+
+      {renderQuickMeasureReviewPanel()}
 
       <Section title={title} subtitle="Coming Soon">
         <p className="intro">This template is not built yet.</p>
@@ -2824,10 +13149,16 @@ function App() {
       </header>
 
       <div className="actionRow" style={{ marginBottom: 16 }}>
+        <button type="button" className="dangerButton" onClick={handleClearEstimate}>
+          Clear estimate
+        </button>
         <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
           Back to dashboard
         </button>
+        {renderQuickMeasureUploadControl()}
       </div>
+
+      {renderQuickMeasureReviewPanel()}
 
       <Section title="Maintenance Estimate – Coming Soon" subtitle="Starter fields for future maintenance estimates.">
         <div className="formGrid">
@@ -2876,6 +13207,1630 @@ function App() {
           </Field>
         </div>
       </Section>
+    </div>
+  );
+
+  const renderSprayFoamScreen = () => (
+    <div className="appShell" onFocusCapture={handleSelectZeroOnFocus}>
+      <style>{css}</style>
+      <header className="hero">
+        <div>
+          <div className="brandRow">
+            <div className="brandMark">
+              <img src={LOGO_SRC} alt="CRT Roofing logo" />
+            </div>
+            <div>
+              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <h1>Spray Foam Estimate</h1>
+              <p className="intro">Squares-based spray foam template with material, labor, travel, and markup totals.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="heroCard">
+          <span>Signed in</span>
+          <strong>{authUser.displayName}</strong>
+          <p>Local mode only</p>
+        </div>
+      </header>
+
+      <div className="actionRow" style={{ marginBottom: 16 }}>
+        <button type="button" className="dangerButton" onClick={handleClearEstimate}>
+          Clear estimate
+        </button>
+        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+          Back to dashboard
+        </button>
+        {renderQuickMeasureUploadControl()}
+      </div>
+
+      {renderQuickMeasureReviewPanel()}
+
+      <Section title="Estimate Type" subtitle="Choose the spray foam application type before entering measurements.">
+        <div className="formGrid">
+          <Field label="Is this a roof spray foam estimate or wall foam / insulation estimate?">
+            <select
+              value={inputs.sprayFoamEstimateType || "roof"}
+              onChange={(e) => setField("sprayFoamEstimateType", e.target.value)}
+            >
+              <option value="roof">Roof spray foam estimate</option>
+              <option value="wall">Wall foam / insulation estimate</option>
+            </select>
+          </Field>
+          {(inputs.sprayFoamEstimateType || "roof") === "wall" ? (
+            <Field label="Wall foam charge method">
+              <select
+                value={inputs.wallFoamChargeMethod || "prorated"}
+                onChange={(e) => setField("wallFoamChargeMethod", e.target.value)}
+              >
+                <option value="prorated">Pro-rated material charge</option>
+                <option value="fullKit">Full kit charge</option>
+              </select>
+            </Field>
+          ) : null}
+        </div>
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow
+            label="Selected estimate type"
+            value={(inputs.sprayFoamEstimateType || "roof") === "wall" ? "Wall foam / insulation" : "Roof spray foam"}
+          />
+          <DetailRow
+            label="Base foam set"
+            value={(inputs.sprayFoamEstimateType || "roof") === "wall"
+              ? `45 SQ / set • $2,800.00`
+              : `26 SQ / kit • $2,600.00`}
+          />
+          {(inputs.sprayFoamEstimateType || "roof") === "wall" ? (
+            <>
+              <DetailRow label="Foam charge method" value={String(inputs.wallFoamChargeMethod || "prorated") === "fullKit" ? "Full kit charge" : "Pro-rated material charge"} />
+              <DetailRow label="Full kits needed for ordering" value={num(calculation.wallFoamFullKitsNeeded ?? calculation.foamKitsNeeded, 0)} />
+              <DetailRow label="Wall foam usage ratio" value={num(calculation.wallFoamUsageRatio, 3)} />
+              <DetailRow label="Foam material charged to customer" value={money2(calculation.wallFoamMaterialCost ?? calculation.foamMaterialCost)} />
+            </>
+          ) : null}
+        </div>
+      </Section>
+
+      <Section title="Job info" subtitle="Capture the core spray foam project details.">
+        <div className="formGrid">
+          <Field label="Job name">
+            <input type="text" value={inputs.jobName} onChange={(e) => setField("jobName", e.target.value)} />
+          </Field>
+          <Field label="Customer">
+            <input type="text" value={inputs.customerName} onChange={(e) => setField("customerName", e.target.value)} />
+          </Field>
+          <Field label="Job address">
+            <div style={{ display: "grid", gap: 8 }}>
+              <input
+                type="text"
+                value={inputs.jobAddress}
+                onChange={(e) =>
+                  setInputs((current) => ({
+                    ...current,
+                    jobAddress: e.target.value,
+                    jobSiteAddress: e.target.value,
+                    travelDistanceSource: "manual",
+                  }))
+                }
+              />
+              <button type="button" className="secondaryButton" onClick={handleCalculateDistance}>
+                Search travel distance
+              </button>
+            </div>
+          </Field>
+          <Field label="City permit fee">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={inputs.sprayFoamCityPermitFee}
+              onChange={(e) => setField("sprayFoamCityPermitFee", e.target.value)}
+            />
+          </Field>
+        </div>
+      </Section>
+
+      <Section title="Field Measurements" subtitle="Capture roof dimensions used throughout the spray foam estimate.">
+        <div className="formGrid">
+          <Field label="Separate Roof Areas With Different Foam Thickness?">
+            <select
+              value={inputs.sprayFoamSeparateRoofAreas ? "yes" : "no"}
+              onChange={(e) => setField("sprayFoamSeparateRoofAreas", e.target.value === "yes")}
+            >
+              <option value="no">No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </Field>
+        </div>
+
+        {inputs.sprayFoamSeparateRoofAreas ? (
+          <div style={{ marginTop: 14 }}>
+            <div className="tableWrap">
+              <table className="dataTable">
+                <thead>
+                  <tr>
+                    <th>Roof area</th>
+                    <th>Field roof squares</th>
+                    <th>Foam thickness (in)</th>
+                    <th>Has parapet walls?</th>
+                    <th>Parapet wall squares</th>
+                    <th>Total area squares</th>
+                    <th>Yield / kit</th>
+                    <th>{(inputs.sprayFoamEstimateType || "roof") === "wall" ? "Sets needed" : "Kits needed"}</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {calculation.roofAreas.map((row, index) => (
+                    <tr key={`roof-area-${index}`}>
+                      <td>
+                        <input
+                          className="tableInput"
+                          type="text"
+                          value={row.label}
+                          placeholder={`Roof area ${index + 1}`}
+                          onChange={(e) => setSprayFoamRoofArea(index, "label", e.target.value)}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="tableInput"
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={row.fieldRoofSquares}
+                          onChange={(e) => setSprayFoamRoofArea(index, "fieldRoofSquares", e.target.value)}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="tableInput"
+                          type="number"
+                          min="1"
+                          max="16"
+                          step="0.1"
+                          value={row.foamThicknessInches}
+                          onChange={(e) => setSprayFoamRoofArea(index, "foamThicknessInches", e.target.value)}
+                        />
+                      </td>
+                      <td>
+                        <select
+                          className="tableInput"
+                          value={row.hasParapetWalls ? "yes" : "no"}
+                          onChange={(e) => setSprayFoamRoofArea(index, "hasParapetWalls", e.target.value === "yes")}
+                        >
+                          <option value="no">No</option>
+                          <option value="yes">Yes</option>
+                        </select>
+                      </td>
+                      <td>
+                        {row.hasParapetWalls ? (
+                          <input
+                            className="tableInput"
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={row.parapetWallSquares}
+                            onChange={(e) => setSprayFoamRoofArea(index, "parapetWallSquares", e.target.value)}
+                          />
+                        ) : (
+                          <span>{num(row.parapetWallSquares || 0, 2)}</span>
+                        )}
+                      </td>
+                      <td>{num(row.totalAreaSquares, 2)}</td>
+                      <td>{num(row.yieldPerKit, 2)}</td>
+                      <td>{num(row.kitsNeeded, 0)}</td>
+                      <td>
+                        <button type="button" className="dangerButton" onClick={() => deleteSprayFoamRoofArea(index)}>
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="actionRow" style={{ marginTop: 12 }}>
+              <button type="button" className="secondaryButton" onClick={addSprayFoamRoofArea}>
+                Add roof area
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="formGrid" style={{ marginTop: 14 }}>
+            <Field label="Field roof squares">
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={inputs.sprayFoamFieldRoofSquares}
+                onChange={(e) => setField("sprayFoamFieldRoofSquares", e.target.value)}
+              />
+            </Field>
+            <Field label="Parapet wall squares">
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={inputs.sprayFoamParapetWallSquares}
+                onChange={(e) => setField("sprayFoamParapetWallSquares", e.target.value)}
+              />
+            </Field>
+          </div>
+        )}
+
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Total field squares" value={num(calculation.fieldSquares ?? calculation.totalFieldSquares ?? calculation.fieldRoofSquares, 2)} />
+          <DetailRow label="Total parapet wall squares" value={num(calculation.parapetWallSquares ?? calculation.totalParapetWallSquares ?? calculation.totalParapetSquares, 2)} />
+          <DetailRow label="Total roof squares" value={num(calculation.totalRoofSquares, 2)} />
+          <DetailRow label={calculation.isWallFoamEstimate ? "Total foam sets" : "Total foam kits"} value={num(calculation.totalFoamKits ?? calculation.foamKitsNeeded, 0)} />
+          <DetailRow label="Total foam cost" value={money2(calculation.totalFoamCost ?? calculation.foamMaterialCost)} />
+        </div>
+      </Section>
+
+      <Section title="SPF material calculations" subtitle="Foam thickness, coatings, and material quantities.">
+        <div className="formGrid">
+          <Field label="Selected foam thickness (inches)">
+            <input
+              type="number"
+              min="1"
+              max="16"
+              step="0.1"
+              value={inputs.sprayFoamFieldThickness}
+              onChange={(e) => setField("sprayFoamFieldThickness", e.target.value)}
+            />
+          </Field>
+          <Field label="Wall thickness">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={inputs.sprayFoamWallThickness}
+              onChange={(e) => setField("sprayFoamWallThickness", e.target.value)}
+            />
+          </Field>
+        </div>
+
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Selected foam thickness" value={`${num(calculation.selectedFoamThicknessInches, 1)} in`} />
+          <DetailRow label={calculation.isWallFoamEstimate ? "Yield per set" : "Yield per kit"} value={`${num(calculation.yieldPerKitAtSelectedThickness, 2)} squares`} />
+          <DetailRow label={calculation.isWallFoamEstimate ? "Sets needed" : "Kits needed"} value={num(calculation.foamKitsNeeded, 0)} />
+          <DetailRow label={calculation.isWallFoamEstimate ? "Set cost" : "Kit cost"} value={money2(calculation.foamKitCost)} />
+          <DetailRow label="Total material cost" value={money2(calculation.totalMaterialCost)} />
+        </div>
+
+        <div className="sectionTitle" style={{ marginTop: 16 }}>
+          <h3>Material items</h3>
+        </div>
+        <div className="tableWrap" style={{ marginTop: 14 }}>
+          <table className="dataTable">
+            <thead>
+              <tr>
+                <th>Material item</th>
+                <th>Quantity</th>
+                <th>Unit cost</th>
+                <th>Total cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calculation.sprayFoamMaterialItems.map((item) => (
+                <tr key={item.key}>
+                  <td>{item.label}</td>
+                  <td>{`${num(item.quantity || 0, 2)} ${item.unit || ""}`.trim()}</td>
+                  <td>{money2(item.unitPrice || 0)}</td>
+                  <td>{money2(item.amount || 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="tableWrap" style={{ marginTop: 14 }}>
+          <table className="dataTable">
+            <thead>
+              <tr>
+                <th>Layer</th>
+                <th>Applicable?</th>
+                <th>Squares needed</th>
+                <th>Coverage (SQ/Drum)</th>
+                <th>Drums needed</th>
+                <th>Drum cost</th>
+                <th>Total cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {["primer", "baseCoat", "intermediateCoat1", "intermediateCoat2", "topCoat", "granules"].map((layerKey) => {
+                const item = calculation.materialPricing.items.find((entry) => entry.key === layerKey) || {};
+                const layerState = normalizeSprayFoamLayerConfig(inputs.sprayFoamLayerConfig)[layerKey] || {};
+                const coverageUnit = layerKey === "granules" ? "SQ/Bag" : "SQ/Drum";
+                return (
+                  <tr key={layerKey}>
+                    <td>{item.label || layerKey}</td>
+                    <td>
+                      <select
+                        value={layerState.applicable ? "yes" : "no"}
+                        onChange={(e) => setSprayFoamLayerConfig(layerKey, "applicable", e.target.value === "yes")}
+                      >
+                        <option value="no">No</option>
+                        <option value="yes">Yes</option>
+                      </select>
+                    </td>
+                    <td>{`${num(item.squaresNeeded || 0, 0)} SQ`}</td>
+                    <td>{`${num(layerState.coverageRate || item.coverageRate || 0, layerKey === "granules" ? 2 : 0)} ${coverageUnit}`}</td>
+                    <td>{num(item.drumsNeeded || 0, 0)}</td>
+                    <td>{money2(item.unitPrice || 0)}</td>
+                    <td>{money2(item.amount || 0)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Foam kit cost" value={money2(calculation.foamMaterialCost)} />
+          <DetailRow label="Drip edge cost" value={money2(calculation.foamStopDripEdgeCost)} />
+        </div>
+      </Section>
+
+      <Section title="Spray Foam Detail Materials" subtitle="Add project-specific detail materials and secure rock quantities.">
+        <div className="formGrid" style={{ marginBottom: 14 }}>
+          <Field label="Total linear feet">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={inputs.sprayFoamLinearFeet}
+              onChange={(e) => setField("sprayFoamLinearFeet", e.target.value)}
+            />
+          </Field>
+          <Field label="Drip edge metal required?">
+            <select
+              value={inputs.sprayFoamDripEdgeRequired ? "yes" : "no"}
+              onChange={(e) => setField("sprayFoamDripEdgeRequired", e.target.value === "yes")}
+            >
+              <option value="no">No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </Field>
+        </div>
+
+        <div className="tableWrap">
+          <table className="dataTable">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Quantity</th>
+                <th>Unit cost</th>
+                <th>Total cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calculation.detailMaterialItems
+                .filter((item) => !String(item.key || "").startsWith("customDetailMaterial-") && item.key !== "skylightCurbLumberOrder")
+                .map((item) => (
+                <tr key={item.key}>
+                  <td>{item.label}</td>
+                  <td>
+                    {item.key === "secureRockDenseDeck" ? (
+                      <div className="formStack" style={{ gap: 8 }}>
+                        <span style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>Manual</span>
+                        <input
+                          className="tableInput"
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={item.quantity}
+                          onChange={(e) =>
+                            setSprayFoamDetailMaterial(item.key, "quantity", e.target.value)
+                          }
+                        />
+                      </div>
+                    ) : (
+                      <input
+                        className="tableInput"
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={item.quantity}
+                        onChange={(e) => setSprayFoamDetailMaterial(item.key, "quantity", e.target.value)}
+                      />
+                    )}
+                  </td>
+                  <td>
+                    <input
+                      className="tableInput"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={item.unitCost}
+                      onChange={(e) => setSprayFoamDetailMaterial(item.key, "unitCost", e.target.value)}
+                    />
+                  </td>
+                  <td>{money2(item.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {(calculation.totalRoofLoadingQuantity || 0) > 0 ? (
+          <div className="summaryCard" style={{ marginTop: 12 }}>
+            <span className="eyebrow" style={{ display: "block", marginBottom: 8 }}>
+              Skylight delivery
+            </span>
+            <label style={{ display: "block", marginBottom: 8, color: "var(--text-muted)", fontSize: "0.95rem" }}>
+              Will skylights be roof loaded by distributor?
+            </label>
+            <select
+              value={inputs.sprayFoamSkylightsRoofLoaded ? "yes" : "no"}
+              onChange={(e) => setField("sprayFoamSkylightsRoofLoaded", e.target.value === "yes")}
+            >
+              <option value="yes">Yes</option>
+              <option value="no">No</option>
+            </select>
+            {inputs.sprayFoamSkylightsRoofLoaded ? (
+              <div style={{ marginTop: 12 }}>
+                <label style={{ display: "block", marginBottom: 8, color: "var(--text-muted)", fontSize: "0.95rem" }}>
+                  Rooftop Delivery Fee
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={inputs.sprayFoamRooftopDeliveryFee}
+                  onChange={(e) => setField("sprayFoamRooftopDeliveryFee", e.target.value)}
+                />
+              </div>
+            ) : null}
+            <p style={{ marginTop: 12, color: "var(--text-muted)" }}>
+              Reminder: Coordinate skylights and roof hatch to be roof loaded at the same time to avoid multiple rooftop delivery trips.
+            </p>
+          </div>
+        ) : null}
+
+        {calculation.skylightCurbLumberOrderItem ? (
+          <div className="summaryCard" style={{ marginTop: 12 }}>
+            <span className="eyebrow" style={{ display: "block", marginBottom: 8 }}>
+              Skylight Curb 2x8x12 Lumber Order
+            </span>
+            <div className="detailList">
+              <DetailRow
+                label="Outside curb size"
+                value={`${num(calculation.skylightCurbLumberOutsideLengthInches || 97.5, 1)}\" x ${num(calculation.skylightCurbLumberOutsideWidthInches || 49.5, 1)}\"`}
+              />
+              <DetailRow
+                label="Actual cut list per curb"
+                value={`2 @ ${num(calculation.skylightCurbLumberOutsideLengthInches || 97.5, 1)}\" and 2 @ ${num(calculation.skylightCurbLumberShortCutInches || 46.5, 1)}\"`}
+              />
+              <DetailRow label="Skylight curb quantity" value={num(calculation.skylightCurbsQuantity || 0, 0)} />
+              <DetailRow label="2x8x12 quantity" value={num(calculation.skylightCurbLumberBoardQuantity || 0, 0)} />
+              <DetailRow label="Board unit cost" value={money(calculation.skylightCurbLumberBoardUnitCost || 0)} />
+              <DetailRow label="Total lumber cost" value={money(calculation.skylightCurbLumberOrderItem.amount)} />
+              <DetailRow label="Estimated waste inches" value={money2(calculation.skylightCurbLumberEstimatedWasteInches || 0)} />
+              <DetailRow label="Estimated total lumber LF" value={money2(calculation.skylightCurbLumberEstimatedTotalLumberLF || 0)} />
+            </div>
+            <div className="formGrid" style={{ marginTop: 12 }}>
+              <Field label="Board quantity">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={inputs.sprayFoamSkylightCurbLumberBoardQuantity}
+                  placeholder={String(calculation.skylightCurbLumberBoardQuantity || 0)}
+                  onChange={(e) => setField("sprayFoamSkylightCurbLumberBoardQuantity", e.target.value)}
+                />
+              </Field>
+              <Field label="Unit cost per 2x8x12 board">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={inputs.sprayFoamSkylightCurbLumberBoardUnitCost}
+                  onChange={(e) => setField("sprayFoamSkylightCurbLumberBoardUnitCost", e.target.value)}
+                />
+              </Field>
+            </div>
+          </div>
+        ) : null}
+
+        <div style={{ marginTop: 14 }}>
+          <div className="actionRow">
+            <button type="button" className="secondaryButton" onClick={addSprayFoamAdditionalDetailMaterial}>
+              Add more material
+            </button>
+          </div>
+
+          {Array.isArray(inputs.sprayFoamAdditionalDetailMaterials) && inputs.sprayFoamAdditionalDetailMaterials.length ? (
+            <div className="tableWrap" style={{ marginTop: 12 }}>
+              <table className="dataTable">
+                <thead>
+                  <tr>
+                    <th>Material name</th>
+                    <th>Quantity</th>
+                    <th>Unit cost</th>
+                    <th>Total cost</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {normalizeSprayFoamAdditionalDetailMaterials(inputs.sprayFoamAdditionalDetailMaterials).map((item, index) => (
+                    <tr key={`custom-detail-${index}`}>
+                      <td>
+                        <input
+                          className="tableInput"
+                          type="text"
+                          value={item.name}
+                          placeholder="Material name"
+                          onChange={(e) => setSprayFoamAdditionalDetailMaterial(index, "name", e.target.value)}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="tableInput"
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={item.quantity}
+                          onChange={(e) => setSprayFoamAdditionalDetailMaterial(index, "quantity", e.target.value)}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="tableInput"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={item.unitCost}
+                          onChange={(e) => setSprayFoamAdditionalDetailMaterial(index, "unitCost", e.target.value)}
+                        />
+                      </td>
+                      <td>{money2(toNumber(item.quantity, 0) * toNumber(item.unitCost, 0))}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="dangerButton"
+                          onClick={() => deleteSprayFoamAdditionalDetailMaterial(index)}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Total detail material cost" value={money2(calculation.totalDetailMaterialCost)} />
+        </div>
+      </Section>
+
+      <Section title="Equipment & Rentals" subtitle="Add repeatable equipment or rental line items.">
+        <div className="tableWrap">
+          <table className="dataTable">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Rate type</th>
+                <th>Rate amount</th>
+                <th>Quantity</th>
+                <th>Days</th>
+                <th>Hours</th>
+                <th>Total</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {normalizeSprayFoamEquipmentRentals(inputs.sprayFoamEquipmentRentals).map((item, index) => (
+                <tr key={`equipment-rental-${index}`}>
+                  <td>
+                    <input
+                      className="tableInput"
+                      type="text"
+                      value={item.name}
+                      placeholder={`Equipment / rental ${index + 1}`}
+                      onChange={(e) => setSprayFoamEquipmentRental(index, "name", e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <select
+                      className="tableInput"
+                      value={item.rateType}
+                      onChange={(e) => setSprayFoamEquipmentRental(index, "rateType", e.target.value)}
+                    >
+                      <option value="perDay">Per day</option>
+                      <option value="perHour">Per hour</option>
+                      <option value="flat">Flat</option>
+                    </select>
+                  </td>
+                  <td>
+                    <input
+                      className="tableInput"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={item.rateAmount}
+                      onChange={(e) => setSprayFoamEquipmentRental(index, "rateAmount", e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="tableInput"
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={item.quantity}
+                      onChange={(e) => setSprayFoamEquipmentRental(index, "quantity", e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="tableInput"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={item.days}
+                      onChange={(e) => setSprayFoamEquipmentRental(index, "days", e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="tableInput"
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={item.hours}
+                      onChange={(e) => setSprayFoamEquipmentRental(index, "hours", e.target.value)}
+                    />
+                  </td>
+                  <td>{money2(
+                    item.rateType === "perDay"
+                      ? item.rateAmount * item.quantity * item.days
+                      : item.rateType === "perHour"
+                        ? item.rateAmount * item.quantity * item.hours
+                        : item.rateAmount * item.quantity
+                  )}</td>
+                  <td>
+                    <button type="button" className="dangerButton" onClick={() => deleteSprayFoamEquipmentRental(index)}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="actionRow" style={{ marginTop: 12 }}>
+          <button type="button" className="secondaryButton" onClick={addSprayFoamEquipmentRental}>
+            Add equipment/rental
+          </button>
+        </div>
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Equipment / rental total" value={money2(calculation.equipmentRentalTotal)} />
+        </div>
+      </Section>
+
+      <Section title="Labor and Subcontractors Cost" subtitle="Labor staffing, subcontractor costs, and estimated labor cost.">
+        <div className="formGrid">
+          <Field label="Laborers needed per day">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={inputs.sprayFoamLaborersNeededPerDay}
+              onChange={(e) => setField("sprayFoamLaborersNeededPerDay", e.target.value)}
+            />
+          </Field>
+          <Field label="Total estimated days">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={inputs.sprayFoamEstimatedCompletionDays}
+              onChange={(e) => setSprayFoamEstimatedDays(e.target.value)}
+            />
+          </Field>
+          <Field label="Subcontractors on job?">
+            <select value={inputs.sprayFoamHasSubcontractors ? "yes" : "no"} onChange={(e) => setField("sprayFoamHasSubcontractors", e.target.value === "yes")}>
+              <option value="no">No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </Field>
+          <Field label="Is this a prevailing wage job?">
+            <select
+              value={inputs.sprayFoamPrevailingWageJob ? "yes" : "no"}
+              onChange={(e) => setField("sprayFoamPrevailingWageJob", e.target.value === "yes")}
+            >
+              <option value="no">No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </Field>
+        </div>
+
+        {inputs.sprayFoamPrevailingWageJob ? (
+          <div className="formGrid" style={{ marginTop: 14 }}>
+            <Field label="Prevailing wage hourly rate">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={inputs.sprayFoamPrevailingWageHourlyRate}
+                onChange={(e) => setField("sprayFoamPrevailingWageHourlyRate", e.target.value)}
+              />
+            </Field>
+            <Field label="Crew size">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={inputs.sprayFoamPrevailingWageCrewSize}
+                onChange={(e) => setField("sprayFoamPrevailingWageCrewSize", e.target.value)}
+              />
+            </Field>
+            <Field label="Hours per day">
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={inputs.sprayFoamPrevailingWageHoursPerDay}
+                onChange={(e) => setField("sprayFoamPrevailingWageHoursPerDay", e.target.value)}
+              />
+            </Field>
+            <Field label="Number of job days">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={inputs.sprayFoamPrevailingWageJobDays}
+                onChange={(e) => setField("sprayFoamPrevailingWageJobDays", e.target.value)}
+              />
+            </Field>
+          </div>
+        ) : null}
+
+        {inputs.sprayFoamHasSubcontractors ? (
+          <div className="tableWrap" style={{ marginTop: 14 }}>
+            <table className="dataTable">
+              <thead>
+                <tr>
+                  <th>Subcontractor</th>
+                  <th>Unit / squares</th>
+                  <th>Cost per unit</th>
+                  <th>Licensed?</th>
+                  <th>Workers comp</th>
+                  <th>Total cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {calculation.sprayFoamSubcontractorItems.map((item, index) => (
+                  <tr key={item.type || index}>
+                    <td>
+                      {index === calculation.sprayFoamSubcontractorItems.length - 1 || item.type === "other sub-contractor" ? (
+                        <input
+                          className="tableInput"
+                          type="text"
+                          value={item.type}
+                          placeholder="other sub-contractor"
+                          onChange={(e) => setSprayFoamSubcontractorItem(index, "type", e.target.value)}
+                        />
+                      ) : (
+                        item.type
+                      )}
+                    </td>
+                    <td>
+                      <input
+                        className="tableInput"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={item.quantity ?? 0}
+                        onChange={(e) => setSprayFoamSubcontractorItem(index, "quantity", e.target.value)}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="tableInput"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={item.unitPrice ?? 0}
+                        onChange={(e) => setSprayFoamSubcontractorItem(index, "unitPrice", e.target.value)}
+                      />
+                    </td>
+                    <td>
+                      <select
+                        value={item.licensed ? "yes" : "no"}
+                        onChange={(e) => setSprayFoamSubcontractorItem(index, "licensed", e.target.value === "yes")}
+                      >
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                      </select>
+                    </td>
+                    <td>{money2(item.workersCompCost || 0)}</td>
+                    <td>{money2(item.totalCost || 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Laborers per day" value={num(calculation.laborersNeededPerDay, 0)} />
+          <DetailRow label="Total estimated days" value={num(calculation.estimatedCompletionDays, 0)} />
+          <DetailRow label="Labor rate" value="$400 per guy per day" />
+          <DetailRow
+            label="Total laborers"
+            value={`${num(calculation.laborersNeededPerDay, 0)} x ${num(calculation.estimatedCompletionDays, 0)} = ${num(calculation.totalLaborers, 0)}`}
+          />
+          {calculation.prevailingWageJob ? (
+            <>
+              <DetailRow label="Prevailing wage hourly rate" value={money2(calculation.prevailingWageHourlyRate)} />
+              <DetailRow label="Prevailing wage crew size" value={num(calculation.prevailingWageCrewSize, 0)} />
+              <DetailRow label="Prevailing wage hours per day" value={num(calculation.prevailingWageHoursPerDay, 2)} />
+              <DetailRow label="Prevailing wage job days" value={num(calculation.prevailingWageJobDays, 0)} />
+              <DetailRow label="Prevailing wage labor cost" value={money2(calculation.prevailingWageLaborCost)} />
+            </>
+          ) : null}
+          <DetailRow label="Production squares" value={num(calculation.productionSquares, 2)} />
+          <DetailRow label="Estimated labor cost" value={money2(calculation.estimatedLaborCost)} />
+          <DetailRow label="Subcontractor cost" value={money2(calculation.subcontractorCost)} />
+        </div>
+      </Section>
+
+      <div style={{ margin: "8px 0 0", color: "var(--text-muted)", fontSize: "0.85rem", fontWeight: 700, letterSpacing: "0.04em" }}>
+        TILE OVERHEAD SECTION RENDERING HERE
+      </div>
+      <OverheadCalculator
+        inputs={inputs}
+        calculation={calculation}
+        onOverheadPercentChange={(value) => setField("overheadPercent", value)}
+        onScopeAddersChange={(value) => setField("scopeAdders", value)}
+        onMiscCostChange={(value) => setField("miscCost", value)}
+        subtitle="Apply an overhead percentage before markup is calculated."
+      />
+
+      <TravelCalculator
+        inputs={inputs}
+        calculation={calculation}
+        isLoaded={isLoaded}
+        loadError={loadError}
+        isLookingUpDistance={isLookingUpDistance}
+        travelLookupMessage={travelLookupMessage}
+        googleDebug={googleDebug}
+        showLodging
+        companyHqHint="Default: 18551 Orange Street, Bloomington, CA 92316"
+        oneWayMilesLabel="Miles to location"
+        onCompanyHqAddressChange={(value) => setTravelField("companyHqAddress", value)}
+        onJobSiteAddressChange={(value) => {
+          setTravelField("jobSiteAddress", value);
+          setField("jobAddress", value);
+          setField("sprayFoamMilesToLocation", inputs.oneWayMiles);
+        }}
+        onOneWayMilesChange={(value) => {
+          setTravelField("oneWayMiles", value);
+          setField("sprayFoamMilesToLocation", value);
+        }}
+        onAverageDrivingSpeedChange={(value) => setTravelField("averageDrivingSpeedMph", value)}
+        onDriverHourlyRateChange={(value) => setField("travelDriverHourlyRate", value)}
+        onWorkHoursPerDayChange={(value) => setField("workHoursPerDay", value)}
+        onNumberOfJobDaysChange={(value) => {
+          setField("numberOfJobDays", value);
+          setField("sprayFoamEstimatedCompletionDays", value);
+        }}
+        onNumberOfDriversChange={(value) => setField("numberOfDrivers", value)}
+        onVehicleSelection={setTravelVehicleSelection}
+        onAddVehicleSelection={addTravelVehicleSelection}
+        onRemoveVehicleSelection={removeTravelVehicleSelection}
+        onCalculateDistance={handleCalculateDistance}
+        onTestGoogleGeocoder={handleTestGoogleGeocoder}
+        onTestDirections={handleTestDirections}
+        onLodgingNeededChange={(value) => setField("sprayFoamLodgingNeeded", value)}
+        onLodgingNameChange={(value) => setField("sprayFoamLodgingName", value)}
+        onNightlyLodgingCostChange={(value) => setField("sprayFoamNightlyLodgingCost", value)}
+        onLodgingNightsChange={(value) => setField("sprayFoamLodgingNights", value)}
+      />
+
+      <Section title="Totals" subtitle="Job cost, markup table, and pricing per square.">
+        <div className="detailList">
+          <DetailRow label="Foam cost" value={money2(calculation.foamMaterialCost)} />
+          <DetailRow label="Total material cost" value={money2(calculation.totalMaterialCost)} />
+          <DetailRow label="Detail material cost" value={money2(calculation.totalDetailMaterialCost)} />
+          <DetailRow label="Estimated labor cost" value={money2(calculation.estimatedLaborCost)} />
+          <DetailRow label="Subcontractor cost" value={money2(calculation.subcontractorCost)} />
+          <DetailRow label="Travel cost" value={money2(calculation.travelCost)} />
+          <DetailRow label="Overhead cost" value={money2(calculation.overheadCost)} />
+          <DetailRow label="Operating cost" value={money2(calculation.operatingCost)} />
+          <DetailRow label="Permit fee" value={money2(calculation.permitFee)} />
+          <DetailRow label="Production squares" value={num(calculation.productionSquares, 2)} />
+          <DetailRow label="Total job cost" value={money2(calculation.totalJobCost)} />
+          <DetailRow label="Price per square" value={money2(calculation.selectedPricePerSq)} />
+        </div>
+
+        <div className="tableWrap" style={{ marginTop: 14 }}>
+          <table className="dataTable">
+            <thead>
+              <tr>
+                <th>Markup %</th>
+                <th>Bid Amount</th>
+                <th>Profit</th>
+                <th>Price Per SQ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calculation.bidOptions.options.map((option) => (
+                <tr
+                  key={option.percent}
+                  className={`markupTableRow ${option.percent === calculation.selectedMarkupPercent ? "active" : ""}`}
+                  onClick={() => handleSelectedMarkup(option.percent)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleSelectedMarkup(option.percent);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`${option.percent}% markup row`}
+                >
+                  <td>{option.percent}%</td>
+                  <td>{money2(option.bidAmount)}</td>
+                  <td>{money2(option.profitDollars)}</td>
+                  <td>{money2(option.pricePerSq)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginTop: 14 }}>
+          <div className="summaryCard">
+            <span>Selected bid</span>
+            <strong>{money2(calculation.selectedBidAmount)}</strong>
+            <p style={{ marginBottom: 0, color: "var(--muted)" }}>
+              {num(calculation.selectedMarkupPercent, 0)}% markup · Profit {money2(calculation.selectedProfitDollars)} · {money2(calculation.selectedPricePerSq)} / SQ
+            </p>
+          </div>
+        </div>
+      </Section>
+
+      <div className="actionRow" style={{ marginTop: 16 }}>
+        <button type="button" className="primaryButton" onClick={handleSaveEstimate}>
+          Save Estimate
+        </button>
+        <button type="button" className="secondaryButton" onClick={handleConvertCurrentEstimateToProposal}>
+          Generate Proposal
+        </button>
+        <button type="button" className="secondaryButton" onClick={handleDownloadEstimatePDF}>
+          Download Estimate PDF
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderShingleScreen = () => (
+    <div className="appShell" onFocusCapture={handleSelectZeroOnFocus}>
+      <style>{css}</style>
+      <header className="hero">
+        <div>
+          <div className="brandRow">
+            <div className="brandMark">
+              <img src={LOGO_SRC} alt="CRT Roofing logo" />
+            </div>
+            <div>
+              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <h1>Shingle Estimate</h1>
+              <p className="intro">Shingle template with measurements, material takeoff, labor, travel, and markup totals.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="heroCard">
+          <span>Signed in</span>
+          <strong>{authUser.displayName}</strong>
+          <p>Local mode only</p>
+        </div>
+      </header>
+
+      <div className="actionRow" style={{ marginBottom: 16 }}>
+        <button type="button" className="dangerButton" onClick={handleClearEstimate}>
+          Clear estimate
+        </button>
+        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+          Back to dashboard
+        </button>
+        {renderQuickMeasureUploadControl()}
+      </div>
+
+      <Section title="Job Info" subtitle="Capture the project details for this shingle estimate.">
+        <div className="formGrid">
+          <Field label="Job name">
+            <input
+              type="text"
+              value={inputs.shingleJobName}
+              onChange={(e) =>
+                setInputs((current) => ({
+                  ...current,
+                  shingleJobName: e.target.value,
+                  jobName: e.target.value,
+                }))
+              }
+            />
+          </Field>
+          <Field label="Customer">
+            <input
+              type="text"
+              value={inputs.shingleCustomerName}
+              onChange={(e) =>
+                setInputs((current) => ({
+                  ...current,
+                  shingleCustomerName: e.target.value,
+                  customerName: e.target.value,
+                }))
+              }
+            />
+          </Field>
+          <Field label="Job address">
+            <div style={{ display: "grid", gap: 8 }}>
+              <input
+                type="text"
+                value={inputs.shingleJobAddress}
+                onChange={(e) =>
+                  setInputs((current) => ({
+                    ...current,
+                    shingleJobAddress: e.target.value,
+                    jobAddress: e.target.value,
+                    jobSiteAddress: e.target.value,
+                    travelDistanceSource: "manual",
+                  }))
+                }
+              />
+              <button type="button" className="secondaryButton" onClick={handleCalculateDistance}>
+                Search travel distance
+              </button>
+            </div>
+          </Field>
+          <Field label="Salesperson">
+            <input
+              type="text"
+              value={inputs.shingleSalesperson}
+              onChange={(e) => setField("shingleSalesperson", e.target.value)}
+            />
+          </Field>
+          <Field label="City permit fee">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={inputs.shingleCityPermitFee}
+              onChange={(e) => setField("shingleCityPermitFee", e.target.value)}
+            />
+          </Field>
+        </div>
+      </Section>
+
+      <Section title="Manual Roof Measurements" subtitle="Enter roof dimensions and waste to drive the shingle takeoff.">
+        <div className="formGrid">
+          <Field label="Roof squares">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={inputs.shingleTotalRoofSquares}
+              onChange={(e) => setField("shingleTotalRoofSquares", e.target.value)}
+            />
+          </Field>
+          <Field label="Waste percentage">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={inputs.shingleWastePercent}
+              onChange={(e) => setField("shingleWastePercent", e.target.value)}
+            />
+          </Field>
+          <Field label="Valley linear feet"><input type="number" min="0" step="0.1" value={inputs.shingleValleyLf} onChange={(e) => setField("shingleValleyLf", e.target.value)} /></Field>
+          <Field label="Ridge linear feet"><input type="number" min="0" step="0.1" value={inputs.shingleRidgeLf} onChange={(e) => setField("shingleRidgeLf", e.target.value)} /></Field>
+          <Field label="Hip linear feet"><input type="number" min="0" step="0.1" value={inputs.shingleHipLf} onChange={(e) => setField("shingleHipLf", e.target.value)} /></Field>
+          <Field label="Drip edge / perimeter linear feet"><input type="number" min="0" step="0.1" value={inputs.shingleDripEdgeLf} onChange={(e) => setField("shingleDripEdgeLf", e.target.value)} /></Field>
+          <Field label="Starter linear feet"><input type="number" min="0" step="0.1" value={inputs.shingleStarterLf} onChange={(e) => setField("shingleStarterLf", e.target.value)} /></Field>
+          <Field label="Pipe jacks count"><input type="number" min="0" step="1" value={inputs.shinglePipeJacksCount} onChange={(e) => setField("shinglePipeJacksCount", e.target.value)} /></Field>
+          <Field label="Vents count"><input type="number" min="0" step="1" value={inputs.shingleVentsCount} onChange={(e) => setField("shingleVentsCount", e.target.value)} /></Field>
+          <Field label="Skylights count"><input type="number" min="0" step="1" value={inputs.shingleSkylightsCount} onChange={(e) => setField("shingleSkylightsCount", e.target.value)} /></Field>
+          <Field label="Chimney count"><input type="number" min="0" step="1" value={inputs.shingleChimneyCount} onChange={(e) => setField("shingleChimneyCount", e.target.value)} /></Field>
+        </div>
+
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Manual measurement mode" value="Active" note="Quantities are calculated from entered roof measurements." />
+          <DetailRow label="Starter bundles calculated" value={num(Math.max(0, Math.ceil((calculation.starterLf || 0) / 115)), 2)} />
+          <DetailRow label="Rapid Ridge boxes calculated" value={num(Math.max(0, Math.ceil((calculation.ridgeLf || 0) / 20)), 2)} />
+          <DetailRow label="Valley pieces calculated" value={num(Math.max(0, Math.ceil((calculation.valleyLf || 0) / 10)), 2)} />
+          <DetailRow label="Production squares" value={num(calculation.productionSquares, 2)} />
+          <DetailRow label="Total roof squares" value={num(calculation.totalRoofSquares, 2)} />
+        </div>
+      </Section>
+
+      <Section title="Material Calculations" subtitle="Editable pricing for the shingle material stack.">
+        <div className="tableWrap">
+          <table className="dataTable">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Quantity</th>
+                <th>Unit</th>
+                <th>Unit Cost</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(() => {
+                const groupDefinitions = [
+                  {
+                    title: "Main Roofing Materials",
+                    keys: ["shingles", "underlayment", "starter", "ridgeCap"],
+                  },
+                  {
+                    title: "Metal / Edge",
+                    keys: ["dripEdge", "valleyMetal"],
+                  },
+                  {
+                    title: "Nails / Paint / Sealant",
+                    keys: ["coilNails125", "coilNails78", "markingPaint", "caulkingSealantTube"],
+                  },
+                  {
+                    title: "Roof Jacks / Vents",
+                    keys: ["roofJack15", "roofJack2", "roofJack3", "roofJack4", "ovalRoofJack", "americapRound", "americapOval", "ohaginVent", "dormerVent"],
+                  },
+                  {
+                    title: "Wood / Misc",
+                    keys: ["tinShingles", "cdxPlywood", "roofConveyorDeliveryCharge", "fuelSurcharge"],
+                  },
+                ];
+                const itemsByKey = new Map(calculation.materialItems.map((item) => [item.key, item]));
+                return groupDefinitions.flatMap((group) => {
+                  const rows = [
+                    <tr key={`group-${group.title}`} className="sectionDivider">
+                      <td colSpan={5}>
+                        <strong>{group.title}</strong>
+                      </td>
+                    </tr>,
+                    ...group.keys
+                      .map((key) => itemsByKey.get(key))
+                      .filter(Boolean)
+                      .map((item) => (
+                        <tr key={item.key}>
+                          <td>{item.label}</td>
+                          <td>
+                            <div>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={item.quantity}
+                                onChange={(e) => {
+                                  const inputKeyMap = {
+                                  shingles: "shingleHdzBundlesNeeded",
+                                  underlayment: "shingleSyntheticUnderlaymentRolls",
+                                    starter: "shingleStarterQuantity",
+                                    ridgeCap: "shingleRapidRidgeBoxes",
+                                    dripEdge: "shingleDripEdgePieces",
+                                    coilNails125: "shingleCoilNails125Quantity",
+                                    coilNails78: "shingleCoilNails78Quantity",
+                                    markingPaint: "shingleMarkingPaintQuantity",
+                                    caulkingSealantTube: "shingleCaulkingSealantTubeQuantity",
+                                    roofJack15: "shingleRoofJack15Quantity",
+                                    roofJack2: "shingleRoofJack2Quantity",
+                                    roofJack3: "shingleRoofJack3Quantity",
+                                    roofJack4: "shingleRoofJack4Quantity",
+                                    ovalRoofJack: "shingleOvalRoofJackQuantity",
+                                    americapRound: "shingleAmericapRoundQuantity",
+                                    americapOval: "shingleAmericapOvalQuantity",
+                                    ohaginVent: "shingleOHaginVentQuantity",
+                                    dormerVent: "shingleDormerVentQuantity",
+                                    tinShingles: "shingleTinShinglesQuantity",
+                                    cdxPlywood: "shinglePlywoodSheets",
+                                    valleyMetal: "shingleValleyMetalQuantity",
+                                    roofConveyorDeliveryCharge: "shingleRoofConveyorDeliveryChargeQuantity",
+                                    fuelSurcharge: "shingleFuelSurchargeQuantity",
+                                  };
+                                  const mappedKey = inputKeyMap[item.key];
+                                  if (mappedKey) setField(mappedKey, e.target.value);
+                                }}
+                                />
+                              {item.helperText ? <div className="fieldHint" style={{ marginTop: 4 }}>{item.helperText}</div> : null}
+                            </div>
+                          </td>
+                          <td>{item.unit}</td>
+                          <td>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={item.unitPrice}
+                              onChange={(e) => {
+                                const priceKeyMap = {
+                                  shingles: "shingleShinglesPerSquareCost",
+                                  underlayment: "shingleSyntheticUnderlaymentRollCost",
+                                  starter: "shingleStarterCost",
+                                  ridgeCap: "shingleRidgeCapCost",
+                                  dripEdge: "shingleDripEdgeCost",
+                                  coilNails125: "shingleCoilNails125Cost",
+                                  coilNails78: "shingleCoilNails78Cost",
+                                  markingPaint: "shingleMarkingPaintCost",
+                                  caulkingSealantTube: "shingleCaulkingSealantTubeCost",
+                                  roofJack15: "shingleRoofJack15Cost",
+                                  roofJack2: "shingleRoofJack2Cost",
+                                  roofJack3: "shingleRoofJack3Cost",
+                                  roofJack4: "shingleRoofJack4Cost",
+                                  ovalRoofJack: "shingleOvalRoofJackCost",
+                                  americapRound: "shingleAmericapRoundCost",
+                                  americapOval: "shingleAmericapOvalCost",
+                                  ohaginVent: "shingleOHaginVentCost",
+                                  dormerVent: "shingleDormerVentCost",
+                                  tinShingles: "shingleTinShinglesCost",
+                                  cdxPlywood: "shinglePlywoodSheetCost",
+                                  valleyMetal: "shingleValleyMetalCost",
+                                  roofConveyorDeliveryCharge: "shingleRoofConveyorDeliveryCharge",
+                                  fuelSurcharge: "shingleFuelSurcharge",
+                                };
+                                const mappedKey = priceKeyMap[item.key];
+                                if (mappedKey) setField(mappedKey, e.target.value);
+                              }}
+                            />
+                          </td>
+                          <td>{money2(item.amount)}</td>
+                        </tr>
+                      )),
+                  ];
+                  return rows;
+                });
+              })()}
+            </tbody>
+          </table>
+        </div>
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow
+            label="Total HDZ RS+ Bundles Needed"
+            value={num(calculation.shingleHdzBundlesNeeded, 2)}
+            note={calculation.shingleMaterialFallbackNotes?.includes("Using calculated fallback.") ? "Using calculated fallback." : ""}
+          />
+          <DetailRow
+            label="Pro-Start Starter"
+            value={num(calculation.shingleStarterQuantity, 2)}
+            note={calculation.shingleStarterSuggestedQuantity > 0 ? "" : "Using calculated fallback."}
+          />
+          <DetailRow
+            label='2"x2" Drip Edge 10 ft Pieces'
+            value={num(calculation.shingleDripEdgePieces, 2)}
+            note={calculation.shingleDripEdgeSuggestedPieces > 0 ? "" : "Using calculated fallback."}
+          />
+          <DetailRow
+            label='Rapid Ridge 8" Ridge Cap'
+            value={num(calculation.shingleRapidRidgeBoxes, 2)}
+            note={calculation.shingleRapidRidgeLFUsed > 0 ? `${num(calculation.shingleRapidRidgeLFUsed, 1)} LF used` : ""}
+          />
+          <DetailRow
+            label="Suggested GAF quantity"
+            value={num(calculation.shingleSyntheticUnderlaymentSuggestedRolls, 2)}
+            note={calculation.shingleSyntheticUnderlaymentSuggestedRolls > 0 ? "" : "Using calculated fallback."}
+          />
+          <DetailRow
+            label="Calculated fallback quantity"
+            value={num(calculation.shingleSyntheticUnderlaymentCalculatedRolls, 2)}
+            note={calculation.shingleSyntheticUnderlaymentSuggestedRolls > 0 ? "" : "Using calculated fallback."}
+          />
+          <DetailRow
+            label="Final underlayment rolls used"
+            value={num(calculation.shingleSyntheticUnderlaymentRolls, 2)}
+            note={calculation.shingleSyntheticUnderlaymentSuggestedRolls > 0 ? "" : "Using calculated fallback."}
+          />
+          <DetailRow label="Total material cost" value={money2(calculation.materialCost)} />
+        </div>
+      </Section>
+
+      <Section title="Tear Off / Disposal" subtitle="How many roof sections need to be torn off?">
+        <div className="actionRow">
+          <button type="button" className="secondaryButton" onClick={addShingleTearOffSection}>
+            Add section
+          </button>
+          <button
+            type="button"
+            className="secondaryButton"
+            onClick={() => removeShingleTearOffSection((normalizeShingleTearOffSections(inputs.shingleTearOffSections).length || 1) - 1)}
+          >
+            Remove section
+          </button>
+        </div>
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Number of tear-off sections" value={num(calculation.shingleTearOffSectionTotals?.length || 0, 0)} />
+          <DetailRow label="Total Tear-Off / Disposal Cost" value={money2(calculation.tearOffDisposalCost)} />
+        </div>
+        <div className="detailList" style={{ marginTop: 14 }}>
+          {normalizeShingleTearOffSections(inputs.shingleTearOffSections).map((section, index) => {
+            const sectionTotal = calculation.shingleTearOffSectionTotals?.[index]?.sectionTearOffTotal ?? 0;
+            return (
+              <div className="summaryCard" key={section.id || index}>
+                <h3 style={{ marginTop: 0 }}>Section {index + 1}</h3>
+                <div className="formGrid">
+                  <Field label="Section name/label">
+                    <input
+                      type="text"
+                      value={section.label}
+                      onChange={(e) => setShingleTearOffSection(index, "label", e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Squares for this section">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={section.squares}
+                      onChange={(e) => setShingleTearOffSection(index, "squares", e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Number of existing layers">
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={section.layers}
+                      onChange={(e) => setShingleTearOffSection(index, "layers", e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Tear-off cost per square">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={section.tearOffCostPerSquare}
+                      onChange={(e) => setShingleTearOffSection(index, "tearOffCostPerSquare", e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Disposal fee / dump fee">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={section.disposalFee}
+                      onChange={(e) => setShingleTearOffSection(index, "disposalFee", e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Dry rot allowance">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={section.dryRotAllowance}
+                      onChange={(e) => setShingleTearOffSection(index, "dryRotAllowance", e.target.value)}
+                    />
+                  </Field>
+                </div>
+                <div className="detailList" style={{ marginTop: 12 }}>
+                  <DetailRow label="Section tear-off total" value={money2(sectionTotal)} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+
+      <Section title="Labor" subtitle="Choose who performs the labor and calculate the labor cost from here.">
+        <div className="formGrid">
+          <Field label="Is this project going to be performed in-house or sub-contracted?">
+            <select value={inputs.shingleLaborType} onChange={(e) => setField("shingleLaborType", e.target.value)}>
+              <option value="inHouse">In-house</option>
+              <option value="subcontracted">Sub-contracted</option>
+            </select>
+          </Field>
+        </div>
+
+        {String(inputs.shingleLaborType || "inHouse") === "inHouse" ? (
+          <>
+            <div className="formGrid" style={{ marginTop: 14 }}>
+              <Field label="Laborers per day">
+                <input type="number" min="0" step="1" value={inputs.shingleLaborersPerDay} onChange={(e) => setField("shingleLaborersPerDay", e.target.value)} />
+              </Field>
+              <Field label="Total days on job">
+                <input type="number" min="0" step="1" value={inputs.shingleTotalDaysOnJob} onChange={(e) => setField("shingleTotalDaysOnJob", e.target.value)} />
+              </Field>
+              <Field label="Labor hourly rate">
+                <input type="number" min="0" step="0.01" value={inputs.shingleLaborHourlyRate} onChange={(e) => setField("shingleLaborHourlyRate", e.target.value)} />
+              </Field>
+              <Field label="Hours per day">
+                <input type="number" min="0" step="0.1" value={inputs.shingleHoursPerDay} onChange={(e) => setField("shingleHoursPerDay", e.target.value)} />
+              </Field>
+            </div>
+            <div className="detailList" style={{ marginTop: 14 }}>
+              <DetailRow label="In-house labor cost" value={money2(calculation.laborCost)} />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="formGrid" style={{ marginTop: 14 }}>
+              <Field label="Is subcontractor licensed?">
+                <select value={String(inputs.shingleSubcontractorLicensed ? "yes" : "no")} onChange={(e) => setField("shingleSubcontractorLicensed", e.target.value === "yes")}>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              </Field>
+              <Field label="Does subcontractor carry workers comp?">
+                <select value={String(inputs.shingleSubcontractorWorkersComp ? "yes" : "no")} onChange={(e) => setField("shingleSubcontractorWorkersComp", e.target.value === "yes")}>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              </Field>
+            </div>
+            <div className="actionRow" style={{ marginTop: 12 }}>
+              <button type="button" className="secondaryButton" onClick={addShingleLaborSection}>
+                Add subcontractor section
+              </button>
+              <button
+                type="button"
+                className="secondaryButton"
+                onClick={() => removeShingleLaborSection((normalizeShingleLaborSections(inputs.shingleLaborSections).length || 1) - 1)}
+              >
+                Remove section
+              </button>
+            </div>
+            <div className="detailList" style={{ marginTop: 14 }}>
+              {normalizeShingleLaborSections(inputs.shingleLaborSections).map((section, index) => {
+                const sectionInstallTotal = calculation.shingleSubcontractorSections?.[index]?.sectionInstallTotal ?? 0;
+                return (
+                  <div className="summaryCard" key={section.id || index}>
+                    <h3 style={{ marginTop: 0 }}>Subcontractor Section {index + 1}</h3>
+                    <div className="formGrid">
+                      <Field label="Section name">
+                        <input type="text" value={section.label} onChange={(e) => setShingleLaborSection(index, "label", e.target.value)} />
+                      </Field>
+                      <Field label="Install squares">
+                        <input type="number" min="0" step="0.1" value={section.installSquares} onChange={(e) => setShingleLaborSection(index, "installSquares", e.target.value)} />
+                      </Field>
+                      <Field label="Cost per install SQ">
+                        <input type="number" min="0" step="0.01" value={section.costPerInstallSq} onChange={(e) => setShingleLaborSection(index, "costPerInstallSq", e.target.value)} />
+                      </Field>
+                    </div>
+                    <div className="detailList" style={{ marginTop: 10 }}>
+                      <DetailRow label="Section install total" value={money2(sectionInstallTotal)} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="detailList" style={{ marginTop: 14 }}>
+              <DetailRow label="Subcontractor install subtotal" value={money2(calculation.shingleSubcontractorInstallSubtotal || 0)} />
+              <DetailRow label="Workers comp / risk add-on" value={money2(calculation.shingleWorkersCompRiskAddOn || 0)} />
+              <DetailRow label="Total subcontractor labor cost" value={money2(calculation.shingleTotalSubcontractorLaborCost || 0)} />
+            </div>
+          </>
+        )}
+      </Section>
+
+      <OverheadCalculator
+        inputs={inputs}
+        calculation={calculation}
+        onOverheadPercentChange={(value) => setField("overheadPercent", value)}
+        onScopeAddersChange={(value) => setField("scopeAdders", value)}
+        onMiscCostChange={(value) => setField("miscCost", value)}
+        subtitle="Apply overhead before markup is calculated."
+      />
+
+      <TravelCalculator
+        inputs={inputs}
+        calculation={calculation}
+        isLoaded={isLoaded}
+        loadError={loadError}
+        isLookingUpDistance={isLookingUpDistance}
+        travelLookupMessage={travelLookupMessage}
+        googleDebug={googleDebug}
+        companyHqHint="Default: CRT Roofing office in Bloomington, CA"
+        oneWayMilesLabel="One-way miles"
+        onCompanyHqAddressChange={(value) => setTravelField("companyHqAddress", value)}
+        onJobSiteAddressChange={(value) => setTravelField("jobSiteAddress", value)}
+        onOneWayMilesChange={(value) => setTravelField("oneWayMiles", value)}
+        onAverageDrivingSpeedChange={(value) => setTravelField("averageDrivingSpeedMph", value)}
+        onDriverHourlyRateChange={(value) => setTravelField("travelDriverHourlyRate", value)}
+        onWorkHoursPerDayChange={(value) => setTravelField("workHoursPerDay", value)}
+        onNumberOfJobDaysChange={(value) => setTravelField("numberOfJobDays", value)}
+        onNumberOfDriversChange={(value) => setTravelField("numberOfDrivers", value)}
+        onVehicleSelection={setTravelVehicleSelection}
+        onAddVehicleSelection={addTravelVehicleSelection}
+        onRemoveVehicleSelection={removeTravelVehicleSelection}
+        onCalculateDistance={handleCalculateDistance}
+        onTestGoogleGeocoder={handleTestGoogleGeocoder}
+        onTestDirections={handleTestDirections}
+      />
+
+      <Section title="Totals / Markup" subtitle="Job cost, markup table, and bid selection.">
+        <div className="detailList">
+          <DetailRow label="Material cost" value={money2(calculation.materialCost)} />
+          <DetailRow label="Labor cost" value={money2(calculation.laborCost)} />
+          {calculation.prevailingWageJob ? (
+            <DetailRow label="Prevailing wage labor" value={money2(calculation.prevailingWageLaborCost)} />
+          ) : null}
+          <DetailRow label="Tear-off / disposal cost" value={money2(calculation.tearOffDisposalCost)} />
+          <DetailRow label="Travel cost" value={money2(calculation.travelCost)} />
+          <DetailRow label="City permit fee" value={money2(calculation.cityPermitFee)} />
+          <DetailRow label="Equipment / rental total" value={money2(calculation.equipmentRentalTotal)} />
+          <DetailRow label="Total job cost" value={money2(calculation.totalJobCost)} />
+          <DetailRow label="Price per square" value={money2(calculation.selectedPricePerSq)} />
+        </div>
+
+        <div className="tableWrap" style={{ marginTop: 14 }}>
+          <table className="dataTable">
+            <thead>
+              <tr>
+                <th>Markup %</th>
+                <th>Bid Amount</th>
+                <th>Profit</th>
+                <th>Price Per SQ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calculation.bidOptions.options.map((option) => (
+                <tr
+                  key={option.percent}
+                  className={`markupTableRow ${option.percent === calculation.selectedMarkupPercent ? "active" : ""}`}
+                  onClick={() => handleSelectedMarkup(option.percent)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleSelectedMarkup(option.percent);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`${option.percent}% markup row`}
+                >
+                  <td>{option.percent}%</td>
+                  <td>{money2(option.bidAmount)}</td>
+                  <td>{money2(option.profitDollars)}</td>
+                  <td>{money2(option.pricePerSq)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="summaryCard" style={{ marginTop: 14 }}>
+          <h3>Custom Bid Amount</h3>
+          <label>Custom Bid Amount</label>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={inputs.shingleCustomBidAmount}
+            onChange={(e) => setField("shingleCustomBidAmount", e.target.value)}
+          />
+          <DetailRow label="Custom Profit" value={money2(calculation.customProfitDollars)} />
+          <DetailRow label="Custom Price Per Square" value={money2(calculation.customPricePerSq)} />
+        </div>
+
+        <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginTop: 14 }}>
+          <div className="summaryCard">
+            <span>Selected bid</span>
+            <strong>{money2(calculation.selectedBidAmount)}</strong>
+            <p style={{ marginBottom: 0, color: "var(--muted)" }}>
+              {calculation.customBidSelected ? "Custom Bid" : `${num(calculation.selectedMarkupPercent, 0)}% markup`} · Profit {money2(calculation.selectedProfitDollars)} · {money2(calculation.selectedPricePerSq)} / SQ
+            </p>
+          </div>
+        </div>
+      </Section>
+
+      <div className="actionRow" style={{ marginTop: 16 }}>
+        <button type="button" className="primaryButton" onClick={handleSaveEstimate}>
+          Save Estimate
+        </button>
+        <button type="button" className="secondaryButton" onClick={handleConvertCurrentEstimateToProposal}>
+          Generate Proposal
+        </button>
+        <button type="button" className="secondaryButton" onClick={handleDownloadEstimatePDF}>
+          Download Estimate PDF
+        </button>
+      </div>
     </div>
   );
 
@@ -3100,6 +15055,1380 @@ function App() {
     </div>
   );
 
+  const renderAdministrationScreen = () => {
+    const query = employeeManagementSearch.trim().toLowerCase();
+    const filteredEmployees = employeeDirectory.filter((employee) => {
+      if (!query) return true;
+      const haystack = [
+        employee.firstName,
+        employee.lastName,
+        employee.displayName,
+        employee.occupation,
+        employee.department,
+        employee.employeeNumber,
+        employee.phone,
+        employee.email,
+        employee.payrollId,
+        employee.notes,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+
+    return (
+      <div className="appShell">
+        <style>{css}</style>
+        <header className="hero">
+          <div>
+            <div className="brandRow">
+              <div className="brandMark">
+                <img src={LOGO_SRC} alt="CRT Roofing logo" />
+              </div>
+              <div>
+                <p className="eyebrow">CRT Roofing Administration</p>
+                <h1>Administration</h1>
+                <p className="intro">Manage employee records used across the app.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="heroCard">
+            <span>Signed in</span>
+            <strong>{authUser.displayName}</strong>
+            <p>Local mode only</p>
+          </div>
+        </header>
+
+        <div className="actionRow" style={{ marginBottom: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+            Back to dashboard
+          </button>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
+            Open Admin Pricing
+          </button>
+        </div>
+
+        <Section title="Employee Management" subtitle="Add, edit, and activate employees used in Field Operations, Office, Sales, and Management.">
+          <div className="detailList" style={{ marginBottom: 14 }}>
+            <DetailRow label="Active employees" value={num(employeeDirectory.filter((employee) => employee.isActive).length, 0)} />
+            <DetailRow label="Field Operations employees" value={num(activeFieldOperationEmployees.length, 0)} />
+            <DetailRow label="Foremen" value={num(activeFieldOperationForemen.length, 0)} />
+            <DetailRow label="Drivers" value={num(activeEmployeeDrivers.length, 0)} />
+          </div>
+
+          <div className="actionRow" style={{ marginBottom: 12 }}>
+            <button type="button" className="primaryButton" onClick={startNewEmployeeDraft}>
+              + Add employee
+            </button>
+            <button type="button" className="secondaryButton" onClick={saveEmployeeDraft}>
+              Save employee
+            </button>
+          </div>
+
+          <div className="formGrid">
+            <Field label="First Name">
+              <input type="text" value={employeeManagementDraft.firstName} onChange={(e) => updateEmployeeDraftField("firstName", e.target.value)} />
+            </Field>
+            <Field label="Last Name">
+              <input type="text" value={employeeManagementDraft.lastName} onChange={(e) => updateEmployeeDraftField("lastName", e.target.value)} />
+            </Field>
+            <Field label="Occupation">
+              <select value={employeeManagementDraft.occupation} onChange={(e) => updateEmployeeDraftField("occupation", e.target.value)}>
+                <option value="">Select occupation</option>
+                {[
+                  "Foreman",
+                  "Roofer",
+                  "Laborer",
+                  "Field Technician",
+                  "Project Manager",
+                  "Estimator",
+                  "Sales",
+                  "Office Administrator",
+                  "Billing",
+                  "Marketing",
+                  "Management",
+                  "Owner",
+                  "Other",
+                ].map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Department">
+              <select value={employeeManagementDraft.department} onChange={(e) => updateEmployeeDraftField("department", e.target.value)}>
+                {["Field Operations", "Office", "Sales", "Management"].map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Active / Inactive">
+              <select value={employeeManagementDraft.isActive ? "active" : "inactive"} onChange={(e) => updateEmployeeDraftField("isActive", e.target.value === "active")}>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </Field>
+            <Field label="Employee ID (optional)">
+              <input type="text" value={employeeManagementDraft.employeeNumber} onChange={(e) => updateEmployeeDraftField("employeeNumber", e.target.value)} />
+            </Field>
+            <Field label="Phone">
+              <input type="text" value={employeeManagementDraft.phone} onChange={(e) => updateEmployeeDraftField("phone", e.target.value)} />
+            </Field>
+            <Field label="Email">
+              <input type="email" value={employeeManagementDraft.email} onChange={(e) => updateEmployeeDraftField("email", e.target.value)} />
+            </Field>
+            <Field label="Hire Date">
+              <input type="date" value={employeeManagementDraft.hireDate} onChange={(e) => updateEmployeeDraftField("hireDate", e.target.value)} />
+            </Field>
+            <Field label="Hourly Rate">
+              <input type="number" min="0" step="0.01" value={employeeManagementDraft.hourlyRate} onChange={(e) => updateEmployeeDraftField("hourlyRate", e.target.value)} />
+            </Field>
+            <Field label="Payroll ID">
+              <input type="text" value={employeeManagementDraft.payrollId} onChange={(e) => updateEmployeeDraftField("payrollId", e.target.value)} />
+            </Field>
+            <Field label="Driver?">
+              <select value={employeeManagementDraft.isDriver ? "yes" : "no"} onChange={(e) => updateEmployeeDraftField("isDriver", e.target.value === "yes")}>
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+              </select>
+            </Field>
+            <Field label="Foreman?">
+              <select value={employeeManagementDraft.isForeman ? "yes" : "no"} onChange={(e) => updateEmployeeDraftField("isForeman", e.target.value === "yes")}>
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+              </select>
+            </Field>
+            <Field label="Notes">
+              <textarea rows="4" value={employeeManagementDraft.notes} onChange={(e) => updateEmployeeDraftField("notes", e.target.value)} />
+            </Field>
+          </div>
+
+          <div className="detailList" style={{ marginTop: 14 }}>
+            <DetailRow label="Display name" value={buildEmployeeDisplayName(employeeManagementDraft) || "—"} />
+            <DetailRow label="Employee record" value={employeeManagementDraft.id || "New employee"} />
+          </div>
+        </Section>
+
+        <Section title="Employee Directory" subtitle="Search and review all employees saved for the company.">
+          <div className="formGrid" style={{ marginBottom: 14 }}>
+            <Field label="Search employees">
+              <input
+                type="text"
+                value={employeeManagementSearch}
+                onChange={(e) => setEmployeeManagementSearch(e.target.value)}
+                placeholder="Search by name, department, role, or ID"
+              />
+            </Field>
+          </div>
+          <div className="savedList">
+            {filteredEmployees.length ? (
+              filteredEmployees.map((employee) => (
+                <div className="savedCard" key={employee.id}>
+                  <div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                      <span className="eyebrow">{employee.employeeNumber || employee.id}</span>
+                      <span className={`statusTag ${employee.isActive ? "" : "statusTag-draft"}`}>{employee.isActive ? "ACTIVE" : "INACTIVE"}</span>
+                      {employee.isForeman ? <span className="statusTag">FOREMAN</span> : null}
+                      {employee.isDriver ? <span className="statusTag">DRIVER</span> : null}
+                    </div>
+                    <strong>{employee.displayName || "Unnamed employee"}</strong>
+                    <p>
+                      {employee.occupation || "No occupation"} | {employee.department || "No department"} |{" "}
+                      {employee.phone || "No phone"} | {employee.email || "No email"}
+                    </p>
+                  </div>
+                  <div className="savedActions">
+                    <button type="button" className="secondaryButton" onClick={() => editEmployeeRecord(employee)}>
+                      Edit
+                    </button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="emptyState">No employees match your search.</p>
+            )}
+          </div>
+      </Section>
+    </div>
+  );
+  };
+
+  const renderCrmLeadsScreen = () => {
+    const assignedStaffOptions = [
+      { value: "", label: "Unassigned" },
+      ...crmActiveStaffOptions,
+    ];
+    const filteredLeads = [...crmLeads]
+      .filter((lead) => {
+        const haystack = [
+          crmLeadDisplayName(lead),
+          lead.phone,
+          lead.email,
+          lead.propertyAddress,
+          lead.city,
+          lead.zipCode,
+          lead.leadSource,
+          lead.roofingServiceNeeded,
+          lead.description,
+          lead.companyName,
+          lead.bestTimeToCall,
+          lead.secondaryPhone,
+          lead.propertyType,
+          lead.roofType,
+          lead.approximateRoofSize,
+          lead.urgency,
+          lead.referredBy,
+          lead.internalNotes,
+          lead.assignedStaffId ? assignedStaffOptions.find((staff) => staff.value === lead.assignedStaffId)?.label : "",
+          lead.leadStatus,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const query = crmLeadSearch.trim().toLowerCase();
+        if (query && !haystack.includes(query)) return false;
+        if (crmLeadStatusFilter !== "all" && String(lead.leadStatus || "") !== crmLeadStatusFilter) return false;
+        if (crmLeadSourceFilter !== "all" && String(lead.leadSource || "") !== crmLeadSourceFilter) return false;
+        if (crmLeadAssigneeFilter !== "all" && String(lead.assignedStaffId || "") !== crmLeadAssigneeFilter) return false;
+        if (crmLeadDateFrom && String(lead.createdAt || "").slice(0, 10) < crmLeadDateFrom) return false;
+        if (crmLeadDateTo && String(lead.createdAt || "").slice(0, 10) > crmLeadDateTo) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const direction = String(crmLeadSortDirection || "desc").toLowerCase() === "asc" ? 1 : -1;
+        const sortBy = String(crmLeadSortBy || "createdAt");
+        let comparison = 0;
+        if (sortBy === "oldest") {
+          comparison = String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+        } else if (sortBy === "followUpDate") {
+          comparison = String(a.nextFollowUpDate || "").localeCompare(String(b.nextFollowUpDate || ""));
+        } else if (sortBy === "value") {
+          comparison = toNumber(a.estimatedValue, 0) - toNumber(b.estimatedValue, 0);
+        } else {
+          comparison = String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+        }
+        return comparison * direction;
+      });
+
+    const filteredCustomers = [...crmCustomers]
+      .filter((customer) => {
+        const query = crmCustomerSearch.trim().toLowerCase();
+        if (!query) return true;
+        const haystack = [
+          crmCustomerDisplayName(customer),
+          customer.phone,
+          customer.secondaryPhone,
+          customer.email,
+          customer.billingAddress,
+          customer.city,
+          customer.zipCode,
+          customer.customerType,
+          customer.propertyType,
+          customer.companyName,
+          customer.notes,
+          ...(customer.properties || []).flatMap((property) => [property.propertyName, property.propertyAddress, property.city, property.roofType, property.notes]),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(query);
+      })
+      .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+
+    const filteredFollowups = [...crmFollowups]
+      .filter((followup) => {
+        const query = crmFollowupSearch.trim().toLowerCase();
+        if (!query) return true;
+        const relatedLead = crmLeads.find((lead) => lead.id === followup.relatedId);
+        const relatedCustomer = crmCustomers.find((customer) => customer.id === followup.relatedId);
+        const haystack = [
+          followup.title,
+          followup.followUpType,
+          followup.status,
+          followup.dueDate,
+          followup.notes,
+          relatedLead ? crmLeadDisplayName(relatedLead) : "",
+          relatedCustomer ? crmCustomerDisplayName(relatedCustomer) : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(query);
+      })
+      .sort((a, b) => String(a.dueDate || a.createdAt || "").localeCompare(String(b.dueDate || b.createdAt || "")));
+
+    const openFollowups = filteredFollowups.filter((followup) => String(followup.status || "").toLowerCase() !== "completed");
+    const leadStatusCounts = CRM_LEAD_STATUS_OPTIONS.reduce((acc, status) => {
+      acc[status] = crmLeads.filter((lead) => String(lead.leadStatus || "") === status).length;
+      return acc;
+    }, {});
+    const kanbanColumns = CRM_PIPELINE_STATUS_OPTIONS.map((status) => ({
+      status,
+      leads: filteredLeads.filter((lead) => String(lead.leadStatus || "New") === status),
+    }));
+    const selectedCustomerFinancialSummary = (crmSelectedCustomer?.jobs || []).reduce(
+      (acc, job) => {
+        const contract = Math.max(0, toNumber(job.contractAmount, 0));
+        const billed = Math.max(0, toNumber(job.amountBilled, 0));
+        const collected = Math.max(0, toNumber(job.amountCollected, 0));
+        acc.contract += contract;
+        acc.billed += billed;
+        acc.collected += collected;
+        acc.remaining += Math.max(0, contract - collected);
+        return acc;
+      },
+      { contract: 0, billed: 0, collected: 0, remaining: 0 },
+    );
+
+    const renderLeadCard = (lead) => (
+      <div className="crmKanbanCard" key={lead.id}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <span className={`statusTag ${lead.leadStatus === "Approved" ? "statusTag-approved" : lead.leadStatus === "Lost" ? "statusTag-draft" : ""}`}>{lead.leadStatus || "New"}</span>
+          {lead.estimatedValue ? <span className="statusTag">${money2(toNumber(lead.estimatedValue, 0))}</span> : null}
+        </div>
+        <strong>{crmLeadDisplayName(lead)}</strong>
+        <p>{lead.propertyAddress || "No property address"}</p>
+        <p>{lead.roofingServiceNeeded || "No service selected"}</p>
+        <p>{lead.phone || "No phone"}</p>
+        <div className="savedActions">
+          <button type="button" className="secondaryButton" onClick={() => editCrmLead(lead)}>
+            Edit
+          </button>
+          <button
+            type="button"
+            className="secondaryButton"
+            onClick={() => {
+              setCrmTab("customers");
+              if (lead.convertedCustomerId) {
+                const customer = crmCustomers.find((item) => item.id === lead.convertedCustomerId);
+                if (customer) editCrmCustomer(customer);
+              }
+            }}
+          >
+            Open file
+          </button>
+        </div>
+      </div>
+    );
+
+    const renderCustomerFile = () => {
+      if (!crmCustomerDraft.customerName && !crmCustomerDraft.companyName && !crmCustomerDraft.firstName && !crmCustomerDraft.lastName) {
+        return <p className="emptyState">Select a customer to open the file, or create a new one above.</p>;
+      }
+
+      const propertyRows = Array.isArray(crmCustomerDraft.properties) ? crmCustomerDraft.properties : [];
+      const contactRows = Array.isArray(crmCustomerDraft.contacts) ? crmCustomerDraft.contacts : [];
+      const jobRows = Array.isArray(crmCustomerDraft.jobs) ? crmCustomerDraft.jobs : [];
+      const timelineRows = Array.isArray(crmCustomerDraft.timeline) ? crmCustomerDraft.timeline : [];
+      const fileRows = Array.isArray(crmCustomerDraft.files) ? crmCustomerDraft.files : [];
+      const proposalArchiveRows = Array.isArray(crmCustomerDraft.proposalArchive) ? crmCustomerDraft.proposalArchive : [];
+      const openProposalArchiveEntry = (archiveEntry) => {
+        if (!archiveEntry) return;
+        const matchingProposal =
+          proposals.find(
+            (proposal) =>
+              proposal.id === archiveEntry.proposalId ||
+              proposal.sourceEstimateCode === archiveEntry.sourceEstimateCode ||
+              proposal.estimateCode === archiveEntry.estimateCode,
+          ) || null;
+
+        if (matchingProposal) {
+          openProposalBuilder(matchingProposal);
+          setSessionMessageType("success");
+          setSessionMessage(`Opened proposal ${matchingProposal.proposalNumber || archiveEntry.proposalNumber || "record"}.`);
+          return;
+        }
+
+        if (archiveEntry.pdfArchiveDataUrl) {
+          const previewWindow = window.open(archiveEntry.pdfArchiveDataUrl, "_blank", "noopener,noreferrer");
+          if (!previewWindow) {
+            setSessionMessageType("error");
+            setSessionMessage("The browser blocked the archived PDF preview.");
+            return;
+          }
+          setSessionMessageType("success");
+          setSessionMessage(`Opened archived PDF for proposal ${archiveEntry.proposalNumber || "record"}.`);
+          return;
+        }
+
+        setSessionMessageType("error");
+        setSessionMessage("That archived proposal is not linked to a live proposal or PDF yet.");
+      };
+      const downloadProposalArchivePdf = (archiveEntry) => {
+        if (!archiveEntry?.pdfArchiveDataUrl) {
+          setSessionMessageType("error");
+          setSessionMessage("No archived PDF is stored for this proposal yet.");
+          return;
+        }
+        const link = document.createElement("a");
+        link.href = archiveEntry.pdfArchiveDataUrl;
+        link.download = archiveEntry.pdfArchiveName || `proposal-${archiveEntry.proposalNumber || archiveEntry.id || "archive"}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setSessionMessageType("success");
+        setSessionMessage(`Downloaded archived PDF for proposal ${archiveEntry.proposalNumber || "record"}.`);
+      };
+
+      return (
+        <div className="crmCustomerSections">
+          <Section title="A. Customer Information" subtitle="Basic account information for CRM and office follow-up.">
+            <div className="formGrid">
+              <Field label="Customer name">
+                <input type="text" value={crmCustomerDraft.customerName} onChange={(e) => updateCrmCustomerDraftField("customerName", e.target.value)} placeholder="Customer or company name" />
+              </Field>
+              <Field label="First name">
+                <input type="text" value={crmCustomerDraft.firstName} onChange={(e) => updateCrmCustomerDraftField("firstName", e.target.value)} />
+              </Field>
+              <Field label="Last name">
+                <input type="text" value={crmCustomerDraft.lastName} onChange={(e) => updateCrmCustomerDraftField("lastName", e.target.value)} />
+              </Field>
+              <Field label="Company / HOA / property management">
+                <input type="text" value={crmCustomerDraft.companyName} onChange={(e) => updateCrmCustomerDraftField("companyName", e.target.value)} />
+              </Field>
+              <Field label="Primary phone">
+                <input type="text" value={crmCustomerDraft.phone} onChange={(e) => updateCrmCustomerDraftField("phone", e.target.value)} />
+              </Field>
+              <Field label="Secondary phone">
+                <input type="text" value={crmCustomerDraft.secondaryPhone} onChange={(e) => updateCrmCustomerDraftField("secondaryPhone", e.target.value)} />
+              </Field>
+              <Field label="Email">
+                <input type="email" value={crmCustomerDraft.email} onChange={(e) => updateCrmCustomerDraftField("email", e.target.value)} />
+              </Field>
+              <Field label="Billing address">
+                <input type="text" value={crmCustomerDraft.billingAddress} onChange={(e) => updateCrmCustomerDraftField("billingAddress", e.target.value)} />
+              </Field>
+              <Field label="City">
+                <input type="text" value={crmCustomerDraft.city} onChange={(e) => updateCrmCustomerDraftField("city", e.target.value)} />
+              </Field>
+              <Field label="ZIP code">
+                <input type="text" value={crmCustomerDraft.zipCode} onChange={(e) => updateCrmCustomerDraftField("zipCode", e.target.value)} />
+              </Field>
+              <Field label="Customer type">
+                <select value={crmCustomerDraft.customerType} onChange={(e) => updateCrmCustomerDraftField("customerType", e.target.value)}>
+                  <option value="">Select type</option>
+                  {["Residential", "Commercial", "HOA", "Property Manager", "General Contractor", "Other"].map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Property type">
+                <select value={crmCustomerDraft.propertyType} onChange={(e) => updateCrmCustomerDraftField("propertyType", e.target.value)}>
+                  <option value="">Select property type</option>
+                  {CRM_PROPERTY_TYPE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Assigned staff member">
+                <select value={crmCustomerDraft.assignedStaffId} onChange={(e) => updateCrmCustomerDraftField("assignedStaffId", e.target.value)}>
+                  {assignedStaffOptions.map((option) => (
+                    <option key={option.value || "unassigned"} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Next follow-up date">
+                <input type="date" value={crmCustomerDraft.nextFollowUpDate} onChange={(e) => updateCrmCustomerDraftField("nextFollowUpDate", e.target.value)} />
+              </Field>
+            </div>
+            <div className="detailList" style={{ marginTop: 14 }}>
+              <DetailRow label="Customer file id" value={crmCustomerDraft.id || "New customer"} />
+              <DetailRow label="Properties" value={num(propertyRows.length, 0)} />
+              <DetailRow label="Contacts" value={num(contactRows.length, 0)} />
+              <DetailRow label="Jobs" value={num(jobRows.length, 0)} />
+            </div>
+          </Section>
+
+          <Section title="B. Properties" subtitle="Track multiple properties for the same customer.">
+            <div className="actionRow" style={{ marginBottom: 12 }}>
+              <button type="button" className="primaryButton" onClick={addCrmPropertyToCustomer}>
+                + Add property
+              </button>
+            </div>
+            {propertyRows.length ? (
+              <div className="savedList">
+                {propertyRows.map((property) => (
+                  <div className="savedCard" key={property.id}>
+                    <div className="formGrid">
+                      <Field label="Property name">
+                        <input type="text" value={property.propertyName} onChange={(e) => updateCrmPropertyField(property.id, "propertyName", e.target.value)} />
+                      </Field>
+                      <Field label="Address">
+                        <input type="text" value={property.propertyAddress} onChange={(e) => updateCrmPropertyField(property.id, "propertyAddress", e.target.value)} />
+                      </Field>
+                      <Field label="City">
+                        <input type="text" value={property.city} onChange={(e) => updateCrmPropertyField(property.id, "city", e.target.value)} />
+                      </Field>
+                      <Field label="ZIP code">
+                        <input type="text" value={property.zipCode} onChange={(e) => updateCrmPropertyField(property.id, "zipCode", e.target.value)} />
+                      </Field>
+                      <Field label="Property type">
+                        <select value={property.propertyType} onChange={(e) => updateCrmPropertyField(property.id, "propertyType", e.target.value)}>
+                          <option value="">Select type</option>
+                          {CRM_PROPERTY_TYPE_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Roof type">
+                        <input type="text" value={property.roofType} onChange={(e) => updateCrmPropertyField(property.id, "roofType", e.target.value)} />
+                      </Field>
+                      <Field label="Approximate roof size">
+                        <input type="text" value={property.approximateRoofSize} onChange={(e) => updateCrmPropertyField(property.id, "approximateRoofSize", e.target.value)} />
+                      </Field>
+                      <Field label="Notes">
+                        <textarea rows="3" value={property.notes} onChange={(e) => updateCrmPropertyField(property.id, "notes", e.target.value)} />
+                      </Field>
+                    </div>
+                    <div className="actionRow">
+                      <button type="button" className="dangerButton" onClick={() => removeCrmProperty(property.id)}>
+                        Remove property
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="emptyState">No properties have been added yet.</p>
+            )}
+          </Section>
+
+          <Section title="C. Complete History Timeline" subtitle="Basic activity timeline for this customer.">
+            <div className="actionRow" style={{ marginBottom: 12 }}>
+              <button type="button" className="primaryButton" onClick={addCrmTimelineEntry}>
+                + Add timeline entry
+              </button>
+            </div>
+            {timelineRows.length ? (
+              <div className="crmTimelineList">
+                {timelineRows.map((entry) => (
+                  <div className="crmTimelineItem" key={entry.id}>
+                    <div className="formGrid">
+                      <Field label="Activity type">
+                        <select value={entry.label} onChange={(e) => updateCrmTimelineField(entry.id, "label", e.target.value)}>
+                          {CRM_TIMELINE_TYPE_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Created by">
+                        <input type="text" value={entry.createdBy} onChange={(e) => updateCrmTimelineField(entry.id, "createdBy", e.target.value)} />
+                      </Field>
+                      <Field label="Summary">
+                        <input type="text" value={entry.summary} onChange={(e) => updateCrmTimelineField(entry.id, "summary", e.target.value)} />
+                      </Field>
+                      <Field label="Date / time">
+                        <input type="datetime-local" value={entry.createdAt ? String(entry.createdAt).slice(0, 16) : ""} onChange={(e) => updateCrmTimelineField(entry.id, "createdAt", e.target.value ? `${e.target.value}:00.000Z` : "")} />
+                      </Field>
+                      <Field label="Details">
+                        <textarea rows="3" value={entry.details} onChange={(e) => updateCrmTimelineField(entry.id, "details", e.target.value)} />
+                      </Field>
+                    </div>
+                    <div className="actionRow">
+                      <button type="button" className="dangerButton" onClick={() => removeCrmTimelineEntry(entry.id)}>
+                        Remove entry
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="emptyState">No timeline events yet.</p>
+            )}
+          </Section>
+
+          <Section title="D. Files and Documents" subtitle="Local upload section for customer files until storage is connected later.">
+            <div className="formGrid" style={{ marginBottom: 12 }}>
+              <Field label="Upload files">
+                <input type="file" multiple onChange={handleCrmCustomerFileUpload} />
+              </Field>
+              <Field label="File category">
+                <select
+                  value={crmCustomerDraft.fileCategory || "Other"}
+                  onChange={(e) => updateCrmCustomerDraftField("fileCategory", e.target.value)}
+                >
+                  {CRM_FILE_CATEGORY_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            {fileRows.length ? (
+              <div className="savedList">
+                {fileRows.map((file) => (
+                  <div className="savedCard crmFileRow" key={file.id}>
+                    <div>
+                      <strong>{file.fileName || "Untitled file"}</strong>
+                      <p>
+                        {file.category || "Other"} | Uploaded {file.uploadedAt ? new Date(file.uploadedAt).toLocaleString() : "local draft"}
+                      </p>
+                    </div>
+                    <div className="savedActions">
+                      <button type="button" className="dangerButton" onClick={() => removeCrmFile(file.id)}>
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="emptyState">No files uploaded yet.</p>
+            )}
+          </Section>
+
+          <Section title="E. Jobs" subtitle="Track roof jobs associated with this customer.">
+            <div className="actionRow" style={{ marginBottom: 12 }}>
+              <button type="button" className="primaryButton" onClick={addCrmJobToCustomer}>
+                + Add job
+              </button>
+            </div>
+            {jobRows.length ? (
+              <div className="savedList">
+                {jobRows.map((job) => (
+                  <div className="savedCard" key={job.id}>
+                    <div className="formGrid">
+                      <Field label="Job number">
+                        <input type="text" value={job.jobNumber} onChange={(e) => updateCrmJobField(job.id, "jobNumber", e.target.value)} />
+                      </Field>
+                      <Field label="Project name">
+                        <input type="text" value={job.projectName} onChange={(e) => updateCrmJobField(job.id, "projectName", e.target.value)} />
+                      </Field>
+                      <Field label="Status">
+                        <select value={job.status} onChange={(e) => updateCrmJobField(job.id, "status", e.target.value)}>
+                          {["Approved", "Scheduled", "Active", "On hold", "Completed", "Closed"].map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Contract amount">
+                        <input type="number" min="0" step="0.01" value={job.contractAmount} onChange={(e) => updateCrmJobField(job.id, "contractAmount", e.target.value)} />
+                      </Field>
+                      <Field label="Amount billed">
+                        <input type="number" min="0" step="0.01" value={job.amountBilled} onChange={(e) => updateCrmJobField(job.id, "amountBilled", e.target.value)} />
+                      </Field>
+                      <Field label="Amount collected">
+                        <input type="number" min="0" step="0.01" value={job.amountCollected} onChange={(e) => updateCrmJobField(job.id, "amountCollected", e.target.value)} />
+                      </Field>
+                      <Field label="Start date">
+                        <input type="date" value={job.startDate} onChange={(e) => updateCrmJobField(job.id, "startDate", e.target.value)} />
+                      </Field>
+                      <Field label="Completion date">
+                        <input type="date" value={job.completionDate} onChange={(e) => updateCrmJobField(job.id, "completionDate", e.target.value)} />
+                      </Field>
+                      <Field label="Notes">
+                        <textarea rows="3" value={job.notes} onChange={(e) => updateCrmJobField(job.id, "notes", e.target.value)} />
+                      </Field>
+                    </div>
+                    <div className="actionRow">
+                      <button type="button" className="dangerButton" onClick={() => removeCrmJob(job.id)}>
+                        Remove job
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="emptyState">No jobs linked to this customer yet.</p>
+            )}
+            <div className="detailList" style={{ marginTop: 14 }}>
+              <DetailRow label="Total contract value" value={money2(selectedCustomerFinancialSummary.contract)} />
+              <DetailRow label="Total billed" value={money2(selectedCustomerFinancialSummary.billed)} />
+              <DetailRow label="Total collected" value={money2(selectedCustomerFinancialSummary.collected)} />
+              <DetailRow label="Remaining contract value" value={money2(selectedCustomerFinancialSummary.remaining)} />
+            </div>
+          </Section>
+
+          <Section title="F. Financial Summary" subtitle="Basic account snapshot from linked jobs.">
+            <div className="detailList">
+              <DetailRow label="Jobs linked" value={num(jobRows.length, 0)} />
+              <DetailRow label="Open balance" value={money2(Math.max(0, selectedCustomerFinancialSummary.remaining))} />
+              <DetailRow label="Last updated" value={crmCustomerDraft.updatedAt ? new Date(crmCustomerDraft.updatedAt).toLocaleString() : "—"} />
+            </div>
+          </Section>
+
+          <Section title="G. Proposal Archive" subtitle="Stored proposal versions, archive PDFs, and signature status for this customer.">
+            <div className="detailList" style={{ marginBottom: 14 }}>
+              <DetailRow label="Archived proposals" value={num(proposalArchiveRows.length, 0)} />
+              <DetailRow label="Finalized proposals" value={num(proposalArchiveRows.filter((entry) => entry.isFinalized).length, 0)} />
+              <DetailRow label="Signed proposals" value={num(proposalArchiveRows.filter((entry) => String(entry.signatureStatus || "").toLowerCase() === "signed").length, 0)} />
+            </div>
+
+            {proposalArchiveRows.length ? (
+              <div className="savedList">
+                {proposalArchiveRows.map((entry) => (
+                  <div className="savedCard" key={entry.id}>
+                    <div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                        <span className="eyebrow">Proposal #{num(entry.proposalNumber || 0, 0)}</span>
+                        <span className={`statusTag statusTag-${String(entry.status || "draft").toLowerCase().replace(/\s+/g, "-")}`}>
+                          {String(entry.status || "Draft").toUpperCase()}
+                        </span>
+                      </div>
+                      <strong>{entry.proposalTitle || entry.projectName || entry.customerName || "Archived proposal"}</strong>
+                      <p>
+                        {entry.projectAddress ? `${entry.projectAddress} | ` : ""}
+                        Version {num(entry.version || 1, 0)} | {entry.acceptanceStatus || "Pending"} | {entry.signatureStatus || "Unsigned"}
+                      </p>
+                      <p style={{ marginTop: 8 }}>
+                        {entry.sentAt ? `Sent ${new Date(entry.sentAt).toLocaleString()} | ` : ""}
+                        {entry.viewedAt ? `Viewed ${new Date(entry.viewedAt).toLocaleString()} | ` : "Viewed date not recorded | "}
+                        {entry.finalizedAt ? `Finalized ${new Date(entry.finalizedAt).toLocaleString()}` : "Not finalized"}
+                      </p>
+                      <p style={{ marginTop: 8, color: "var(--text-muted)" }}>
+                        Linked estimate: {entry.sourceEstimateCode || entry.estimateCode || "—"}
+                      </p>
+                    </div>
+                    <div className="savedActions">
+                      <button type="button" className="secondaryButton" onClick={() => openProposalArchiveEntry(entry)}>
+                        Open
+                      </button>
+                      <button type="button" className="secondaryButton" onClick={() => downloadProposalArchivePdf(entry)}>
+                        Download PDF
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="emptyState">No proposal versions have been archived for this customer yet.</p>
+            )}
+          </Section>
+
+          <Section title="H. Contacts" subtitle="Store primary and secondary contacts for the customer.">
+            <div className="actionRow" style={{ marginBottom: 12 }}>
+              <button type="button" className="primaryButton" onClick={addCrmContactToCustomer}>
+                + Add contact
+              </button>
+            </div>
+            {contactRows.length ? (
+              <div className="savedList">
+                {contactRows.map((contact) => (
+                  <div className="savedCard" key={contact.id}>
+                    <div className="formGrid">
+                      <Field label="Name">
+                        <input type="text" value={contact.name} onChange={(e) => updateCrmContactField(contact.id, "name", e.target.value)} />
+                      </Field>
+                      <Field label="Role">
+                        <input type="text" value={contact.role} onChange={(e) => updateCrmContactField(contact.id, "role", e.target.value)} />
+                      </Field>
+                      <Field label="Phone">
+                        <input type="text" value={contact.phone} onChange={(e) => updateCrmContactField(contact.id, "phone", e.target.value)} />
+                      </Field>
+                      <Field label="Email">
+                        <input type="email" value={contact.email} onChange={(e) => updateCrmContactField(contact.id, "email", e.target.value)} />
+                      </Field>
+                      <Field label="Primary contact?">
+                        <select value={contact.isPrimary ? "yes" : "no"} onChange={(e) => updateCrmContactField(contact.id, "isPrimary", e.target.value === "yes")}>
+                          <option value="no">No</option>
+                          <option value="yes">Yes</option>
+                        </select>
+                      </Field>
+                      <Field label="Notes">
+                        <textarea rows="3" value={contact.notes} onChange={(e) => updateCrmContactField(contact.id, "notes", e.target.value)} />
+                      </Field>
+                    </div>
+                    <div className="actionRow">
+                      <button type="button" className="dangerButton" onClick={() => removeCrmContact(contact.id)}>
+                        Remove contact
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="emptyState">No contacts saved yet.</p>
+            )}
+          </Section>
+
+          <Section title="I. Notes" subtitle="General notes for office and sales follow-up.">
+            <Field label="Notes">
+              <textarea rows="6" value={crmCustomerDraft.notes} onChange={(e) => updateCrmCustomerDraftField("notes", e.target.value)} />
+            </Field>
+          </Section>
+        </div>
+      );
+    };
+
+    return (
+      <div className="appShell">
+        <style>{css}</style>
+        <header className="hero">
+          <div>
+            <div className="brandRow">
+              <div className="brandMark">
+                <img src={LOGO_SRC} alt="CRT Roofing logo" />
+              </div>
+              <div>
+                <p className="eyebrow">CRT Roofing CRM</p>
+                <h1>CRM / Leads</h1>
+                <p className="intro">Track new leads, customer files, and follow-up tasks in one place.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="heroCard">
+            <span>Signed in</span>
+            <strong>{authUser.displayName}</strong>
+            <p>Local mode only</p>
+          </div>
+        </header>
+
+        <div className="actionRow" style={{ marginBottom: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+            Back to dashboard
+          </button>
+          <button type="button" className="secondaryButton" onClick={startNewCrmLeadDraft}>
+            + New lead
+          </button>
+          <button type="button" className="secondaryButton" onClick={startNewCrmCustomerDraft}>
+            + New customer
+          </button>
+          <button type="button" className="secondaryButton" onClick={startNewCrmFollowupDraft}>
+            + New follow-up
+          </button>
+        </div>
+
+        <Section title="CRM Tabs" subtitle="Phase 1 workflow pages.">
+          <div className="dashboardTabBar">
+            {[
+              ["newLead", "New Lead"],
+              ["pipeline", "Lead Pipeline"],
+              ["customers", "Customers"],
+              ["followUps", "Follow-Ups"],
+              ["reports", "CRM Reports"],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`dashboardTabButton ${crmTab === key ? "active" : ""}`}
+                onClick={() => setCrmTab(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </Section>
+
+        {crmTab === "newLead" ? (
+          <Section
+            title="New Lead"
+            subtitle="Capture contact, property, and follow-up details before assigning the lead."
+            right={
+              <div className="actionRow" style={{ margin: 0 }}>
+                <button type="button" className="secondaryButton" onClick={() => editCrmLead(crmLeadDraft)}>
+                  Edit current lead
+                </button>
+              </div>
+            }
+          >
+            <div className="detailList" style={{ marginBottom: 14 }}>
+              <DetailRow label="Total leads" value={num(crmLeads.length, 0)} />
+              <DetailRow label="Open follow-ups" value={num(openFollowups.length, 0)} />
+              <DetailRow label="Customers" value={num(crmCustomers.length, 0)} />
+            </div>
+
+            <div className="formGrid">
+              <Field label="First name *">
+                <input type="text" value={crmLeadDraft.firstName} onChange={(e) => updateCrmLeadDraftField("firstName", e.target.value)} />
+              </Field>
+              <Field label="Last name *">
+                <input type="text" value={crmLeadDraft.lastName} onChange={(e) => updateCrmLeadDraftField("lastName", e.target.value)} />
+              </Field>
+              <Field label="Phone number *">
+                <input type="text" value={crmLeadDraft.phone} onChange={(e) => updateCrmLeadDraftField("phone", e.target.value)} />
+              </Field>
+              <Field label="Email *">
+                <input type="email" value={crmLeadDraft.email} onChange={(e) => updateCrmLeadDraftField("email", e.target.value)} />
+              </Field>
+              <Field label="Property address *">
+                <input type="text" value={crmLeadDraft.propertyAddress} onChange={(e) => updateCrmLeadDraftField("propertyAddress", e.target.value)} />
+              </Field>
+              <Field label="City *">
+                <input type="text" value={crmLeadDraft.city} onChange={(e) => updateCrmLeadDraftField("city", e.target.value)} />
+              </Field>
+              <Field label="ZIP code *">
+                <input type="text" value={crmLeadDraft.zipCode} onChange={(e) => updateCrmLeadDraftField("zipCode", e.target.value)} />
+              </Field>
+              <Field label="Lead source *">
+                <select value={crmLeadDraft.leadSource} onChange={(e) => updateCrmLeadDraftField("leadSource", e.target.value)}>
+                  <option value="">Select source</option>
+                  {CRM_LEAD_SOURCE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Roofing service needed *">
+                <select value={crmLeadDraft.roofingServiceNeeded} onChange={(e) => updateCrmLeadDraftField("roofingServiceNeeded", e.target.value)}>
+                  <option value="">Select service</option>
+                  {CRM_LEAD_SERVICE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Lead status *">
+                <select value={crmLeadDraft.leadStatus} onChange={(e) => updateCrmLeadDraftField("leadStatus", e.target.value)}>
+                  {CRM_LEAD_STATUS_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Assigned staff member">
+                <select value={crmLeadDraft.assignedStaffId} onChange={(e) => updateCrmLeadDraftField("assignedStaffId", e.target.value)}>
+                  <option value="">Unassigned</option>
+                  {crmActiveStaffOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Approximate roof size">
+                <input type="text" value={crmLeadDraft.approximateRoofSize} onChange={(e) => updateCrmLeadDraftField("approximateRoofSize", e.target.value)} placeholder="SQ or square footage" />
+              </Field>
+              <Field label="Urgency">
+                <select value={crmLeadDraft.urgency} onChange={(e) => updateCrmLeadDraftField("urgency", e.target.value)}>
+                  {CRM_URGENCY_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Company / HOA / property management">
+                <input type="text" value={crmLeadDraft.companyName} onChange={(e) => updateCrmLeadDraftField("companyName", e.target.value)} />
+              </Field>
+              <Field label="Best time to call">
+                <input type="text" value={crmLeadDraft.bestTimeToCall} onChange={(e) => updateCrmLeadDraftField("bestTimeToCall", e.target.value)} />
+              </Field>
+              <Field label="Secondary phone">
+                <input type="text" value={crmLeadDraft.secondaryPhone} onChange={(e) => updateCrmLeadDraftField("secondaryPhone", e.target.value)} />
+              </Field>
+              <Field label="Property type">
+                <select value={crmLeadDraft.propertyType} onChange={(e) => updateCrmLeadDraftField("propertyType", e.target.value)}>
+                  <option value="">Select property type</option>
+                  {CRM_PROPERTY_TYPE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Roof type">
+                <input type="text" value={crmLeadDraft.roofType} onChange={(e) => updateCrmLeadDraftField("roofType", e.target.value)} />
+              </Field>
+              <Field label="Insurance claim?">
+                <select value={crmLeadDraft.insuranceClaim ? "yes" : "no"} onChange={(e) => updateCrmLeadDraftField("insuranceClaim", e.target.value === "yes")}>
+                  <option value="no">No</option>
+                  <option value="yes">Yes</option>
+                </select>
+              </Field>
+              <Field label="Referred by">
+                <input type="text" value={crmLeadDraft.referredBy} onChange={(e) => updateCrmLeadDraftField("referredBy", e.target.value)} />
+              </Field>
+              <Field label="Estimated value">
+                <input type="number" min="0" step="0.01" value={crmLeadDraft.estimatedValue} onChange={(e) => updateCrmLeadDraftField("estimatedValue", e.target.value)} />
+              </Field>
+              <Field label="Next follow-up date">
+                <input type="date" value={crmLeadDraft.nextFollowUpDate} onChange={(e) => updateCrmLeadDraftField("nextFollowUpDate", e.target.value)} />
+              </Field>
+              <Field label="Appointment date">
+                <input type="date" value={crmLeadDraft.appointmentDate} onChange={(e) => updateCrmLeadDraftField("appointmentDate", e.target.value)} />
+              </Field>
+              <Field label="Brief description of request *">
+                <textarea rows="4" value={crmLeadDraft.description} onChange={(e) => updateCrmLeadDraftField("description", e.target.value)} />
+              </Field>
+              <Field label="Internal notes">
+                <textarea rows="4" value={crmLeadDraft.internalNotes} onChange={(e) => updateCrmLeadDraftField("internalNotes", e.target.value)} />
+              </Field>
+            </div>
+
+            <div className="detailList" style={{ marginTop: 14 }}>
+              <DetailRow label="Last activity" value={crmLeadDraft.lastActivityDate ? new Date(crmLeadDraft.lastActivityDate).toLocaleString() : "—"} />
+              <DetailRow label="Converted customer" value={crmLeadDraft.convertedCustomerId || "—"} />
+              <DetailRow label="Lead created" value={crmLeadDraft.createdAt ? new Date(crmLeadDraft.createdAt).toLocaleString() : "—"} />
+            </div>
+
+            <div className="actionRow" style={{ marginTop: 16 }}>
+              <button type="button" className="primaryButton" onClick={() => saveCrmLeadDraft("Lead saved.")}>
+                Save Lead
+              </button>
+              <button type="button" className="secondaryButton" onClick={() => handleCrmLeadAction("scheduleAppointment")}>
+                Schedule Appointment
+              </button>
+              <button type="button" className="secondaryButton" onClick={() => handleCrmLeadAction("createEstimate")}>
+                Create Estimate
+              </button>
+              <button type="button" className="secondaryButton" onClick={convertCrmLeadToCustomer}>
+                Convert to Customer
+              </button>
+              <button type="button" className="dangerButton" onClick={() => startNewCrmLeadDraft()}>
+                Clear Lead
+              </button>
+            </div>
+          </Section>
+        ) : null}
+
+        {crmTab === "pipeline" ? (
+          <Section title="Lead Pipeline" subtitle="Switch between table and Kanban views for lead tracking.">
+            <div className="detailList" style={{ marginBottom: 14 }}>
+              <DetailRow label="Total leads" value={num(filteredLeads.length, 0)} />
+              <DetailRow label="Appointment scheduled" value={num(leadStatusCounts["Appointment Scheduled"], 0)} />
+              <DetailRow label="Approved" value={num(leadStatusCounts.Approved, 0)} />
+              <DetailRow label="Follow-up tasks" value={num(openFollowups.length, 0)} />
+            </div>
+
+            <div className="formGrid">
+              <Field label="Search leads">
+                <input type="search" value={crmLeadSearch} onChange={(e) => setCrmLeadSearch(e.target.value)} placeholder="Search name, phone, address, source, or service" />
+              </Field>
+              <Field label="Status">
+                <select value={crmLeadStatusFilter} onChange={(e) => setCrmLeadStatusFilter(e.target.value)}>
+                  <option value="all">All statuses</option>
+                  {CRM_LEAD_STATUS_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Lead source">
+                <select value={crmLeadSourceFilter} onChange={(e) => setCrmLeadSourceFilter(e.target.value)}>
+                  <option value="all">All sources</option>
+                  {CRM_LEAD_SOURCE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Assigned staff">
+                <select value={crmLeadAssigneeFilter} onChange={(e) => setCrmLeadAssigneeFilter(e.target.value)}>
+                  <option value="all">All staff</option>
+                  {crmActiveStaffOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Date range from">
+                <input type="date" value={crmLeadDateFrom} onChange={(e) => setCrmLeadDateFrom(e.target.value)} />
+              </Field>
+              <Field label="Date range to">
+                <input type="date" value={crmLeadDateTo} onChange={(e) => setCrmLeadDateTo(e.target.value)} />
+              </Field>
+              <Field label="Sort by">
+                <select value={crmLeadSortBy} onChange={(e) => setCrmLeadSortBy(e.target.value)}>
+                  <option value="createdAt">Newest</option>
+                  <option value="oldest">Oldest</option>
+                  <option value="followUpDate">Follow-up date</option>
+                  <option value="value">Value</option>
+                </select>
+              </Field>
+              <Field label="Sort order">
+                <select value={crmLeadSortDirection} onChange={(e) => setCrmLeadSortDirection(e.target.value)}>
+                  <option value="desc">Descending</option>
+                  <option value="asc">Ascending</option>
+                </select>
+              </Field>
+            </div>
+
+            <div className="dashboardTabBar" style={{ marginTop: 12 }}>
+              <button type="button" className={`dashboardTabButton ${crmPipelineView === "table" ? "active" : ""}`} onClick={() => setCrmPipelineView("table")}>
+                Table view
+              </button>
+              <button type="button" className={`dashboardTabButton ${crmPipelineView === "kanban" ? "active" : ""}`} onClick={() => setCrmPipelineView("kanban")}>
+                Kanban view
+              </button>
+            </div>
+
+            {crmPipelineView === "table" ? (
+              <div className="tableWrap" style={{ marginTop: 14 }}>
+                <table className="dataTable">
+                  <thead>
+                    <tr>
+                      <th>Lead name</th>
+                      <th>Phone</th>
+                      <th>Property address</th>
+                      <th>Service needed</th>
+                      <th>Lead source</th>
+                      <th>Assigned staff</th>
+                      <th>Status</th>
+                      <th>Next follow-up</th>
+                      <th>Created date</th>
+                      <th>Last activity</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredLeads.length ? (
+                      filteredLeads.map((lead) => (
+                        <tr key={lead.id}>
+                          <td>{crmLeadDisplayName(lead)}</td>
+                          <td>{lead.phone || "—"}</td>
+                          <td>{lead.propertyAddress || "—"}</td>
+                          <td>{lead.roofingServiceNeeded || "—"}</td>
+                          <td>{lead.leadSource || "—"}</td>
+                          <td>{crmActiveStaffOptions.find((option) => option.value === lead.assignedStaffId)?.label || "Unassigned"}</td>
+                          <td>{lead.leadStatus || "New"}</td>
+                          <td>{lead.nextFollowUpDate || "—"}</td>
+                          <td>{lead.createdAt ? lead.createdAt.slice(0, 10) : "—"}</td>
+                          <td>{lead.lastActivityDate ? lead.lastActivityDate.slice(0, 10) : "—"}</td>
+                          <td>
+                            <div className="actionRow">
+                              <button type="button" className="secondaryButton" onClick={() => editCrmLead(lead)}>
+                                Edit
+                              </button>
+                              <button type="button" className="dangerButton" onClick={() => deleteCrmLead(lead.id)}>
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan="11">
+                          <p className="emptyState">No leads match the current filters.</p>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="crmKanban" style={{ marginTop: 14 }}>
+                {kanbanColumns.map((column) => (
+                  <div className="crmKanbanColumn" key={column.status}>
+                    <h4>
+                      {column.status} ({column.leads.length})
+                    </h4>
+                    {column.leads.length ? (
+                      column.leads.map((lead) => renderLeadCard(lead))
+                    ) : (
+                      <p className="emptyState">No leads in this stage.</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+        ) : null}
+
+        {crmTab === "customers" ? (
+          <Section
+            title="Customers"
+            subtitle="Search the directory and open a customer file to review properties, jobs, files, and notes."
+            right={
+              <div className="actionRow" style={{ margin: 0 }}>
+                <button type="button" className="secondaryButton" onClick={startNewCrmCustomerDraft}>
+                  New customer
+                </button>
+                <button type="button" className="secondaryButton" onClick={() => saveCrmCustomerDraft("Customer saved.")}>
+                  Save customer
+                </button>
+              </div>
+            }
+          >
+            <div className="detailList" style={{ marginBottom: 14 }}>
+              <DetailRow label="Customer records" value={num(crmCustomers.length, 0)} />
+              <DetailRow label="Selected customer" value={crmSelectedCustomer ? crmCustomerDisplayName(crmSelectedCustomer) : "None"} />
+              <DetailRow label="Files attached" value={num((crmCustomerDraft.files || []).length, 0)} />
+              <DetailRow label="Jobs linked" value={num((crmCustomerDraft.jobs || []).length, 0)} />
+            </div>
+
+            <div className="formGrid" style={{ marginBottom: 14 }}>
+              <Field label="Search customers">
+                <input type="search" value={crmCustomerSearch} onChange={(e) => setCrmCustomerSearch(e.target.value)} placeholder="Search customer, property, contact, or note" />
+              </Field>
+            </div>
+
+            <div className="savedList" style={{ marginBottom: 18 }}>
+              {filteredCustomers.length ? (
+                filteredCustomers.map((customer) => (
+                  <div className="savedCard" key={customer.id}>
+                    <div>
+                      <strong>{crmCustomerDisplayName(customer)}</strong>
+                      <p>
+                        {customer.phone || "No phone"} | {customer.email || "No email"} | {customer.billingAddress || "No billing address"}
+                      </p>
+                    </div>
+                    <div className="savedActions">
+                      <button type="button" className="secondaryButton" onClick={() => editCrmCustomer(customer)}>
+                        Open file
+                      </button>
+                      <button type="button" className="dangerButton" onClick={() => setCrmCustomers((current) => current.filter((item) => item.id !== customer.id))}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="emptyState">No customers saved yet.</p>
+              )}
+            </div>
+
+            {renderCustomerFile()}
+          </Section>
+        ) : null}
+
+        {crmTab === "followUps" ? (
+          <Section
+            title="Follow-Ups"
+            subtitle="Track next-step tasks for leads and customers."
+            right={
+              <div className="actionRow" style={{ margin: 0 }}>
+                <button type="button" className="secondaryButton" onClick={startNewCrmFollowupDraft}>
+                  New follow-up
+                </button>
+                <button type="button" className="secondaryButton" onClick={saveCrmFollowupDraft}>
+                  Save follow-up
+                </button>
+              </div>
+            }
+          >
+            <div className="formGrid">
+              <Field label="Search follow-ups">
+                <input type="search" value={crmFollowupSearch} onChange={(e) => setCrmFollowupSearch(e.target.value)} placeholder="Search tasks, due dates, or notes" />
+              </Field>
+              <Field label="Related type">
+                <select value={crmFollowupDraft.relatedType} onChange={(e) => updateCrmFollowupDraftField("relatedType", e.target.value)}>
+                  <option value="lead">Lead</option>
+                  <option value="customer">Customer</option>
+                </select>
+              </Field>
+              <Field label="Related record">
+                <select value={crmFollowupDraft.relatedId} onChange={(e) => updateCrmFollowupDraftField("relatedId", e.target.value)}>
+                  <option value="">Select record</option>
+                  {(crmFollowupDraft.relatedType === "customer" ? crmCustomers : crmLeads).map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {crmFollowupDraft.relatedType === "customer" ? crmCustomerDisplayName(item) : crmLeadDisplayName(item)}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Title *">
+                <input type="text" value={crmFollowupDraft.title} onChange={(e) => updateCrmFollowupDraftField("title", e.target.value)} />
+              </Field>
+              <Field label="Due date *">
+                <input type="date" value={crmFollowupDraft.dueDate} onChange={(e) => updateCrmFollowupDraftField("dueDate", e.target.value)} />
+              </Field>
+              <Field label="Follow-up type">
+                <select value={crmFollowupDraft.followUpType} onChange={(e) => updateCrmFollowupDraftField("followUpType", e.target.value)}>
+                  {CRM_FOLLOWUP_TYPE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Assigned staff member">
+                <select value={crmFollowupDraft.assignedStaffId} onChange={(e) => updateCrmFollowupDraftField("assignedStaffId", e.target.value)}>
+                  <option value="">Unassigned</option>
+                  {crmActiveStaffOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Status">
+                <select value={crmFollowupDraft.status} onChange={(e) => updateCrmFollowupDraftField("status", e.target.value)}>
+                  {CRM_FOLLOWUP_STATUS_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Notes">
+                <textarea rows="4" value={crmFollowupDraft.notes} onChange={(e) => updateCrmFollowupDraftField("notes", e.target.value)} />
+              </Field>
+            </div>
+
+            <div className="detailList" style={{ marginTop: 14 }}>
+              <DetailRow label="Open tasks" value={num(openFollowups.length, 0)} />
+              <DetailRow label="Total tasks" value={num(filteredFollowups.length, 0)} />
+              <DetailRow label="Selected task" value={crmFollowupDraft.title || "New follow-up"} />
+            </div>
+
+            <div className="savedList" style={{ marginTop: 14 }}>
+              {filteredFollowups.length ? (
+                filteredFollowups.map((followup) => (
+                  <div className="savedCard" key={followup.id}>
+                    <div>
+                      <strong>{followup.title || "Untitled follow-up"}</strong>
+                      <p>
+                        {followup.followUpType || "Task"} | {followup.dueDate || "No due date"} | {followup.status || "Open"}
+                      </p>
+                    </div>
+                    <div className="savedActions">
+                      <button type="button" className="secondaryButton" onClick={() => editCrmFollowup(followup)}>
+                        Edit
+                      </button>
+                      <button type="button" className="dangerButton" onClick={() => deleteCrmFollowup(followup.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="emptyState">No follow-up tasks yet.</p>
+              )}
+            </div>
+          </Section>
+        ) : null}
+
+        {crmTab === "reports" ? (
+          <Section title="CRM Reports" subtitle="Placeholder reporting for the first phase of CRM.">
+            <div className="summaryGrid">
+              <div className="summaryCard">
+                <span>Total leads</span>
+                <strong>{num(crmLeads.length, 0)}</strong>
+              </div>
+              <div className="summaryCard">
+                <span>Total customers</span>
+                <strong>{num(crmCustomers.length, 0)}</strong>
+              </div>
+              <div className="summaryCard">
+                <span>Open follow-ups</span>
+                <strong>{num(openFollowups.length, 0)}</strong>
+              </div>
+            </div>
+            <p className="emptyState" style={{ marginTop: 16 }}>
+              CRM / Leads is under construction. Advanced reports, automation, and messaging will be added later.
+            </p>
+          </Section>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderAdminPricingScreen = () => (
     <div className="appShell">
       <style>{css}</style>
@@ -3232,9 +16561,18 @@ function App() {
                   </p>
                 </div>
 
-                <div className="savedActions">
-                  <button type="button" className="secondaryButton" onClick={() => handleLoadEstimate(estimate)}>
-                    Load
+                  <div className="savedActions">
+                    <button type="button" className="secondaryButton" onClick={() => handleConvertEstimateToProposal(estimate)}>
+                      Generate Proposal
+                    </button>
+                    <button type="button" className="secondaryButton" onClick={() => handleLoadEstimate(estimate)}>
+                      Load
+                    </button>
+                  <button type="button" className="secondaryButton" onClick={() => handleApproveJob(estimate)}>
+                    Approve Job
+                  </button>
+                  <button type="button" className="secondaryButton" onClick={() => handleCompleteJob(estimate)}>
+                    Complete Job
                   </button>
                   <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate.id)}>
                     Delete
@@ -3258,7 +16596,1584 @@ function App() {
     </div>
   );
 
-  const renderDashboard = () => (
+  const renderApprovedJobsScreen = () => (
+    <div className="appShell">
+      <style>{css}</style>
+      <header className="hero">
+        <div>
+          <div className="brandRow">
+            <div className="brandMark">
+              <img src={LOGO_SRC} alt="CRT Roofing logo" />
+            </div>
+            <div>
+              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <h1>Approved Jobs / Upcoming Projects</h1>
+              <p className="intro">Manage approved jobs, upcoming projects, and the information the field still needs.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="heroCard">
+          <span>Signed in</span>
+          <strong>{authUser.displayName}</strong>
+        </div>
+      </header>
+
+      <div className="actionRow" style={{ marginBottom: 16 }}>
+        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>Back to dashboard</button>
+      </div>
+
+      <Section title="Approved Jobs / Upcoming Projects" subtitle="Track the jobs that need your next step.">
+        {renderApprovedJobsTableSection({
+          title: "Approved Jobs / Upcoming Projects",
+          subtitle: "Filtered approved jobs and upcoming projects.",
+          jobs: filteredApprovedJobs,
+          showViewAllButton: false,
+          limit: null,
+        })}
+      </Section>
+    </div>
+  );
+
+  const renderApprovedJobScreen = () => {
+    if (!approvedJobData) {
+      return (
+        <div className="appShell">
+          <style>{css}</style>
+          <div className="actionRow" style={{ marginBottom: 16 }}>
+            <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("approvedJobs")}>Back to approved jobs</button>
+          </div>
+          <Section title="Approved job" subtitle="Select a job to view or edit daily progress.">
+            <p className="intro">No job selected.</p>
+          </Section>
+        </div>
+      );
+    }
+
+    const totals = calculateApprovedJobTotals(approvedDailyProgressLogs);
+
+    return (
+      <div className="appShell">
+        <style>{css}</style>
+        <header className="hero">
+          <div>
+            <div className="brandRow">
+              <div className="brandMark">
+                <img src={LOGO_SRC} alt="CRT Roofing logo" />
+              </div>
+              <div>
+                <p className="eyebrow">CRT Roofing Estimating Platform</p>
+                <h1>Approved Job: {approvedJobData.estimateCode}</h1>
+                <p className="intro">Track daily progress and job status without modifying the original estimate.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="heroCard">
+            <span>Signed in</span>
+            <strong>{authUser.displayName}</strong>
+          </div>
+        </header>
+
+        <div className="actionRow" style={{ marginBottom: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("approvedJobs")}>Back to approved jobs</button>
+        </div>
+
+        {sessionMessage && (
+          <div style={{ margin: "0 0 16px 0", padding: 12, borderRadius: 4, backgroundColor: sessionMessageType === "success" ? "#e8f5e9" : "#ffebee", color: sessionMessageType === "success" ? "#2e7d32" : "#c62828" }}>
+            {sessionMessage}
+          </div>
+        )}
+
+        <Section title="Job details" subtitle="Review the approved job summary.">
+          <div className="formGrid">
+            <Field label="Job name">
+              <input type="text" value={approvedJobData.jobName} disabled />
+            </Field>
+            <Field label="Customer name">
+              <input type="text" value={approvedJobData.customerName} disabled />
+            </Field>
+            <Field label="Estimate code">
+              <input type="text" value={approvedJobData.estimateCode} disabled />
+            </Field>
+            <Field label="Roof type">
+              <input type="text" value={approvedJobData.roofType} disabled />
+            </Field>
+            <Field label="Total squares">
+              <input type="number" value={approvedJobData.totalSquares} disabled />
+            </Field>
+            <Field label="Approved bid amount">
+              <input type="number" value={approvedJobData.approvedBidAmount} onChange={(e) => handleApprovedJobFormChange("approvedBidAmount", toNumber(e.target.value))} />
+            </Field>
+            <Field label="Job status">
+              <select value={approvedJobData.status} onChange={(e) => handleApprovedJobFormChange("status", e.target.value)}>
+                <option value="approved">Approved</option>
+                <option value="scheduled">Scheduled</option>
+                <option value="in progress">In Progress</option>
+                <option value="completed">Completed</option>
+              </select>
+            </Field>
+          </div>
+        </Section>
+
+        <Section title="Daily job progress" subtitle="Log each day with labor, materials, notes, and issues.">
+          <div className="actionRow" style={{ marginBottom: 12 }}>
+            <button type="button" className="secondaryButton" onClick={handleAddDailyProgressDay}>
+              Add day
+            </button>
+          </div>
+
+          {approvedDailyProgressLogs.length ? (
+            approvedDailyProgressLogs.map((day) => (
+              <div key={day.id} className="panel" style={{ marginBottom: 12 }}>
+                <div className="formGrid">
+                  <Field label="Date">
+                    <input type="date" value={day.date} onChange={(e) => handleDailyProgressFieldChange(day.id, "date", e.target.value)} />
+                  </Field>
+                  <Field label="Crew size">
+                    <input type="number" min="0" step="1" value={day.crewSize} onChange={(e) => handleDailyProgressFieldChange(day.id, "crewSize", toNumber(e.target.value))} />
+                  </Field>
+                  <div style={{ display: "flex", alignItems: "flex-end" }}>
+                    <button type="button" className="dangerButton" style={{ marginTop: 24 }} onClick={() => handleDeleteDailyProgressDay(day.id)}>
+                      Delete day
+                    </button>
+                  </div>
+                </div>
+
+                <div className="formGrid" style={{ marginTop: 12 }}>
+                  <Field label="Employee labor">
+                    <div>
+                      {(day.employeeRows || []).map((employee) => {
+                        const laborCost = toNumber(employee.hoursWorked) * toNumber(employee.hourlyRate);
+                        return (
+                          <div key={employee.id} style={{ marginBottom: 12, border: "1px solid #ddd", padding: 12, borderRadius: 6 }}>
+                            <div className="formGrid">
+                              <Field label="Name">
+                                <input type="text" value={employee.employeeName} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "employeeName", e.target.value)} />
+                              </Field>
+                              <Field label="Hours">
+                                <input type="number" min="0" step="0.5" value={employee.hoursWorked} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "hoursWorked", toNumber(e.target.value))} />
+                              </Field>
+                              <Field label="Hourly rate">
+                                <input type="number" min="0" step="0.01" value={employee.hourlyRate} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "hourlyRate", toNumber(e.target.value))} />
+                              </Field>
+                              <Field label="Labor cost">
+                                <input type="number" value={round(laborCost, 2)} disabled />
+                              </Field>
+                            </div>
+                            <div className="actionRow" style={{ marginTop: 12 }}>
+                              <button type="button" className="secondaryButton" onClick={() => handleDeleteEmployeeRow(day.id, employee.id)}>
+                                Delete employee row
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <button type="button" className="secondaryButton" onClick={() => handleAddEmployeeRow(day.id)}>
+                        Add employee row
+                      </button>
+                    </div>
+                  </Field>
+                </div>
+
+                <div className="formGrid" style={{ marginTop: 12 }}>
+                  <Field label="Materials used">
+                    <div>
+                      {(day.materialsUsed || []).map((material) => {
+                        const totalCost = toNumber(material.quantity) * toNumber(material.unitCost);
+                        return (
+                          <div key={material.id} style={{ marginBottom: 12, border: "1px solid #ddd", padding: 12, borderRadius: 6 }}>
+                            <div className="formGrid">
+                              <Field label="Description">
+                                <input type="text" value={material.description} onChange={(e) => handleMaterialItemChange(day.id, material.id, "description", e.target.value)} />
+                              </Field>
+                              <Field label="Quantity">
+                                <input type="number" min="0" step="0.01" value={material.quantity} onChange={(e) => handleMaterialItemChange(day.id, material.id, "quantity", toNumber(e.target.value))} />
+                              </Field>
+                              <Field label="Unit cost">
+                                <input type="number" min="0" step="0.01" value={material.unitCost} onChange={(e) => handleMaterialItemChange(day.id, material.id, "unitCost", toNumber(e.target.value))} />
+                              </Field>
+                              <Field label="Total cost">
+                                <input type="number" value={round(totalCost, 2)} disabled />
+                              </Field>
+                            </div>
+                            <div className="actionRow" style={{ marginTop: 12 }}>
+                              <button type="button" className="secondaryButton" onClick={() => handleRemoveMaterialItem(day.id, material.id)}>
+                                Delete material item
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <button type="button" className="secondaryButton" onClick={() => handleAddMaterialItem(day.id)}>
+                        Add material item
+                      </button>
+                    </div>
+                  </Field>
+                </div>
+
+                <div className="formGrid" style={{ marginTop: 12 }}>
+                  <Field label="Notes">
+                    <textarea rows="3" value={day.notes} onChange={(e) => handleDailyProgressFieldChange(day.id, "notes", e.target.value)} />
+                  </Field>
+                  <Field label="Issues / delays">
+                    <textarea rows="3" value={day.issues} onChange={(e) => handleDailyProgressFieldChange(day.id, "issues", e.target.value)} />
+                  </Field>
+                </div>
+
+                <Section title="Attachments" subtitle="Placeholder for future photo/document upload.">
+                  <input type="file" disabled />
+                  <p className="intro">Photo / document upload is coming soon.</p>
+                </Section>
+              </div>
+            ))
+          ) : (
+            <p className="emptyState">No daily logs added yet.</p>
+          )}
+        </Section>
+
+        <Section title="Progress totals" subtitle="Aggregated totals from all logged days.">
+          <div className="detailList">
+            <div className="detailRow">
+              <span>Total job days</span>
+              <strong>{totals.totalJobDays}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total actual labor hours</span>
+              <strong>{round(totals.totalActualLaborHours, 2)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total actual labor cost</span>
+              <strong>{money2(totals.totalActualLaborCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total material cost</span>
+              <strong>{money2(totals.totalMaterialCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Running actual cost</span>
+              <strong>{money2(totals.runningActualCost)}</strong>
+            </div>
+          </div>
+        </Section>
+
+        <div className="actionRow" style={{ marginTop: 16 }}>
+          <button type="button" className="primaryButton" onClick={handleSaveApprovedJob}>
+            Save daily progress
+          </button>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("approvedJobs")}>Cancel</button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderJobMetricsScreen = () => {
+    if (!selectedMetricsEstimate || !metricsFormData) {
+      return (
+        <div className="appShell">
+          <style>{css}</style>
+          <header className="hero">
+            <div>
+              <div className="brandRow">
+                <div className="brandMark">
+                  <img src={LOGO_SRC} alt="CRT Roofing logo" />
+                </div>
+                <div>
+                  <p className="eyebrow">CRT Roofing Estimating Platform</p>
+                  <h1>Completed Job Metrics</h1>
+                  <p className="intro">Track actual vs estimated costs and performance.</p>
+                  <p className="intro">Metrics can be edited manually if daily progress was not fully tracked.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="heroCard">
+              <span>Signed in</span>
+              <strong>{authUser.displayName}</strong>
+            </div>
+          </header>
+
+          <div className="actionRow" style={{ marginBottom: 16 }}>
+            <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+              Back to dashboard
+            </button>
+          </div>
+
+          <Section title="Completed Jobs" subtitle="Enter metrics for completed jobs to track performance.">
+            <div className="savedList">
+              {activeSavedEstimates.length ? (
+                activeSavedEstimates.map((estimate) => (
+                  <div className="savedCard" key={estimate.id}>
+                    <div>
+                      <span className="eyebrow">{estimate.estimateCode || estimateCode(estimate.estimateNumber || 1)}</span>
+                      <strong>{estimate.name || "Untitled estimate"}</strong>
+                      <p>
+                        {estimate.estimateType ? `${estimate.estimateType} | ` : ""}
+                        {estimate.inputs?.jobName ? `${estimate.inputs.jobName} | ` : ""}
+                        {estimate.inputs?.customerName ? `${estimate.inputs.customerName} | ` : ""}
+                        {num(estimate.summary?.totalSquares ?? estimate.inputs?.totalSquares ?? 0, 0)} SQ |{" "}
+                        {money(estimate.summary?.selectedBidAmount ?? 0)} bid
+                      </p>
+                    </div>
+
+                    <div className="savedActions">
+                      <button type="button" className="primaryButton" onClick={() => handleOpenMetricsForm(estimate)}>
+                        Enter Metrics
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="emptyState">No saved estimates yet.</p>
+              )}
+            </div>
+          </Section>
+        </div>
+      );
+    }
+
+    return (
+      <div className="appShell">
+        <style>{css}</style>
+        <header className="hero">
+          <div>
+            <div className="brandRow">
+              <div className="brandMark">
+                <img src={LOGO_SRC} alt="CRT Roofing logo" />
+              </div>
+              <div>
+                <p className="eyebrow">CRT Roofing Estimating Platform</p>
+                <h1>Complete Job: {metricsFormData.estimateCode}</h1>
+                <p className="intro">Track actual vs estimated costs and performance.</p>
+                  <p className="intro">Metrics can be edited manually if daily progress was not fully tracked.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="heroCard">
+            <span>Signed in</span>
+            <strong>{authUser.displayName}</strong>
+          </div>
+        </header>
+
+        <div className="actionRow" style={{ marginBottom: 16 }}>
+          <button
+            type="button"
+            className="secondaryButton"
+            onClick={() => {
+              setSelectedMetricsEstimate(null);
+              setMetricsFormData(null);
+              setActiveTemplate("jobMetrics");
+            }}
+          >
+            Back to estimate list
+          </button>
+        </div>
+
+        {sessionMessage && (
+          <div style={{ margin: "0 0 16px 0", padding: 12, borderRadius: 4, backgroundColor: sessionMessageType === "success" ? "#e8f5e9" : "#ffebee", color: sessionMessageType === "success" ? "#2e7d32" : "#c62828" }}>
+            {sessionMessage}
+          </div>
+        )}
+
+        <Section title="Estimated vs Actual" subtitle="Compare your estimates with actual job results.">
+          <div className="formGrid">
+            <Field label="Job name">
+              <input type="text" value={metricsFormData.jobName} disabled />
+            </Field>
+            <Field label="Customer name">
+              <input type="text" value={metricsFormData.customerName} disabled />
+            </Field>
+            <Field label="Total squares">
+              <input type="number" value={metricsFormData.totalSquares} disabled />
+            </Field>
+            <Field label="Roof type">
+              <input type="text" value={metricsFormData.roofType} disabled />
+            </Field>
+          </div>
+
+          <div className="formGrid" style={{ marginTop: 12 }}>
+            <Field label="Estimated final bid">
+              <input type="number" value={money(metricsFormData.estimateFinalBid)} disabled />
+            </Field>
+            <Field label="Estimated material cost">
+              <input type="number" value={money(metricsFormData.estimateMaterialCost)} disabled />
+            </Field>
+            <Field label="Estimated labor cost">
+              <input type="number" value={money(metricsFormData.estimateLaborCost)} disabled />
+            </Field>
+            <Field label="Estimated travel cost">
+              <input type="number" value={money(metricsFormData.estimateTravelCost)} disabled />
+            </Field>
+          </div>
+        </Section>
+
+        <Section title="Actual Results" subtitle="Enter the actual costs and results from the completed job.">
+          <div className="formGrid">
+            <Field label="Actual material cost">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={metricsFormData.actualMaterialCost}
+                onChange={(e) => handleMetricsFormChange("actualMaterialCost", toNumber(e.target.value))}
+              />
+            </Field>
+            <Field label="Actual labor cost">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={metricsFormData.actualLaborCost}
+                onChange={(e) => handleMetricsFormChange("actualLaborCost", toNumber(e.target.value))}
+              />
+            </Field>
+            <Field label="Actual labor hours">
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                value={metricsFormData.actualLaborHours}
+                onChange={(e) => handleMetricsFormChange("actualLaborHours", toNumber(e.target.value))}
+              />
+            </Field>
+            <Field label="Actual travel cost">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={metricsFormData.actualTravelCost}
+                onChange={(e) => handleMetricsFormChange("actualTravelCost", toNumber(e.target.value))}
+              />
+            </Field>
+            <Field label="Change orders">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={metricsFormData.changeOrders}
+                onChange={(e) => handleMetricsFormChange("changeOrders", toNumber(e.target.value))}
+              />
+            </Field>
+            <Field label="Final invoice amount">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={metricsFormData.finalInvoiceAmount}
+                onChange={(e) => handleMetricsFormChange("finalInvoiceAmount", toNumber(e.target.value))}
+              />
+            </Field>
+          </div>
+        </Section>
+
+        <Section title="Performance Summary" subtitle="Your calculated metrics based on actual results.">
+          <div className="detailList">
+            <div className="detailRow">
+              <span>Actual profit</span>
+              <strong style={{ color: toNumber(metricsFormData.finalInvoiceAmount) - toNumber(metricsFormData.actualMaterialCost) - toNumber(metricsFormData.actualLaborCost) - toNumber(metricsFormData.actualTravelCost) >= 0 ? "green" : "red" }}>
+                {money(toNumber(metricsFormData.finalInvoiceAmount) - toNumber(metricsFormData.actualMaterialCost) - toNumber(metricsFormData.actualLaborCost) - toNumber(metricsFormData.actualTravelCost))}
+              </strong>
+            </div>
+            <div className="detailRow">
+              <span>Actual margin %</span>
+              <strong style={{ color: toNumber(metricsFormData.finalInvoiceAmount) > 0 && (toNumber(metricsFormData.finalInvoiceAmount) - toNumber(metricsFormData.actualMaterialCost) - toNumber(metricsFormData.actualLaborCost) - toNumber(metricsFormData.actualTravelCost)) / toNumber(metricsFormData.finalInvoiceAmount) * 100 >= 20 ? "green" : "red" }}>
+                {round((toNumber(metricsFormData.finalInvoiceAmount) - toNumber(metricsFormData.actualMaterialCost) - toNumber(metricsFormData.actualLaborCost) - toNumber(metricsFormData.actualTravelCost)) / Math.max(1, toNumber(metricsFormData.finalInvoiceAmount)) * 100, 1)}%
+              </strong>
+            </div>
+            <div className="detailRow">
+              <span>Material variance</span>
+              <strong style={{ color: toNumber(metricsFormData.actualMaterialCost) - toNumber(metricsFormData.estimateMaterialCost) <= 0 ? "green" : "red" }}>
+                {money(toNumber(metricsFormData.actualMaterialCost) - toNumber(metricsFormData.estimateMaterialCost))}
+              </strong>
+            </div>
+            <div className="detailRow">
+              <span>Labor variance</span>
+              <strong style={{ color: toNumber(metricsFormData.actualLaborCost) - toNumber(metricsFormData.estimateLaborCost) <= 0 ? "green" : "red" }}>
+                {money(toNumber(metricsFormData.actualLaborCost) - toNumber(metricsFormData.estimateLaborCost))}
+              </strong>
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Lessons Learned" subtitle="Capture notes and improvements for future estimates.">
+          <div className="formGrid">
+            <Field label="Notes">
+              <textarea
+                rows="4"
+                value={metricsFormData.notes}
+                onChange={(e) => handleMetricsFormChange("notes", e.target.value)}
+                placeholder="General notes about the job..."
+              />
+            </Field>
+            <Field label="What would we change next time?">
+              <textarea
+                rows="4"
+                value={metricsFormData.lessonsLearned}
+                onChange={(e) => handleMetricsFormChange("lessonsLearned", e.target.value)}
+                placeholder="Lessons learned and improvements for future estimates..."
+              />
+            </Field>
+          </div>
+        </Section>
+
+        <div className="actionRow" style={{ marginTop: 16 }}>
+          <button type="button" className="primaryButton" onClick={handleSaveMetrics}>
+            Save Completed Job
+          </button>
+          <button
+            type="button"
+            className="secondaryButton"
+            onClick={() => {
+              setSelectedMetricsEstimate(null);
+              setMetricsFormData(null);
+              setActiveTemplate("jobMetrics");
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderPastJobInsightsScreen = () => {
+    const insights = buildJobInsights();
+
+    return (
+      <div className="appShell">
+        <style>{css}</style>
+        <header className="hero">
+          <div>
+            <div className="brandRow">
+              <div className="brandMark">
+                <img src={LOGO_SRC} alt="CRT Roofing logo" />
+              </div>
+              <div>
+                <p className="eyebrow">CRT Roofing Estimating Platform</p>
+                <h1>Past Job Insights</h1>
+                <p className="intro">Performance analytics from completed jobs.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="heroCard">
+            <span>Signed in</span>
+            <strong>{authUser.displayName}</strong>
+          </div>
+        </header>
+
+        <div className="actionRow" style={{ marginBottom: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+            Back to dashboard
+          </button>
+        </div>
+
+        {completedJobMetrics.length === 0 ? (
+          <Section title="No Data" subtitle="Complete jobs and enter metrics to see insights.">
+            <p className="intro">Start entering metrics for completed jobs to see performance analytics here.</p>
+          </Section>
+        ) : (
+          <>
+            <Section title="Overall Performance" subtitle={`Analysis of ${insights.totalJobs} completed job(s)`}>
+              <div className="detailList">
+                <div className="detailRow">
+                  <span>Total jobs tracked</span>
+                  <strong>{insights.totalJobs}</strong>
+                </div>
+                <div className="detailRow">
+                  <span>Average price per square</span>
+                  <strong>{money(insights.averagePricePerSq)}</strong>
+                </div>
+                <div className="detailRow">
+                  <span>Average material cost per square</span>
+                  <strong>{money(insights.averageMaterialCostPerSq)}</strong>
+                </div>
+                <div className="detailRow">
+                  <span>Average labor cost per square</span>
+                  <strong>{money(insights.averageLaborCostPerSq)}</strong>
+                </div>
+                <div className="detailRow">
+                  <span>Average profit margin</span>
+                  <strong style={{ color: insights.averageProfitMargin >= 20 ? "green" : "red" }}>{num(insights.averageProfitMargin, 1)}%</strong>
+                </div>
+                <div className="detailRow">
+                  <span>Average estimate variance</span>
+                  <strong>{money(insights.averageEstimateVariance)}</strong>
+                </div>
+              </div>
+            </Section>
+
+            {insights.roofTypeStats && insights.roofTypeStats.length > 0 && (
+              <Section title="Performance by Roof Type" subtitle="Metrics grouped by roof type.">
+                <div className="tableWrap">
+                  <table className="dataTable">
+                    <thead>
+                      <tr>
+                        <th>Roof Type</th>
+                        <th>Jobs</th>
+                        <th>Avg Price/SQ</th>
+                        <th>Avg Material/SQ</th>
+                        <th>Avg Labor/SQ</th>
+                        <th>Avg Margin %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {insights.roofTypeStats.map((stat, idx) => (
+                        <tr key={`${stat.roofType}-${idx}`}>
+                          <td>{stat.roofType}</td>
+                          <td>{stat.count}</td>
+                          <td>{money(stat.avgPricePerSq)}</td>
+                          <td>{money(stat.avgMaterialPerSq)}</td>
+                          <td>{money(stat.avgLaborPerSq)}</td>
+                          <td style={{ color: stat.avgMargin >= 20 ? "green" : "red" }}>{num(stat.avgMargin, 1)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Section>
+            )}
+
+            <Section title="Recent Completed Jobs" subtitle="Most recent jobs with metrics entered.">
+              <div className="savedList">
+                {completedJobMetrics.map((metric) => (
+                  <div className="savedCard" key={metric.id}>
+                    <div>
+                      <span className="eyebrow">{metric.estimate_code || "No code"}</span>
+                      <strong>{metric.job_name || "Untitled job"}</strong>
+                      <p>
+                        {metric.roof_type ? `${metric.roof_type} | ` : ""}
+                        {metric.total_squares ? `${num(metric.total_squares, 0)} SQ | ` : ""}
+                        {metric.final_invoice_amount ? `${money(metric.final_invoice_amount)} invoice` : ""}
+                      </p>
+                      <p style={{ fontSize: "0.9em", marginTop: 4 }}>
+                        {metric.actual_margin_percent ? `Margin: ${num(metric.actual_margin_percent, 1)}% | ` : ""}
+                        {metric.actual_profit ? `Profit: ${money(metric.actual_profit)}` : ""}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  function renderTileScreen() {
+    const tileProfile = String(inputs.tileProfile || "flat");
+    const tileFastenerSize =
+      tileProfile === "custom"
+        ? String(inputs.tileFastenersSize || "")
+        : tileProfile === "sTile" || tileProfile === "claySTile"
+          ? "3\""
+          : "2-1/2\"";
+
+    return (
+    <div className="appShell" onFocusCapture={handleSelectZeroOnFocus}>
+      <style>{css}</style>
+      <header className="hero">
+        <div>
+          <div className="brandRow">
+            <div className="brandMark">
+              <img src={LOGO_SRC} alt="CRT Roofing logo" />
+            </div>
+            <div>
+              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <h1>Tile Estimate</h1>
+              <p className="intro">Tile estimate built in the same layout and workflow as the Shingle screen.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="heroCard">
+          <span>Signed in</span>
+          <strong>{authUser.displayName}</strong>
+          <p>Local mode only</p>
+        </div>
+      </header>
+
+      <div className="actionRow" style={{ marginBottom: 16 }}>
+        <button type="button" className="dangerButton" onClick={handleClearEstimate}>
+          Clear estimate
+        </button>
+        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+          Back to dashboard
+        </button>
+      </div>
+
+      <Section title="Job Information" subtitle="Start with the customer and project basics.">
+        <div className="formGrid">
+          <Field label="Job name">
+            <input type="text" value={inputs.jobName} onChange={(e) => setField("jobName", e.target.value)} />
+          </Field>
+          <Field label="Customer">
+            <input type="text" value={inputs.customerName} onChange={(e) => setField("customerName", e.target.value)} />
+          </Field>
+          <Field label="Job address">
+            <input type="text" value={inputs.jobAddress} onChange={(e) => setField("jobAddress", e.target.value)} />
+          </Field>
+          <Field label="Salesperson">
+            <input type="text" value={inputs.salesperson} onChange={(e) => setField("salesperson", e.target.value)} />
+          </Field>
+          <Field label="City permit fee">
+            <input type="number" min="0" step="0.01" value={inputs.cityPermitFee || 0} onChange={(e) => setField("cityPermitFee", e.target.value)} />
+          </Field>
+        </div>
+      </Section>
+
+      <Section title="Tile Project Type" subtitle="Choose the type of tile work being estimated.">
+        <div className="formGrid">
+          <Field label="Project type">
+            <select
+              value={inputs.tileProjectType || "raiseReset"}
+              onChange={(e) =>
+                setInputs((current) => ({
+                  ...current,
+                  tileProjectType: e.target.value,
+                  tileOrderReplacementTile: e.target.value === "raiseReset" ? false : true,
+                }))
+              }
+            >
+              <option value="raiseReset">Raise & Reset Existing Tile</option>
+              <option value="removeInstallNew">Remove Existing Tile & Install New Tile</option>
+              <option value="newConstruction">New Construction</option>
+            </select>
+          </Field>
+          <Field label="Tile profile">
+            <select
+              value={inputs.tileProfile || "flat"}
+              onChange={(e) => setField("tileProfile", e.target.value)}
+            >
+              <option value="flat">Flat Tile</option>
+              <option value="sTile">S-Tile</option>
+              <option value="lightweight">Lightweight Tile</option>
+              <option value="claySTile">Clay S-Tile</option>
+              <option value="custom">Custom</option>
+            </select>
+          </Field>
+          {String(inputs.tileProfile || "flat") === "custom" ? (
+            <>
+              <Field label="Custom fastener name">
+                <input type="text" value={inputs.tileFastenersName || ""} onChange={(e) => setField("tileFastenersName", e.target.value)} />
+              </Field>
+              <Field label="Custom fastener size">
+                <input type="text" value={inputs.tileFastenersSize || ""} onChange={(e) => setField("tileFastenersSize", e.target.value)} />
+              </Field>
+            </>
+          ) : null}
+        </div>
+      </Section>
+
+      <Section title="Manual Roof Measurements" subtitle="Enter the tile takeoff by hand.">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 16 }}>
+          <div className="formGrid">
+            <Field label="Roof squares">
+              <input type="number" min="0" step="0.1" value={inputs.tileTotalRoofSquares} onChange={(e) => setField("tileTotalRoofSquares", e.target.value)} />
+            </Field>
+            <Field label="Valley linear feet">
+              <input type="number" min="0" step="0.1" value={inputs.tileValleyLf} onChange={(e) => setField("tileValleyLf", e.target.value)} />
+            </Field>
+            <Field label="Hip linear feet">
+              <input type="number" min="0" step="0.1" value={inputs.tileHipLf} onChange={(e) => setField("tileHipLf", e.target.value)} />
+            </Field>
+            <Field label="Battens linear feet">
+              <input type="number" min="0" step="0.1" value={inputs.tileBattensLf || 0} onChange={(e) => setField("tileBattensLf", e.target.value)} />
+            </Field>
+            <Field label="Left rake linear feet">
+              <input type="number" min="0" step="0.1" value={inputs.tileLeftRakeLf || 0} onChange={(e) => setField("tileLeftRakeLf", e.target.value)} />
+            </Field>
+            <Field label="Bird stop linear feet (if required)">
+              <input type="number" min="0" step="0.1" value={inputs.tileBirdStopLf || 0} onChange={(e) => setField("tileBirdStopLf", e.target.value)} />
+            </Field>
+            <Field label="Vents count">
+              <input type="number" min="0" step="1" value={inputs.tileVentsCount} onChange={(e) => setField("tileVentsCount", e.target.value)} />
+            </Field>
+            <Field label="Chimney count">
+              <input type="number" min="0" step="1" value={inputs.tileChimneyCount} onChange={(e) => setField("tileChimneyCount", e.target.value)} />
+            </Field>
+          </div>
+          <div className="formGrid">
+            <Field label="Waste percentage">
+              <input type="number" min="0" step="0.1" value={inputs.tileWastePercent} onChange={(e) => setField("tileWastePercent", e.target.value)} />
+            </Field>
+            <Field label="Ridge linear feet">
+              <input type="number" min="0" step="0.1" value={inputs.tileRidgeLf} onChange={(e) => setField("tileRidgeLf", e.target.value)} />
+            </Field>
+            <Field label="Drip edge / perimeter linear feet">
+              <input type="number" min="0" step="0.1" value={inputs.tileDripEdgeLf} onChange={(e) => setField("tileDripEdgeLf", e.target.value)} />
+            </Field>
+            <Field label="Right rake linear feet">
+              <input type="number" min="0" step="0.1" value={inputs.tileRightRakeLf || 0} onChange={(e) => setField("tileRightRakeLf", e.target.value)} />
+            </Field>
+            <Field label="Tile raiser linear feet (if required)">
+              <input type="number" min="0" step="0.1" value={inputs.tileTileRaiserLf || 0} onChange={(e) => setField("tileTileRaiserLf", e.target.value)} />
+            </Field>
+            <Field label="Skylights count">
+              <input type="number" min="0" step="1" value={inputs.tileSkylightsCount} onChange={(e) => setField("tileSkylightsCount", e.target.value)} />
+            </Field>
+          </div>
+        </div>
+        <div className="summaryCard" style={{ marginTop: 14 }}>
+          <h3 style={{ marginTop: 0 }}>Roof Jack Penetrations</h3>
+          <div className="formGrid" style={{ marginTop: 10 }}>
+            <Field label='1-1/2" pipe penetrations'>
+              <input type="number" min="0" step="1" value={inputs.tileOneHalfPipePenetrations} onChange={(e) => setField("tileOneHalfPipePenetrations", e.target.value)} />
+            </Field>
+            <Field label='2" pipe penetrations'>
+              <input type="number" min="0" step="1" value={inputs.tileTwoInchPipePenetrations} onChange={(e) => setField("tileTwoInchPipePenetrations", e.target.value)} />
+            </Field>
+            <Field label='3" pipe penetrations'>
+              <input type="number" min="0" step="1" value={inputs.tileThreeInchPipePenetrations} onChange={(e) => setField("tileThreeInchPipePenetrations", e.target.value)} />
+            </Field>
+            <Field label='4" pipe penetrations'>
+              <input type="number" min="0" step="1" value={inputs.tileFourInchPipePenetrations} onChange={(e) => setField("tileFourInchPipePenetrations", e.target.value)} />
+            </Field>
+            <Field label="Oval pipe penetrations">
+              <input type="number" min="0" step="1" value={inputs.tileOvalPipePenetrations} onChange={(e) => setField("tileOvalPipePenetrations", e.target.value)} />
+            </Field>
+            <Field label="Americap quantity">
+              <input type="number" min="0" step="1" value={inputs.tileAmericapQuantity} onChange={(e) => setField("tileAmericapQuantity", e.target.value)} />
+            </Field>
+            <Field label="Oval cap quantity">
+              <input type="number" min="0" step="1" value={inputs.tileOvalCapQuantity} onChange={(e) => setField("tileOvalCapQuantity", e.target.value)} />
+            </Field>
+          </div>
+        </div>
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Manual measurement mode" value="Active" note="Quantities are still editable in the table below." />
+          <DetailRow label="Production squares" value={num(calculation.productionSquares, 2)} />
+          <DetailRow label="Total roof squares" value={num(calculation.totalSquares, 2)} />
+        </div>
+      </Section>
+
+      {(inputs.tileProjectType !== "raiseReset" || Boolean(inputs.tileOrderReplacementTile)) ? (
+        <Section title="Tile Ordering Verification" subtitle="Verify pallet and roof-load details before finalizing tile quantities.">
+          <div
+            className="summaryCard"
+            style={{
+              marginBottom: 14,
+              border: "1px solid rgba(220, 38, 38, 0.5)",
+              background: "rgba(220, 38, 38, 0.08)",
+            }}
+          >
+            <strong style={{ display: "block", marginBottom: 6, color: "var(--danger)" }}>
+              Tile ordering information has not been verified. Material quantities and costs may be inaccurate.
+            </strong>
+            <p style={{ marginTop: 0, marginBottom: 10 }}>
+              IMPORTANT: Tile pallet yields vary by manufacturer and profile. Always verify pallet yield before ordering.
+              Tile deliveries commonly include approximately 3% broken material. A 3% broken tile allowance is automatically
+              included unless manually adjusted. Roof-load charges are typically separate from delivery charges. Verify both
+              costs with the supplier.
+            </p>
+            <div className="detailList" style={{ marginTop: 12 }}>
+              {[
+                { key: "tileOrderingVerifiedPalletYield", label: "Verified tile pallet yield with supplier" },
+                { key: "tileOrderingVerifiedRoofLoadCost", label: "Verified tile roof-load cost" },
+                { key: "tileOrderingVerifiedMaterialDeliveryCost", label: "Verified material delivery cost" },
+                { key: "tileOrderingVerifiedColorProfileAvailability", label: "Verified tile color/profile availability" },
+                { key: "tileOrderingVerifiedBrokenAllowance", label: "Included 3% broken tile allowance" },
+              ].map((item) => (
+                <label key={item.key} style={{ display: "flex", alignItems: "center", gap: 10, fontWeight: 600, padding: "4px 0" }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(inputs[item.key])}
+                    onChange={(e) => setField(item.key, e.target.checked)}
+                  />
+                  {item.label}
+                </label>
+              ))}
+            </div>
+            {!calculation.tileOrderingChecklistComplete ? (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  background: "rgba(180, 0, 0, 0.12)",
+                  color: "#7f1d1d",
+                  fontWeight: 700,
+                }}
+              >
+                Tile ordering information has not been verified. Material quantities and costs may be inaccurate.
+              </div>
+            ) : (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  background: "rgba(34, 197, 94, 0.12)",
+                  color: "#14532d",
+                  fontWeight: 700,
+                }}
+              >
+                Tile ordering checklist complete.
+              </div>
+            )}
+          </div>
+        </Section>
+      ) : null}
+
+      <Section title="Tile Material Calculations" subtitle="Editable pricing for the tile material stack.">
+        {(() => {
+          const showReplacementTileControls = inputs.tileProjectType !== "raiseReset" || Boolean(inputs.tileOrderReplacementTile);
+          return (
+            <>
+              <div
+                className="summaryCard"
+                style={{
+                  marginBottom: 14,
+                  border: "1px solid rgba(245, 185, 0, 0.55)",
+                  background: "rgba(245, 185, 0, 0.08)",
+                }}
+              >
+                <strong style={{ display: "block", marginBottom: 6 }}>
+                  Confirm tile pallet yield before finalizing this estimate.
+                </strong>
+                <p style={{ marginTop: 0, marginBottom: 8 }}>
+                  Tile pallet coverage varies by manufacturer, profile, and tile type. Enter the supplier pallet yield so the app can calculate pallets correctly.
+                </p>
+                {inputs.tileProjectType === "raiseReset" ? (
+                  <div className="formGrid" style={{ marginTop: 10 }}>
+                    <Field label="Order replacement tile?">
+                      <select
+                        value={showReplacementTileControls ? "yes" : "no"}
+                        onChange={(e) => setField("tileOrderReplacementTile", e.target.value === "yes")}
+                      >
+                        <option value="no">No</option>
+                        <option value="yes">Yes</option>
+                      </select>
+                    </Field>
+                  </div>
+                ) : null}
+                {showReplacementTileControls ? (
+                  <>
+                    <div className="formGrid" style={{ marginTop: 10 }}>
+                      <Field label="Tile pallet yield in SQ per pallet">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={inputs.tilePalletYieldSqPerPallet || 0}
+                          onChange={(e) => setField("tilePalletYieldSqPerPallet", e.target.value)}
+                        />
+                      </Field>
+                      <Field label="Tile waste percentage">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={inputs.tileWastePercent}
+                          onChange={(e) => setField("tileWastePercent", e.target.value)}
+                        />
+                      </Field>
+                      <Field label="Broken tile allowance percentage">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={inputs.tileBrokenTileAllowancePercent || 3}
+                          onChange={(e) => setField("tileBrokenTileAllowancePercent", e.target.value)}
+                        />
+                      </Field>
+                    </div>
+              <div className="detailList" style={{ marginTop: 12 }}>
+                <DetailRow label="Selected tile profile" value={String(inputs.tileProfile || "flat") === "custom" ? "Custom" : String(inputs.tileProfile || "flat") === "claySTile" ? "Clay S-Tile" : String(inputs.tileProfile || "flat") === "lightweight" ? "Lightweight Tile" : String(inputs.tileProfile || "flat") === "sTile" ? "S-Tile" : "Flat Tile"} />
+                <DetailRow label="Recommended fastener size" value={tileFastenerSize} />
+                <DetailRow label="Total nails needed" value={num(totalNailsNeededCalculated, 0)} />
+                <DetailRow label="Boxes needed" value={num(fastenerBoxesCalculated, 0)} />
+                <DetailRow label="Roof squares" value={num(calculation.tileTotalRoofSquares, 2)} />
+                <DetailRow label="Waste %" value={`${num(calculation.tileWastePercent, 1)}%`} />
+                <DetailRow label="Broken tile allowance %" value={`${num(calculation.tileBrokenTileAllowancePercent, 1)}%`} note="Default broken tile allowance is 3% because tile deliveries commonly include broken pieces. Verify with supplier and job conditions." />
+                      <DetailRow label="Adjusted tile squares" value={num(calculation.tileAdjustedTileSquares, 2)} />
+                      <DetailRow label="Tile pallet yield" value={num(calculation.tilePalletYieldSqPerPallet, 2)} />
+                      <DetailRow label="Tile pallets needed" value={num(calculation.tilePalletsNeeded, 0)} />
+                      <DetailRow label="Material delivery" value={money2(calculation.materialDeliveryCharge || 0)} />
+                      <DetailRow label="Roof load cost" value={money2(calculation.tileRoofLoadCost || 0)} />
+                    </div>
+                    <div className="summaryCard" style={{ marginTop: 14 }}>
+                      <h3 style={{ marginTop: 0 }}>Tile Underlayment</h3>
+                      <div className="formGrid">
+                        <Field label="Underlayment type">
+                          <select
+                            value={inputs.tileUnderlaymentType || "syntheticTitanium50"}
+                            onChange={(e) =>
+                              setInputs((current) => ({
+                                ...current,
+                                tileUnderlaymentType: e.target.value,
+                                tileUnderlaymentCost: e.target.value === "felt30" ? 30 : 180,
+                              }))
+                            }
+                          >
+                            <option value="syntheticTitanium50">Synthetic Titanium-50 Felt</option>
+                            <option value="felt30">30# Felt</option>
+                          </select>
+                        </Field>
+                      </div>
+                      <div className="detailList" style={{ marginTop: 12 }}>
+                        <DetailRow label="Selected underlayment type" value={tileUnderlaymentType === "felt30" ? "30# Felt" : "Synthetic Titanium-50 Felt"} />
+                        <DetailRow label="Coverage per roll" value={`${num(tileUnderlaymentCoverageSqPerRoll, 0)} SQ / roll`} />
+                        <DetailRow label="Rolls needed" value={num(tileUnderlaymentRollsCalculated, 0)} />
+                        <DetailRow
+                          label="Unit cost"
+                          value={money2(calculation.materialItems.find((item) => item.key === "tileUnderlayment")?.unitPrice || 0)}
+                        />
+                        <DetailRow
+                          label="Total cost"
+                          value={money2(calculation.materialItems.find((item) => item.key === "tileUnderlayment")?.amount || 0)}
+                        />
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            </>
+          );
+        })()}
+        <div className="tableWrap">
+          <table className="dataTable">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Quantity</th>
+                <th>Unit</th>
+                <th>Unit Cost</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(() => {
+                const groupDefinitions = [
+                  { title: "Main Roofing Materials", keys: ["fieldTile", "tileUnderlayment", "tileUnderlayment30", "battensLath", "flatTileNails", "sTileNails"] },
+                  { title: "Metal / Edge", keys: ["valleyMetal", "flashingMetal", "ridgeHipMaterial"] },
+                  {
+                    title: "Roof Jacks / Accessories",
+                    keys: [
+                      "mortarMix",
+                      "tileOneHalfBaseJack",
+                      "tileOneHalfRoofJack",
+                      "tileTwoInchBaseJack",
+                      "tileTwoInchRoofJack",
+                      "tileThreeInchBaseJack",
+                      "tileThreeInchRoofJack",
+                      "tileFourInchBaseJack",
+                      "tileFourInchRoofJack",
+                      "tileOvalBaseJack",
+                      "tileOvalRoofJack",
+                      "tileAmericap",
+                      "tileOvalCap",
+                      "ohaginVents",
+                      "dormerVents",
+                    ],
+                  },
+                  { title: "Delivery Charges", keys: ["materialDeliveryCharge", "tileRoofLoadCost"] },
+                  { title: "Wood / Misc", keys: ["cdxPlywood", "fuelSurcharge"] },
+                ];
+                const itemsByKey = new Map(calculation.materialItems.map((item) => [item.key, item]));
+                const quantityKeyMap = {
+                  fieldTile: "tileFieldTileQuantity",
+                  tileUnderlayment: "tileUnderlaymentQuantityManual",
+                  tileUnderlayment30: "tileUnderlayment30QuantityManual",
+                  battensLath: "tileBattensQuantityManual",
+                  flatTileNails: "tileFlatTileNailsQuantityManual",
+                  sTileNails: "tileSTileNailsQuantityManual",
+                  valleyMetal: "tileValleyMetalQuantityManual",
+                  flashingMetal: "tileDripEdgeQuantityManual",
+                  ridgeHipMaterial: "tileRidgeHipQuantity",
+                  mortarMix: "tileMortarMixQuantityManual",
+                  ohaginVents: "tileOHaginVentsQuantity",
+                  dormerVents: "tileDormerVentsQuantity",
+                  cdxPlywood: "tileCDXPlywoodQuantity",
+                  materialDeliveryCharge: "tileMaterialDeliveryChargeQuantity",
+                  tileRoofLoadCost: "tileRoofLoadCostQuantity",
+                  fuelSurcharge: "tileFuelSurchargeQuantity",
+                };
+                const costKeyMap = {
+                  fieldTile: "tileFieldTileCost",
+                  tileUnderlayment: "tileUnderlaymentCost",
+                  tileUnderlayment30: "tileUnderlayment30Cost",
+                  battensLath: "tileBattensCost",
+                  flatTileNails: "tileFlatTileNailsCost",
+                  sTileNails: "tileSTileNailsCost",
+                  valleyMetal: "tileValleyMetalCost",
+                  flashingMetal: "tileFlashingMetalCost",
+                  ridgeHipMaterial: "tileRidgeHipCost",
+                  mortarMix: "tileMortarMixCost",
+                  tileOneHalfBaseJack: "tileOneHalfBaseJackCost",
+                  tileOneHalfRoofJack: "tileOneHalfRoofJackCost",
+                  tileTwoInchBaseJack: "tileTwoInchBaseJackCost",
+                  tileTwoInchRoofJack: "tileTwoInchRoofJackCost",
+                  tileThreeInchBaseJack: "tileThreeInchBaseJackCost",
+                  tileThreeInchRoofJack: "tileThreeInchRoofJackCost",
+                  tileFourInchBaseJack: "tileFourInchBaseJackCost",
+                  tileFourInchRoofJack: "tileFourInchRoofJackCost",
+                  tileOvalBaseJack: "tileOvalBaseJackCost",
+                  tileOvalRoofJack: "tileOvalRoofJackCost",
+                  tileAmericap: "tileAmericapCost",
+                  tileOvalCap: "tileOvalCapCost",
+                  ohaginVents: "tileOHaginVentsCost",
+                  dormerVents: "tileDormerVentsCost",
+                  cdxPlywood: "tileCDXPlywoodCost",
+                  materialDeliveryCharge: "tileMaterialDeliveryCharge",
+                  tileRoofLoadCost: "tileRoofLoadCost",
+                  fuelSurcharge: "tileFuelSurcharge",
+                };
+                const lockedQuantityKeys = new Set([
+                  "tileOneHalfBaseJack",
+                  "tileOneHalfRoofJack",
+                  "tileTwoInchBaseJack",
+                  "tileTwoInchRoofJack",
+                  "tileThreeInchBaseJack",
+                  "tileThreeInchRoofJack",
+                  "tileFourInchBaseJack",
+                  "tileFourInchRoofJack",
+                  "tileOvalBaseJack",
+                  "tileOvalRoofJack",
+                  "tileAmericap",
+                  "tileOvalCap",
+                ]);
+                return groupDefinitions.flatMap((group) => [
+                  <tr key={`group-${group.title}`} className="sectionDivider">
+                    <td colSpan={5}>
+                      <strong>{group.title}</strong>
+                    </td>
+                  </tr>,
+                  ...group.keys
+                    .map((key) => itemsByKey.get(key))
+                    .filter(Boolean)
+                    .map((item) => (
+                      <tr key={item.key}>
+                        <td>
+                          <strong>{item.label}</strong>
+                          {item.notes ? <div className="smallNote" style={{ marginTop: 4 }}>{item.notes}</div> : null}
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            readOnly={lockedQuantityKeys.has(item.key)}
+                            value={
+                              item.key === "fieldTile"
+                                ? (inputs.tileFieldTileQuantityManual === "" ? item.quantity : inputs.tileFieldTileQuantityManual)
+                                : item.key === "mortarMix"
+                                  ? (inputs.tileMortarMixQuantityManual === "" ? item.quantity : inputs.tileMortarMixQuantityManual)
+                                  : item.key === "tileUnderlayment"
+                                    ? (inputs.tileUnderlaymentQuantityManual === "" ? item.quantity : inputs.tileUnderlaymentQuantityManual)
+                                    : item.key === "battensLath"
+                                      ? (inputs.tileBattensQuantityManual === "" ? item.quantity : inputs.tileBattensQuantityManual)
+                                      : item.key === "valleyMetal"
+                                        ? (inputs.tileValleyMetalQuantityManual === "" ? item.quantity : inputs.tileValleyMetalQuantityManual)
+                                    : item.key === "flashingMetal"
+                                      ? (inputs.tileDripEdgeQuantityManual === "" ? item.quantity : inputs.tileDripEdgeQuantityManual)
+                                      : item.quantity
+                            }
+                            onChange={(e) => {
+                              if (lockedQuantityKeys.has(item.key)) {
+                                return;
+                              }
+                              if (item.key === "fieldTile") {
+                                setField("tileFieldTileQuantityManual", e.target.value);
+                                return;
+                              }
+                              if (item.key === "mortarMix") {
+                                setField("tileMortarMixQuantityManual", e.target.value);
+                                return;
+                              }
+                              if (item.key === "tileUnderlayment") {
+                                setField("tileUnderlaymentQuantityManual", e.target.value);
+                                return;
+                              }
+                              if (item.key === "battensLath") {
+                                setField("tileBattensQuantityManual", e.target.value);
+                                return;
+                              }
+                              if (item.key === "flatTileNails") {
+                                setField("tileFlatTileNailsQuantityManual", e.target.value);
+                                return;
+                              }
+                              if (item.key === "sTileNails") {
+                                setField("tileSTileNailsQuantityManual", e.target.value);
+                                return;
+                              }
+                              if (item.key === "valleyMetal") {
+                                setField("tileValleyMetalQuantityManual", e.target.value);
+                                return;
+                              }
+                              if (item.key === "flashingMetal") {
+                                setField("tileDripEdgeQuantityManual", e.target.value);
+                                return;
+                              }
+                              if (item.key === "ohaginVents") {
+                                setField("tileOHaginVentsQuantity", e.target.value);
+                                return;
+                              }
+                              if (item.key === "dormerVents") {
+                                setField("tileDormerVentsQuantity", e.target.value);
+                                return;
+                              }
+                              const mappedKey = quantityKeyMap[item.key];
+                              if (mappedKey) setField(mappedKey, e.target.value);
+                            }}
+                          />
+                        </td>
+                        <td>{item.unit}</td>
+                        <td>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.unitPrice}
+                            onChange={(e) => {
+                              const mappedKey = costKeyMap[item.key];
+                              if (mappedKey) setField(mappedKey, e.target.value);
+                            }}
+                          />
+                        </td>
+                        <td>{money2(item.amount)}</td>
+                      </tr>
+                    )),
+                ]);
+              })()}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <div className="actionRow">
+            <button type="button" className="secondaryButton" onClick={addTileCustomMaterial}>
+              + Custom Material Order
+            </button>
+            <em style={{ marginLeft: 8 }}>Add any tile material that is not already listed.</em>
+          </div>
+          {Array.isArray(inputs.tileCustomMaterials) && inputs.tileCustomMaterials.length ? (
+            <div className="tableWrap" style={{ marginTop: 12 }}>
+              <table className="dataTable">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Quantity</th>
+                    <th>Price per piece</th>
+                    <th>Total</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {inputs.tileCustomMaterials.map((mat, idx) => {
+                    const quantity = Math.max(0, toNumber(mat.quantity, 0));
+                    const unitPrice = Math.max(0, toNumber(mat.unitPrice, 0));
+                    return (
+                      <tr key={mat.id || idx}>
+                        <td>
+                          <input type="text" value={mat.name} onChange={(e) => updateTileCustomMaterial(idx, "name", e.target.value)} placeholder="Material name" />
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={quantity}
+                            onChange={(e) => updateTileCustomMaterial(idx, "quantity", e.target.value)}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={unitPrice}
+                            onChange={(e) => updateTileCustomMaterial(idx, "unitPrice", e.target.value)}
+                          />
+                        </td>
+                        <td>{money2(quantity * unitPrice)}</td>
+                        <td>
+                          <button type="button" className="dangerButton" onClick={() => removeTileCustomMaterial(idx)}>
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Total material cost" value={money2(calculation.materialCost)} />
+        </div>
+      </Section>
+
+      <Section title="Tear-Off / Disposal" subtitle="How many roof sections need to be torn off?">
+        <div className="actionRow">
+          <button type="button" className="secondaryButton" onClick={addTileTearOffSection}>
+            Add section
+          </button>
+          <button
+            type="button"
+            className="secondaryButton"
+            onClick={() => removeTileTearOffSection((normalizeShingleTearOffSections(inputs.tileTearOffSections).length || 1) - 1)}
+          >
+            Remove section
+          </button>
+        </div>
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Number of tear-off sections" value={num(calculation.tileTearOffSections?.length || 0, 0)} />
+          <DetailRow label="Total Tear-Off / Disposal Cost" value={money2(calculation.tearOffDisposalCost)} />
+        </div>
+        <div className="detailList" style={{ marginTop: 14 }}>
+          {normalizeShingleTearOffSections(inputs.tileTearOffSections).map((section, index) => {
+            const sectionTotal = calculation.tileTearOffSections?.[index]?.sectionTearOffTotal ?? 0;
+            return (
+              <div className="summaryCard" key={section.id || index}>
+                <h3 style={{ marginTop: 0 }}>Section {index + 1}</h3>
+                <div className="formGrid">
+                  <Field label="Section name/label">
+                    <input type="text" value={section.label} onChange={(e) => setTileTearOffSection(index, "label", e.target.value)} />
+                  </Field>
+                  <Field label="Squares for this section">
+                    <input type="number" min="0" step="0.1" value={section.squares} onChange={(e) => setTileTearOffSection(index, "squares", e.target.value)} />
+                  </Field>
+                  <Field label="Number of existing layers">
+                    <input type="number" min="1" step="1" value={section.layers} onChange={(e) => setTileTearOffSection(index, "layers", e.target.value)} />
+                  </Field>
+                  <Field label="Tear-off cost per square">
+                    <input type="number" min="0" step="0.01" value={section.tearOffCostPerSquare} onChange={(e) => setTileTearOffSection(index, "tearOffCostPerSquare", e.target.value)} />
+                  </Field>
+                  <Field label="Disposal fee / dump fee">
+                    <input type="number" min="0" step="0.01" value={section.disposalFee} onChange={(e) => setTileTearOffSection(index, "disposalFee", e.target.value)} />
+                  </Field>
+                  <Field label="Dry rot allowance">
+                    <input type="number" min="0" step="0.01" value={section.dryRotAllowance} onChange={(e) => setTileTearOffSection(index, "dryRotAllowance", e.target.value)} />
+                  </Field>
+                </div>
+                <div className="detailList" style={{ marginTop: 12 }}>
+                  <DetailRow label="Section tear-off total" value={money2(sectionTotal)} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+
+      <Section title="Labor" subtitle="Choose who performs the labor and calculate the labor cost from here.">
+        <div className="formGrid">
+          <Field label="Is this project going to be performed in-house or sub-contracted?">
+            <select value={inputs.tileLaborType} onChange={(e) => setField("tileLaborType", e.target.value)}>
+              <option value="inHouse">In-house</option>
+              <option value="subcontracted">Sub-contracted</option>
+            </select>
+          </Field>
+        </div>
+
+        {String(inputs.tileLaborType || "inHouse") === "inHouse" ? (
+          <>
+            <div className="formGrid" style={{ marginTop: 14 }}>
+              <Field label="Laborers per day">
+                <input type="number" min="0" step="1" value={inputs.tileLaborersPerDay} onChange={(e) => setField("tileLaborersPerDay", e.target.value)} />
+              </Field>
+              <Field label="Total days on job">
+                <input type="number" min="0" step="1" value={inputs.tileTotalDaysOnJob} onChange={(e) => setField("tileTotalDaysOnJob", e.target.value)} />
+              </Field>
+              <Field label="Labor hourly rate">
+                <input type="number" min="0" step="0.01" value={inputs.tileLaborHourlyRate} onChange={(e) => setField("tileLaborHourlyRate", e.target.value)} />
+                <div className="fieldHelp">Default rate: $50.00/hour (includes payroll taxes and workers' compensation).</div>
+              </Field>
+              <Field label="Hours per day">
+                <input type="number" min="0" step="0.1" value={inputs.tileHoursPerDay} onChange={(e) => setField("tileHoursPerDay", e.target.value)} />
+              </Field>
+            </div>
+            <div className="detailList" style={{ marginTop: 14 }}>
+              <DetailRow label="In-house labor cost" value={money2(calculation.laborCost)} />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="formGrid" style={{ marginTop: 14 }}>
+              <Field label="Is subcontractor licensed?">
+                <select value={String(inputs.tileSubcontractorLicensed ? "yes" : "no")} onChange={(e) => setField("tileSubcontractorLicensed", e.target.value === "yes")}>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              </Field>
+              <Field label="Does subcontractor carry workers comp?">
+                <select value={String(inputs.tileSubcontractorWorkersComp ? "yes" : "no")} onChange={(e) => setField("tileSubcontractorWorkersComp", e.target.value === "yes")}>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              </Field>
+            </div>
+            <div className="actionRow" style={{ marginTop: 12 }}>
+              <button type="button" className="secondaryButton" onClick={addTileLaborSection}>
+                Add subcontractor section
+              </button>
+              <button
+                type="button"
+                className="secondaryButton"
+                onClick={() => removeTileLaborSection((normalizeShingleLaborSections(inputs.tileSubcontractorSections).length || 1) - 1)}
+              >
+                Remove section
+              </button>
+            </div>
+            <div className="detailList" style={{ marginTop: 14 }}>
+              {normalizeShingleLaborSections(inputs.tileSubcontractorSections).map((section, index) => {
+                const sectionInstallTotal = calculation.tileSubcontractorSections?.[index]?.sectionInstallTotal ?? 0;
+                return (
+                  <div className="summaryCard" key={section.id || index}>
+                    <h3 style={{ marginTop: 0 }}>Subcontractor Section {index + 1}</h3>
+                    <div className="formGrid">
+                      <Field label="Section name">
+                        <input type="text" value={section.label} onChange={(e) => setTileLaborSection(index, "label", e.target.value)} />
+                      </Field>
+                      <Field label="Install squares">
+                        <input type="number" min="0" step="0.1" value={section.installSquares} onChange={(e) => setTileLaborSection(index, "installSquares", e.target.value)} />
+                      </Field>
+                      <Field label="Cost per install SQ">
+                        <input type="number" min="0" step="0.01" value={section.costPerInstallSq} onChange={(e) => setTileLaborSection(index, "costPerInstallSq", e.target.value)} />
+                      </Field>
+                    </div>
+                    <div className="detailList" style={{ marginTop: 10 }}>
+                      <DetailRow label="Section install total" value={money2(sectionInstallTotal)} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="detailList" style={{ marginTop: 14 }}>
+              <DetailRow label="Subcontractor install subtotal" value={money2(calculation.tileSubcontractorInstallSubtotal || 0)} />
+              <DetailRow label="Workers comp / risk add-on" value={money2(calculation.tileWorkersCompRiskAddOn || 0)} />
+              <DetailRow label="Total subcontractor labor cost" value={money2(calculation.tileTotalSubcontractorLaborCost || 0)} />
+            </div>
+          </>
+        )}
+      </Section>
+
+      <OverheadCalculator
+        inputs={inputs}
+        calculation={calculation}
+        onOverheadPercentChange={(value) => setField("overheadPercent", value)}
+        onScopeAddersChange={(value) => setField("scopeAdders", value)}
+        onMiscCostChange={(value) => setField("miscCost", value)}
+        subtitle="Apply overhead before markup is calculated."
+      />
+
+      <TravelCalculator
+        inputs={inputs}
+        calculation={calculation}
+        isLoaded={isLoaded}
+        loadError={loadError}
+        isLookingUpDistance={isLookingUpDistance}
+        travelLookupMessage={travelLookupMessage}
+        googleDebug={googleDebug}
+        companyHqHint="Default: 18551 Orange Street, Bloomington, CA 92316"
+        oneWayMilesLabel="Miles to location"
+        onCompanyHqAddressChange={(value) => setTravelField("companyHqAddress", value)}
+        onJobSiteAddressChange={(value) => setTravelField("jobSiteAddress", value)}
+        onOneWayMilesChange={(value) => setTravelField("oneWayMiles", value)}
+        onAverageDrivingSpeedChange={(value) => setTravelField("averageDrivingSpeedMph", value)}
+        onDriverHourlyRateChange={(value) => setTravelField("travelDriverHourlyRate", value)}
+        onWorkHoursPerDayChange={(value) => setTravelField("workHoursPerDay", value)}
+        onNumberOfJobDaysChange={(value) => setTravelField("numberOfJobDays", value)}
+        onNumberOfDriversChange={(value) => setTravelField("numberOfDrivers", value)}
+        onVehicleSelection={setTravelVehicleSelection}
+        onAddVehicleSelection={addTravelVehicleSelection}
+        onRemoveVehicleSelection={removeTravelVehicleSelection}
+        onCalculateDistance={handleCalculateDistance}
+        onTestGoogleGeocoder={handleTestGoogleGeocoder}
+        onTestDirections={handleTestDirections}
+      />
+
+      <Section title="Totals / Markup" subtitle="Job cost, markup table, and bid selection.">
+        <div className="detailList">
+          <DetailRow label="Material cost" value={money2(calculation.materialCost)} />
+          <DetailRow label="Labor cost" value={money2(calculation.laborCost)} />
+          <DetailRow label="Tear-off / disposal cost" value={money2(calculation.tearOffDisposalCost)} />
+          <DetailRow label="Travel cost" value={money2(calculation.travelCost)} />
+          <DetailRow label="City permit fee" value={money2(calculation.cityPermitFee)} />
+          <DetailRow label="Total job cost" value={money2(calculation.totalJobCost)} />
+          <DetailRow label="Price per square" value={money2(calculation.selectedPricePerSq)} />
+        </div>
+
+        <div className="tableWrap" style={{ marginTop: 14 }}>
+          <table className="dataTable">
+            <thead>
+              <tr>
+                <th>Markup %</th>
+                <th>Bid Amount</th>
+                <th>Profit</th>
+                <th>Price Per SQ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calculation.bidOptions.options.map((option) => (
+                <tr
+                  key={option.percent}
+                  className={`markupTableRow ${option.percent === calculation.selectedMarkupPercent ? "active" : ""}`}
+                  onClick={() => handleSelectedMarkup(option.percent)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleSelectedMarkup(option.percent);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`${option.percent}% markup row`}
+                >
+                  <td>{option.percent}%</td>
+                  <td>{money2(option.bidAmount)}</td>
+                  <td>{money2(option.profitDollars)}</td>
+                  <td>{money2(option.pricePerSq)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="summaryCard" style={{ marginTop: 14 }}>
+          <h3>Custom Bid Amount</h3>
+          <label>Custom Bid Amount</label>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={inputs.tileCustomBidAmount}
+            onChange={(e) => setField("tileCustomBidAmount", e.target.value)}
+          />
+          <DetailRow label="Custom Profit" value={money2(calculation.customProfitDollars)} />
+          <DetailRow label="Custom Price Per Square" value={money2(calculation.customPricePerSq)} />
+        </div>
+
+        <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginTop: 14 }}>
+          <div className="summaryCard">
+            <span>Selected bid</span>
+            <strong>{money2(calculation.selectedBidAmount)}</strong>
+            <p style={{ marginBottom: 0, color: "var(--muted)" }}>
+              {calculation.customBidSelected ? "Custom Bid" : `${num(calculation.selectedMarkupPercent, 0)}% markup`} · Profit {money2(calculation.selectedProfitDollars)} · {money2(calculation.selectedPricePerSq)} / SQ
+            </p>
+          </div>
+        </div>
+      </Section>
+
+      <div className="actionRow" style={{ marginTop: 16 }}>
+        <button type="button" className="primaryButton" onClick={handleSaveEstimate}>
+          Save Estimate
+        </button>
+        <button type="button" className="secondaryButton" onClick={handleConvertCurrentEstimateToProposal}>
+          Generate Proposal
+        </button>
+        <button type="button" className="secondaryButton" onClick={handleDownloadEstimatePDF}>
+          Download Estimate PDF
+        </button>
+      </div>
+    </div>
+    );
+  }
+
+  function renderDashboard() {
+    return (
     <div className="appShell">
       <style>{css}</style>
       <header className="hero">
@@ -3282,6 +18197,12 @@ function App() {
         </div>
       </header>
 
+      <div className="actionRow" style={{ marginBottom: 16 }}>
+        {renderQuickMeasureUploadControl()}
+      </div>
+
+      {renderQuickMeasureReviewPanel()}
+
       <Section title="Workflows" subtitle="Pick a starting point.">
         <div className="templateGrid">
           <button type="button" className="templateCard" onClick={() => setActiveTemplate("fieldNotes")}>
@@ -3289,49 +18210,3330 @@ function App() {
             <strong>Field Notes / Roof Inspection</strong>
             <p>Capture the roof details before bidding.</p>
           </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("fieldOperations")}>
+            <span className="eyebrow">Operations</span>
+            <strong>Field Operations</strong>
+            <p>Daily job logs and office review for field crews.</p>
+          </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("administration")}>
+            <span className="eyebrow">Admin</span>
+            <strong>Administration</strong>
+            <p>Manage employees and company setup.</p>
+          </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("cfoDashboard")}>
+            <span className="eyebrow">Finance</span>
+            <strong>CFO Dashboard</strong>
+            <p>Executive financial overview for CRT Roofing.</p>
+          </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalBuilder")}>
+            <span className="eyebrow">Sales</span>
+            <strong>Proposal Builder</strong>
+            <p>Turn saved estimates into customer-ready proposals.</p>
+          </button>
           <button type="button" className="templateCard" onClick={() => setActiveTemplate("estimateTemplates")}>
             <span className="eyebrow">Templates</span>
             <strong>Estimate Templates</strong>
             <p>Open TPO and future estimate templates.</p>
           </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("jobMetrics")}>
+            <span className="eyebrow">Tracking</span>
+            <strong>Completed Job Metrics</strong>
+            <p>Track actual vs estimated costs and results.</p>
+          </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("approvedJobs")}>
+            <span className="eyebrow">Jobs</span>
+            <strong>Approved Jobs</strong>
+            <p>Manage job status, daily logs, and progress tracking.</p>
+          </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("activeJobs")}>
+            <span className="eyebrow">Projects</span>
+            <strong>Active Jobs</strong>
+            <p>
+              <span className={`dashboardStatusDot ${activeJobsSummary.activeCount ? "active" : ""}`} aria-hidden="true" />
+              {activeJobsSummary.activeCount ? `${activeJobsSummary.activeCount} active projects` : "No active projects"}
+            </p>
+          </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("pastJobInsights")}>
+            <span className="eyebrow">Analytics</span>
+            <strong>Past Job Insights</strong>
+            <p>View performance analytics from completed jobs.</p>
+          </button>
         </div>
       </Section>
 
-      <Section title="Saved estimates" subtitle="Recent estimates in this browser.">
-        <div className="savedList">
-          {activeSavedEstimates.length ? (
-            activeSavedEstimates.map((estimate) => (
-              <div className="savedCard" key={estimate.id}>
+      <Section title="Active jobs preview" subtitle="A quick look at open work and what starts next.">
+        {activeJobsSummary.activeCount ? (
+          <div className="savedList">
+            {activeJobsSummary.upcoming.map((job) => (
+              <div className="savedCard" key={job.id}>
                 <div>
-                  <span className="eyebrow">{estimate.estimateCode || estimateCode(estimate.estimateNumber || 1)}</span>
-                  <strong>{estimate.name || "Untitled estimate"}</strong>
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+                    <span className={`statusTag statusTag-${String(job.status || "draft").toLowerCase().replace(/\s+/g, "-")}`}>{job.status}</span>
+                    <span className={`statusTag ${String(job.riskLevel || "").toLowerCase() === "critical" ? "statusTag-draft" : ""}`}>{job.riskLevel || "Normal"}</span>
+                  </div>
+                  <strong>{job.projectName || "Untitled project"}</strong>
                   <p>
-                    {estimate.estimateType ? `${estimate.estimateType} | ` : ""}
-                    {estimate.inputs?.jobName ? `${estimate.inputs.jobName} | ` : ""}
-                    {estimate.inputs?.customerName ? `${estimate.inputs.customerName} | ` : ""}
-                    {num(estimate.summary?.totalSquares ?? estimate.inputs?.totalSquares ?? 0, 0)} SQ |{" "}
-                    {money(estimate.summary?.selectedBidAmount ?? 0)} bid |{" "}
-                    {num(estimate.summary?.selectedMarkupPercent ?? 0, 0)}% markup
+                    {job.jobNumber ? `Job ${job.jobNumber} | ` : ""}
+                    {job.customer || job.propertyOwner || "No customer"} |{" "}
+                    {job.fieldSupervisor || "No supervisor"} |{" "}
+                    Start {job.startDate || "TBD"} · Due {job.expectedCompletionDate || "TBD"}
                   </p>
                 </div>
-
                 <div className="savedActions">
-                  <button type="button" className="secondaryButton" onClick={() => handleLoadEstimate(estimate)}>
-                    Load
+                  <button type="button" className="secondaryButton" onClick={() => openActiveJobDetail(job.id)}>
+                    Open
                   </button>
-                  <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate.id)}>
-                    Delete
+                  <button type="button" className="secondaryButton" onClick={() => openActiveJobIssueModal(job)}>
+                    Report Issue
                   </button>
                 </div>
               </div>
-            ))
-          ) : (
-            <p className="emptyState">No saved estimates yet.</p>
-          )}
+            ))}
+          </div>
+        ) : (
+          <p className="emptyState">No active jobs yet.</p>
+        )}
+
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="Total active projects" value={num(activeJobsSummary.activeCount, 0)} />
+          <DetailRow label="Critical risk projects" value={num(activeJobsSummary.criticalCount, 0)} />
+          <DetailRow label="All tracked projects" value={num(activeJobsSummary.totalJobs, 0)} />
+        </div>
+
+        <div className="actionRow" style={{ marginTop: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("activeJobs")}>
+            Open Active Jobs
+          </button>
         </div>
       </Section>
+
+      <Section
+        title="Approved Jobs / Upcoming Projects"
+        subtitle="Track approved work that is starting soon or still needs attention."
+        right={
+          <div className="actionRow" style={{ gap: 8, margin: 0 }}>
+            <button
+              type="button"
+              className="secondaryButton"
+              onClick={() => setDashboardApprovedJobsCollapsed((value) => !value)}
+            >
+              {dashboardApprovedJobsCollapsed ? "Expand" : "Minimize"}
+            </button>
+            <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("approvedJobs")}>
+              View All Approved Jobs
+            </button>
+          </div>
+        }
+      >
+        {dashboardApprovedJobsCollapsed ? (
+          <div className="summaryCard" style={{ marginTop: 0 }}>
+            <span>Section minimized</span>
+            <strong>{approvedJobsDashboardSummary.upcoming.length} upcoming projects hidden</strong>
+            <p style={{ margin: "6px 0 0", color: "var(--text-muted)" }}>
+              Click Expand to show the approved jobs preview again.
+            </p>
+          </div>
+        ) : (
+          renderApprovedJobsTableSection({
+            title: "Approved Jobs / Upcoming Projects",
+            subtitle: "The next approved projects to keep an eye on.",
+            jobs: approvedJobsDashboardSummary.upcoming,
+            showViewAllButton: true,
+            onViewAll: () => setActiveTemplate("approvedJobs"),
+            limit: 8,
+          })
+        )}
+      </Section>
+
+      <Section title="Saved estimates" subtitle="Recent estimates in this browser.">
+        <div className="dashboardTabBar">
+          <button
+            type="button"
+            className={`dashboardTabButton ${dashboardSavedEstimatesOpen ? "active" : ""}`}
+            onClick={() => setDashboardSavedEstimatesOpen((current) => !current)}
+          >
+            Saved estimates {dashboardSavedEstimatesOpen ? "▲" : "▼"}
+          </button>
+          <span className="dashboardTabHint">
+            Browse, search, load, approve, or delete estimates.
+          </span>
+        </div>
+
+        {dashboardSavedEstimatesOpen ? (
+          <>
+            <div className="formGrid" style={{ marginBottom: 12 }}>
+              <Field label="Search saved estimates">
+                <input
+                  type="search"
+                  value={dashboardSavedEstimateSearch}
+                  onChange={(e) => setDashboardSavedEstimateSearch(e.target.value)}
+                  placeholder="Search by estimate, job, customer, or address"
+                />
+              </Field>
+            </div>
+
+            <div className="savedList">
+              {filteredDashboardSavedEstimates.length ? (
+                filteredDashboardSavedEstimates.map((estimate) => (
+                  <div className="savedCard" key={estimate.id}>
+                    <div>
+                      <span className="eyebrow">{estimate.estimateCode || estimateCode(estimate.estimateNumber || 1)}</span>
+                      <strong>{estimate.name || "Untitled estimate"}</strong>
+                      <p>
+                        {estimate.estimateType ? `${estimate.estimateType} | ` : ""}
+                        {estimate.inputs?.jobName ? `${estimate.inputs.jobName} | ` : ""}
+                        {estimate.inputs?.customerName ? `${estimate.inputs.customerName} | ` : ""}
+                        {num(estimate.summary?.totalSquares ?? estimate.inputs?.totalSquares ?? 0, 0)} SQ |{" "}
+                        {money(estimate.summary?.selectedBidAmount ?? 0)} bid |{" "}
+                        {num(estimate.summary?.selectedMarkupPercent ?? 0, 0)}% markup
+                      </p>
+                    </div>
+
+                  <div className="savedActions">
+                    <button type="button" className="secondaryButton" onClick={() => handleConvertEstimateToProposal(estimate)}>
+                      Generate Proposal
+                    </button>
+                    <button type="button" className="secondaryButton" onClick={() => handleLoadEstimate(estimate)}>
+                      Load
+                    </button>
+                      <button type="button" className="secondaryButton" onClick={() => handleApproveJob(estimate)}>
+                        Approve Job
+                      </button>
+                      <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="emptyState">
+                  {dashboardSavedEstimateSearch.trim()
+                    ? "No saved estimates match your search."
+                    : "No saved estimates yet."}
+                </p>
+              )}
+            </div>
+          </>
+        ) : (
+          <p className="emptyState">Tap Saved estimates to open the list.</p>
+        )}
+      </Section>
     </div>
-  );
+    );
+  }
+
+  const renderActiveJobIssueModal = () => {
+    if (!activeJobIssueModalOpen) return null;
+    const project = activeJobs.find((job) => job.id === (activeJobIssueDraft.projectId || activeJobSelectedId)) || selectedActiveJob || null;
+    const employeeOptions = [
+      { value: "", label: "Select employee" },
+      ...employeeDirectory
+        .filter((employee) => employee.isActive)
+        .map((employee) => ({
+          value: employee.id,
+          label: [
+            employee.displayName || [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim() || "Unnamed employee",
+            employee.employeeNumber ? `ID ${employee.employeeNumber}` : "",
+            employee.department || "",
+          ]
+            .filter(Boolean)
+            .join(" • "),
+        })),
+    ];
+
+    return (
+      <div className="activeJobOverlay" role="presentation" onClick={closeActiveJobIssueModal}>
+        <div className="activeJobPanel" role="dialog" aria-modal="true" aria-labelledby="active-job-issue-title" onClick={(e) => e.stopPropagation()}>
+          <div className="cfoDetailHeader">
+            <div>
+              <p className="eyebrow">Active Jobs</p>
+              <h2 id="active-job-issue-title">Report Issue</h2>
+              <p>{project ? `${project.projectName || "Project"} · Job ${project.jobNumber || "—"}` : "Select a project first."}</p>
+              <div className="cfoDetailMeta">
+                <span className="cfoDetailChip">Office review placeholder</span>
+                <span className="cfoDetailChip">Escalation placeholder</span>
+                <span className="cfoDetailChip">Notifications placeholder</span>
+              </div>
+            </div>
+            <div className="actionRow">
+              <button type="button" className="secondaryButton" onClick={closeActiveJobIssueModal}>
+                Cancel
+              </button>
+              <button type="button" className="primaryButton" onClick={saveActiveJobIssue}>
+                Save issue
+              </button>
+            </div>
+          </div>
+
+          <div className="activeJobModalGrid">
+            <Field label="Job number">
+              <input type="text" value={activeJobIssueDraft.jobNumber || project?.jobNumber || ""} disabled />
+            </Field>
+            <Field label="Project name">
+              <input type="text" value={activeJobIssueDraft.projectName || project?.projectName || ""} disabled />
+            </Field>
+            <Field label="Date / time">
+              <input
+                type="datetime-local"
+                value={activeJobIssueDraft.dateTime}
+                onChange={(e) => setActiveJobIssueDraft((current) => ({ ...current, dateTime: e.target.value }))}
+              />
+            </Field>
+            <Field label="Caller name">
+              <input
+                type="text"
+                value={activeJobIssueDraft.callerName}
+                onChange={(e) => setActiveJobIssueDraft((current) => ({ ...current, callerName: e.target.value }))}
+                placeholder="Person reporting"
+              />
+            </Field>
+            <Field label="Caller company">
+              <input
+                type="text"
+                value={activeJobIssueDraft.callerCompany}
+                onChange={(e) => setActiveJobIssueDraft((current) => ({ ...current, callerCompany: e.target.value }))}
+                placeholder="Company or customer"
+              />
+            </Field>
+            <Field label="Phone">
+              <input
+                type="text"
+                value={activeJobIssueDraft.phone}
+                onChange={(e) => setActiveJobIssueDraft((current) => ({ ...current, phone: e.target.value }))}
+              />
+            </Field>
+            <Field label="Email">
+              <input
+                type="email"
+                value={activeJobIssueDraft.email}
+                onChange={(e) => setActiveJobIssueDraft((current) => ({ ...current, email: e.target.value }))}
+              />
+            </Field>
+            <Field label="Issue category">
+              <select
+                value={activeJobIssueDraft.issueCategory}
+                onChange={(e) => setActiveJobIssueDraft((current) => ({ ...current, issueCategory: e.target.value }))}
+              >
+                {ACTIVE_JOB_ISSUE_CATEGORIES.map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Priority">
+              <select
+                value={activeJobIssueDraft.priority}
+                onChange={(e) => setActiveJobIssueDraft((current) => ({ ...current, priority: e.target.value }))}
+              >
+                {ACTIVE_JOB_ISSUE_PRIORITIES.map((priority) => (
+                  <option key={priority} value={priority}>{priority}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Status">
+              <select
+                value={activeJobIssueDraft.currentStatus}
+                onChange={(e) => setActiveJobIssueDraft((current) => ({ ...current, currentStatus: e.target.value }))}
+              >
+                {ACTIVE_JOB_ISSUE_STATUSES.map((status) => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Assign to employee">
+              <select
+                value={activeJobIssueDraft.assignedEmployeeId}
+                onChange={(e) => {
+                  const assignedEmployee = employeeDirectory.find((employee) => employee.id === e.target.value) || null;
+                  setActiveJobIssueDraft((current) => ({
+                    ...current,
+                    assignedEmployeeId: e.target.value,
+                    assignedEmployeeName:
+                      assignedEmployee?.displayName ||
+                      [assignedEmployee?.firstName, assignedEmployee?.lastName].filter(Boolean).join(" ").trim() ||
+                      "",
+                  }));
+                }}
+              >
+                {employeeOptions.map((option) => (
+                  <option key={option.value || "blank"} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Follow-up deadline">
+              <input
+                type="date"
+                value={activeJobIssueDraft.followUpDeadline}
+                onChange={(e) => setActiveJobIssueDraft((current) => ({ ...current, followUpDeadline: e.target.value }))}
+              />
+            </Field>
+          </div>
+
+          <div className="formGrid" style={{ marginTop: 12 }}>
+            <Field label="Description">
+              <textarea
+                rows="4"
+                value={activeJobIssueDraft.description}
+                onChange={(e) => setActiveJobIssueDraft((current) => ({ ...current, description: e.target.value }))}
+                placeholder="Describe what happened or what needs attention."
+              />
+            </Field>
+            <Field label="Office response / suggested copy">
+              <textarea
+                rows="4"
+                value={activeJobIssueResponse}
+                onChange={(e) => setActiveJobIssueResponse(e.target.value)}
+                placeholder="Suggested response for customer or team follow-up."
+              />
+              <div className="actionRow" style={{ marginTop: 8 }}>
+                <button type="button" className="secondaryButton" onClick={() => setActiveJobIssueResponse(buildActiveJobSuggestedResponse(project))}>
+                  Use suggested response
+                </button>
+              </div>
+            </Field>
+          </div>
+
+          <div className="formGrid" style={{ marginTop: 12 }}>
+            <Field label="Escalation / correction reason">
+              <textarea
+                rows="3"
+                value={activeJobIssueDraft.reason}
+                onChange={(e) => setActiveJobIssueDraft((current) => ({ ...current, reason: e.target.value }))}
+                placeholder="Optional internal reason for correction or escalation."
+              />
+            </Field>
+            <div className="summaryCard">
+              <span>Workflow notes</span>
+              <p style={{ margin: 0 }}>
+                This is the Phase 1 issue intake workflow. Notifications, escalations, and office follow-up steps are left as placeholders for the next phase.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderActiveJobsScreen = () => {
+    const statusCounts = ACTIVE_JOB_STATUS_OPTIONS.reduce((acc, status) => {
+      acc[status] = activeJobs.filter((job) => String(job.status || "") === status).length;
+      return acc;
+    }, {});
+
+    return (
+      <div className="appShell">
+        <style>{css}</style>
+        <header className="hero">
+          <div>
+            <div className="brandRow">
+              <div className="brandMark">
+                <img src={LOGO_SRC} alt="CRT Roofing logo" />
+              </div>
+              <div>
+                <p className="eyebrow">CRT Roofing Project Center</p>
+                <h1>Active Jobs</h1>
+                <p className="intro">Track project status, risk, contacts, open issues, and field progress.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="heroCard">
+            <span>Signed in</span>
+            <strong>{authUser.displayName}</strong>
+            <p>Local mode only</p>
+          </div>
+        </header>
+
+        <div className="actionRow" style={{ marginBottom: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+            Back to dashboard
+          </button>
+          <button
+            type="button"
+            className="primaryButton"
+            onClick={() => openActiveJobIssueModal(selectedActiveJob || filteredActiveJobs[0] || activeJobs[0])}
+          >
+            Report Issue
+          </button>
+        </div>
+
+        <Section title="Active jobs list" subtitle="Search, filter, sort, and open a job detail page.">
+          <div className="formGrid">
+            <Field label="Search">
+              <input
+                type="search"
+                value={activeJobsSearch}
+                onChange={(e) => setActiveJobsSearch(e.target.value)}
+                placeholder="Search by job, customer, contact, phase, or issue"
+              />
+            </Field>
+            <Field label="Status">
+              <select value={activeJobsFilters.status} onChange={(e) => updateActiveJobsFilter("status", e.target.value)}>
+                <option value="all">All</option>
+                {ACTIVE_JOB_STATUS_OPTIONS.map((status) => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Risk level">
+              <select value={activeJobsFilters.riskLevel} onChange={(e) => updateActiveJobsFilter("riskLevel", e.target.value)}>
+                <option value="all">All</option>
+                {ACTIVE_JOB_RISK_LEVELS.map((riskLevel) => (
+                  <option key={riskLevel} value={riskLevel}>{riskLevel}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Contact">
+              <input type="text" value={activeJobsFilters.contact} onChange={(e) => updateActiveJobsFilter("contact", e.target.value)} placeholder="Project contact" />
+            </Field>
+            <Field label="Supervisor">
+              <input type="text" value={activeJobsFilters.supervisor} onChange={(e) => updateActiveJobsFilter("supervisor", e.target.value)} placeholder="Field supervisor" />
+            </Field>
+            <Field label="Customer">
+              <input type="text" value={activeJobsFilters.customer} onChange={(e) => updateActiveJobsFilter("customer", e.target.value)} placeholder="Customer or owner" />
+            </Field>
+            <Field label="Start date after">
+              <input type="date" value={activeJobsFilters.startDate} onChange={(e) => updateActiveJobsFilter("startDate", e.target.value)} />
+            </Field>
+            <Field label="Open issues">
+              <select value={activeJobsFilters.openIssues} onChange={(e) => updateActiveJobsFilter("openIssues", e.target.value)}>
+                <option value="all">All</option>
+                <option value="yes">Has open issues</option>
+                <option value="no">No open issues</option>
+              </select>
+            </Field>
+            <Field label="Sort by">
+              <select value={activeJobsFilters.sortBy} onChange={(e) => updateActiveJobsFilter("sortBy", e.target.value)}>
+                <option value="startDate">Start date</option>
+                <option value="status">Status</option>
+                <option value="riskLevel">Risk level</option>
+                <option value="customer">Customer</option>
+                <option value="openIssues">Open issues</option>
+              </select>
+            </Field>
+            <Field label="Sort order">
+              <select value={activeJobsFilters.sortDirection} onChange={(e) => updateActiveJobsFilter("sortDirection", e.target.value)}>
+                <option value="asc">Ascending</option>
+                <option value="desc">Descending</option>
+              </select>
+            </Field>
+          </div>
+
+          <div className="actionRow" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="secondaryButton"
+              onClick={() => {
+                setActiveJobsSearch("");
+                setActiveJobsFilters({
+                  status: "all",
+                  contact: "",
+                  supervisor: "",
+                  riskLevel: "all",
+                  startDate: "",
+                  customer: "",
+                  openIssues: "all",
+                  sortBy: "startDate",
+                  sortDirection: "asc",
+                });
+              }}
+            >
+              Clear filters
+            </button>
+          </div>
+
+          <div className="detailList" style={{ marginTop: 14 }}>
+            <DetailRow label="Tracked projects" value={num(activeJobs.length, 0)} />
+            <DetailRow label="Active / in-progress" value={num(activeJobsSummary.activeCount, 0)} />
+            <DetailRow label="Critical risk" value={num(activeJobsSummary.criticalCount, 0)} />
+            <DetailRow label="Filtered results" value={num(filteredActiveJobs.length, 0)} />
+          </div>
+
+          <div className="activeJobsTableWrap" style={{ marginTop: 14 }}>
+            <table className="activeJobsTable">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Job number</th>
+                  <th>Project name</th>
+                  <th>Customer / property</th>
+                  <th>Current phase</th>
+                  <th>Project contact</th>
+                  <th>Field supervisor</th>
+                  <th>Start date</th>
+                  <th>Expected completion</th>
+                  <th>Risk / issue</th>
+                  <th>Open issues</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredActiveJobs.length ? (
+                  filteredActiveJobs.map((job) => {
+                    const openIssues = getActiveJobOpenIssuesCount(job);
+                    const statusTone = String(job.statusTone || "").toLowerCase() || (isActiveJobStatus(job.status) ? "green" : "blue");
+                    const riskTone = String(job.riskTone || "").toLowerCase() || (String(job.riskLevel || "").toLowerCase() === "critical" ? "red" : "yellow");
+                    return (
+                      <tr key={job.id} className="activeJobsRow" onClick={() => openActiveJobDetail(job.id)}>
+                        <td>
+                          <span className={`activeJobsStatusDot ${statusTone}`} aria-hidden="true" />
+                          {job.status || "Active"}
+                        </td>
+                        <td>{job.jobNumber || "—"}</td>
+                        <td>{job.projectName || "Untitled project"}</td>
+                        <td>{job.customer || job.propertyOwner || "—"}</td>
+                        <td>{job.currentPhase || "—"}</td>
+                        <td>{job.projectContact || "—"}</td>
+                        <td>{job.fieldSupervisor || "—"}</td>
+                        <td>{job.startDate || "—"}</td>
+                        <td>{job.expectedCompletionDate || "—"}</td>
+                        <td>
+                          <span className={`activeJobsStatusDot ${riskTone}`} aria-hidden="true" />
+                          {job.riskLevel || "Normal"}
+                        </td>
+                        <td>{num(openIssues, 0)}</td>
+                        <td>
+                          <div className="savedActions">
+                            <button type="button" className="secondaryButton" onClick={(e) => { e.stopPropagation(); openActiveJobDetail(job.id); }}>
+                              Open
+                            </button>
+                            <button type="button" className="secondaryButton" onClick={(e) => { e.stopPropagation(); openActiveJobIssueModal(job); }}>
+                              Report Issue
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={12}>
+                      <div className="cfoDetailEmpty">
+                        <strong>No active jobs match the current filters.</strong>
+                        <p style={{ margin: "8px 0 0", color: "#a7c7d6" }}>
+                          Clear the filters or add a project to the active jobs list.
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+
+        <Section title="Status breakdown" subtitle="A quick snapshot of project stage counts.">
+          <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", marginTop: 0 }}>
+            {ACTIVE_JOB_STATUS_OPTIONS.map((status) => (
+              <div className="summaryCard" key={status}>
+                <span>{status}</span>
+                <strong>{num(statusCounts[status] || 0, 0)}</strong>
+                <p>Projects in this phase.</p>
+              </div>
+            ))}
+          </div>
+        </Section>
+
+        {renderActiveJobIssueModal()}
+      </div>
+    );
+  };
+
+  const renderActiveJobScreen = () => {
+    const project = selectedActiveJob || filteredActiveJobs[0] || activeJobs[0] || null;
+    if (!project) {
+      return (
+        <div className="appShell">
+          <style>{css}</style>
+          <header className="hero">
+            <div>
+              <div className="brandRow">
+                <div className="brandMark">
+                  <img src={LOGO_SRC} alt="CRT Roofing logo" />
+                </div>
+                <div>
+                  <p className="eyebrow">CRT Roofing Project Center</p>
+                  <h1>Active Job</h1>
+                  <p className="intro">Select a job from the active jobs list.</p>
+                </div>
+              </div>
+            </div>
+          </header>
+          <div className="actionRow" style={{ marginBottom: 16 }}>
+            <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("activeJobs")}>Back to active jobs</button>
+            <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>Back to dashboard</button>
+          </div>
+          <Section title="No project selected" subtitle="Open a job from the active jobs list to view details.">
+            <p className="emptyState">No active job available yet.</p>
+          </Section>
+        </div>
+      );
+    }
+
+    const openIssues = getActiveJobOpenIssuesCount(project);
+
+    return (
+      <div className="appShell">
+        <style>{css}</style>
+        <header className="hero">
+          <div>
+            <div className="brandRow">
+              <div className="brandMark">
+                <img src={LOGO_SRC} alt="CRT Roofing logo" />
+              </div>
+              <div>
+                <p className="eyebrow">CRT Roofing Project Center</p>
+                <h1>{project.projectName || "Active Job"}</h1>
+                <p className="intro">
+                  {project.address || "No property address"} · Job {project.jobNumber || "—"}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="heroCard">
+            <span>Signed in</span>
+            <strong>{authUser.displayName}</strong>
+            <p>Local mode only</p>
+          </div>
+        </header>
+
+        <div className="actionRow" style={{ marginBottom: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("activeJobs")}>
+            Back to active jobs
+          </button>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+            Back to dashboard
+          </button>
+          <button type="button" className="primaryButton" onClick={() => openActiveJobIssueModal(project)}>
+            Report Issue
+          </button>
+        </div>
+
+        <div className="activeJobHeaderCards">
+          <div className="summaryCard">
+            <span>Status</span>
+            <strong>{project.status || "Active"}</strong>
+            <p>{project.currentPhase || "Current phase not set"}</p>
+          </div>
+          <div className="summaryCard">
+            <span>Risk level</span>
+            <strong>{project.riskLevel || "Normal"}</strong>
+            <p>{project.riskReason || "No active risk notes."}</p>
+          </div>
+          <div className="summaryCard">
+            <span>Contract value</span>
+            <strong>{money2(project.contractAmount || 0)}</strong>
+            <p>Approved job value being tracked.</p>
+          </div>
+          <div className="summaryCard">
+            <span>Open issues</span>
+            <strong>{num(openIssues, 0)}</strong>
+            <p>{project.issues?.length ? "Issues are being monitored." : "No open issues yet."}</p>
+          </div>
+          <div className="summaryCard">
+            <span>Start / end</span>
+            <strong>{project.startDate || "TBD"}</strong>
+            <p>{project.expectedCompletionDate || "Completion date TBD"}</p>
+          </div>
+        </div>
+
+        <Section title="Project overview" subtitle="Clickable detail page for the active job.">
+          <div className="detailList">
+            <DetailRow label="Customer" value={project.customer || "—"} />
+            <DetailRow label="Property owner" value={project.propertyOwner || "—"} />
+            <DetailRow label="Property manager" value={project.propertyManager || "—"} />
+            <DetailRow label="Project contact" value={project.projectContact || "—"} />
+            <DetailRow label="Project manager" value={project.projectManager || "—"} />
+            <DetailRow label="Field supervisor" value={project.fieldSupervisor || "—"} />
+            <DetailRow label="Foreman" value={project.foreman || "—"} />
+            <DetailRow label="Salesperson" value={project.salesperson || "—"} />
+            <DetailRow label="Office coordinator" value={project.officeCoordinator || "—"} />
+            <DetailRow label="Percent complete" value={`${num(project.percentComplete || 0, 0)}%`} />
+            <DetailRow label="Amount billed" value={money2(project.amountBilled || 0)} />
+            <DetailRow label="Amount collected" value={money2(project.amountCollected || 0)} />
+            <DetailRow label="Remaining contract value" value={money2(project.remainingContractValue || 0)} />
+          </div>
+        </Section>
+
+        <div className="fieldOpsReviewColumns">
+          <Section title="Team & outside contacts" subtitle="Internal team and any outside stakeholders tied to the project.">
+            <div className="fieldOpsReviewColumns">
+              <div className="panel">
+                <h3>Internal team</h3>
+                <div className="reviewTable">
+                  {(project.team || []).length ? (
+                    project.team.map((person, index) => (
+                      <div key={`${person.name || "team"}-${index}`} className="reviewTableRow">
+                        <span>{person.role || "Role"}</span>
+                        <span>{person.name || "—"}</span>
+                        <span>{person.company || "—"}</span>
+                        <span>{person.phone || "—"}</span>
+                        <span>{person.email || "—"}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="emptyState">No internal team members listed.</p>
+                  )}
+                </div>
+              </div>
+              <div className="panel">
+                <h3>Outside contacts</h3>
+                <div className="reviewTable">
+                  {(project.outsideContacts || []).length ? (
+                    project.outsideContacts.map((person, index) => (
+                      <div key={`${person.name || "contact"}-${index}`} className="reviewTableRow">
+                        <span>{person.role || "Role"}</span>
+                        <span>{person.name || "—"}</span>
+                        <span>{person.company || "—"}</span>
+                        <span>{person.phone || "—"}</span>
+                        <span>{person.email || "—"}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="emptyState">No outside contacts listed.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </Section>
+
+          <Section title="Operations" subtitle="Current project phase, permit status, and status notes.">
+            <div className="detailList">
+              <DetailRow label="Schedule" value={project.operations?.schedule || "—"} />
+              <DetailRow label="Daily job logs" value={num(project.operations?.dailyJobLogs || 0, 0)} />
+              <DetailRow label="Crew hours" value={num(project.operations?.crewHours || 0, 0)} />
+              <DetailRow label="Photos" value={num(project.operations?.photos || 0, 0)} />
+              <DetailRow label="Materials" value={project.operations?.materials || "—"} />
+              <DetailRow label="Subcontractor coordination" value={project.operations?.subcontractorCoordination || "—"} />
+              <DetailRow label="Permit status" value={project.operations?.permitStatus || "—"} />
+              <DetailRow label="Inspections" value={project.operations?.inspections || "—"} />
+              <DetailRow label="Punch list" value={project.operations?.punchList || "—"} />
+              <DetailRow label="Change orders" value={project.operations?.changeOrders || "—"} />
+            </div>
+          </Section>
+        </div>
+
+        <Section title="Action items" subtitle="What still needs to happen on this job.">
+          {(project.actionItems || []).length ? (
+            <div className="savedList">
+              {project.actionItems.map((item) => (
+                <div className="savedCard" key={item.id}>
+                  <div>
+                    <strong>{item.title || "Action item"}</strong>
+                    <p>
+                      {item.dueDate ? `Due ${item.dueDate} | ` : ""}
+                      {item.status || "Open"}
+                      {item.assignedEmployeeName ? ` | ${item.assignedEmployeeName}` : ""}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="emptyState">No action items listed for this project.</p>
+          )}
+        </Section>
+
+        <Section title="Issues" subtitle="Reported issues and escalation history.">
+          {(project.issues || []).length ? (
+            <div className="activeJobsTableWrap">
+              <table className="activeJobsTable">
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>Category</th>
+                    <th>Priority</th>
+                    <th>Status</th>
+                    <th>Description</th>
+                    <th>Caller</th>
+                    <th>Assigned</th>
+                    <th>Deadline</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {project.issues.map((issue) => (
+                    <tr key={issue.id}>
+                      <td>{issue.issueNumber || "—"}</td>
+                      <td>{issue.category || "—"}</td>
+                      <td>{issue.priority || "—"}</td>
+                      <td>{issue.status || "—"}</td>
+                      <td>{issue.description || "—"}</td>
+                      <td>{issue.callerName || "—"}</td>
+                      <td>{issue.assignedEmployeeName || "—"}</td>
+                      <td>{issue.followUpDeadline || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="cfoDetailEmpty">
+              <strong>No issues have been reported on this job.</strong>
+              <p style={{ margin: "8px 0 0", color: "#a7c7d6" }}>
+                Use Report Issue to create the first escalation and start the issue trail.
+              </p>
+            </div>
+          )}
+        </Section>
+
+        <Section title="Activity log" subtitle="Timeline placeholder for status changes, corrections, and office notes.">
+          {(project.activityLog || []).length ? (
+            <div className="savedList">
+              {project.activityLog.map((entry) => (
+                <div className="savedCard" key={entry.id}>
+                  <div>
+                    <strong>{entry.summary || "Activity entry"}</strong>
+                    <p>
+                      {entry.changedBy || "—"} · {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "—"}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="emptyState">No activity recorded yet.</p>
+          )}
+        </Section>
+
+        <Section title="Notifications / escalation placeholders" subtitle="Future workflow hooks for office follow-up and alerts.">
+          <div className="detailList">
+            <DetailRow label="Office notification" value="Placeholder" note="Send a message to office staff when an issue is reported." />
+            <DetailRow label="Escalation" value="Placeholder" note="Critical issues can be escalated to management later." />
+            <DetailRow label="Audit trail" value="Placeholder" note="Future changes will be tracked with old value, new value, person, and time." />
+          </div>
+        </Section>
+
+        <div className="actionRow" style={{ marginTop: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("activeJobs")}>Back to active jobs</button>
+          <button type="button" className="primaryButton" onClick={() => openActiveJobIssueModal(project)}>Report Issue</button>
+        </div>
+
+        {renderActiveJobIssueModal()}
+      </div>
+    );
+  };
+
+  const renderFieldOperationsScreen = () => {
+    const draftTotals = calculateFieldDailyLogTotals(fieldDailyLogDraft);
+    const selectedLogTotals = fieldDailyLogSelectedLog ? calculateFieldDailyLogTotals(fieldDailyLogSelectedLog) : null;
+    const employeeDropdownOptions = [
+      { value: "", label: activeFieldOperationEmployees.length ? "Select employee" : "No active employees found" },
+      ...activeFieldOperationEmployees.map((employee) => ({
+        value: employee.id,
+        label: [
+          employee.displayName || `${employee.firstName || ""} ${employee.lastName || ""}`.trim() || "Unnamed employee",
+          employee.employeeNumber ? `ID ${employee.employeeNumber}` : "",
+          employee.occupation ? employee.occupation : "",
+        ]
+          .filter(Boolean)
+          .join(" • "),
+      })),
+    ];
+    const vehicleDropdownOptions = [
+      { value: "", label: fieldOperationCompanyVehicles.length ? "Select truck driven" : "No company vehicles found" },
+      ...fieldOperationCompanyVehicles.map((vehicle) => ({
+        value: vehicle.id,
+        label: [
+          vehicle.vehicleName || "Company vehicle",
+          vehicle.unitNumber ? `Unit ${vehicle.unitNumber}` : "",
+          vehicle.licensePlate ? `Plate ${vehicle.licensePlate}` : "",
+        ]
+          .filter(Boolean)
+          .join(" • "),
+      })),
+      { value: "__other__", label: "Other / Rental" },
+    ];
+    const photoGroups = FIELD_DAILY_LOG_PHOTO_CATEGORIES.map((category) => ({
+      ...category,
+      photos: (fieldDailyLogDraft.photos || []).filter((photo) => String(photo.photoCategory || "").toLowerCase() === category.value),
+    }));
+
+    return (
+      <div className="appShell">
+        <style>{css}</style>
+
+        <header className="hero">
+          <div>
+            <div className="brandRow">
+              <div className="brandMark">
+                <img src={LOGO_SRC} alt="CRT Roofing logo" />
+              </div>
+              <div>
+                <p className="eyebrow">CRT Roofing Operations Platform</p>
+                <h1>Field Operations</h1>
+                <p className="intro">Daily Job Log for foremen and office review for submitted field work.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="heroCard">
+            <span>Signed in</span>
+            <strong>{authUser.displayName}</strong>
+            <p>Local mode only</p>
+          </div>
+        </header>
+
+        <div className="actionRow" style={{ marginBottom: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+            Back to dashboard
+          </button>
+        </div>
+
+        <Section title="Field Operations" subtitle="Phase 1: create daily logs, save drafts, submit logs, and review submitted work.">
+          <div className="dashboardTabBar">
+            <button
+              type="button"
+              className={`dashboardTabButton ${fieldOperationsTab === "dailyLog" ? "active" : ""}`}
+              onClick={() => setFieldOperationsTab("dailyLog")}
+            >
+              Daily Job Log
+            </button>
+            <button
+              type="button"
+              className={`dashboardTabButton ${fieldOperationsTab === "officeReview" ? "active" : ""}`}
+              onClick={() => setFieldOperationsTab("officeReview")}
+            >
+              Office Review
+            </button>
+          </div>
+
+          <p className="smallNote">
+            Foremen can save drafts and submit logs. Submitted logs are locked in the office review list so they cannot be overwritten directly.
+          </p>
+        </Section>
+
+        {fieldOperationsTab === "dailyLog" ? (
+          <>
+            <Section title="Daily Job Log" subtitle="Capture the day’s field work, hours, materials, equipment, notes, and photos.">
+              <div className="formGrid">
+                <Field label="Job number">
+                  <input type="text" value={fieldDailyLogDraft.jobNumber} onChange={(e) => handleFieldDailyLogFieldChange("jobNumber", e.target.value)} />
+                </Field>
+                <Field label="Job name">
+                  <input type="text" value={fieldDailyLogDraft.jobName} onChange={(e) => handleFieldDailyLogFieldChange("jobName", e.target.value)} />
+                </Field>
+                <Field label="Job address">
+                  <input type="text" value={fieldDailyLogDraft.jobAddress} onChange={(e) => handleFieldDailyLogFieldChange("jobAddress", e.target.value)} />
+                </Field>
+                <Field label="Work date">
+                  <input type="date" value={fieldDailyLogDraft.workDate} onChange={(e) => handleFieldDailyLogFieldChange("workDate", e.target.value)} />
+                </Field>
+                <Field label="Foreman">
+                  <select
+                    value={fieldDailyLogDraft.foreman}
+                    onChange={(e) => handleFieldDailyLogFieldChange("foreman", e.target.value)}
+                  >
+                    <option value="">{activeFieldOperationForemen.length ? "Select foreman" : "No active foremen found"}</option>
+                    {activeFieldOperationForemen.map((employee) => {
+                      const fullName = employee.displayName || [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim() || "Unnamed foreman";
+                      return (
+                        <option key={employee.id} value={fullName}>
+                          {fullName}
+                          {employee.employeeNumber ? ` • ID ${employee.employeeNumber}` : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </Field>
+                <Field label="Weather conditions (optional)">
+                  <input type="text" value={fieldDailyLogDraft.weatherConditions} onChange={(e) => handleFieldDailyLogFieldChange("weatherConditions", e.target.value)} />
+                </Field>
+              </div>
+            </Section>
+
+            <Section
+              title="Vehicle & Fuel"
+              subtitle="Track the truck driven, mileage, fuel purchases, and receipt photos."
+            >
+              <div className="formGrid">
+                <Field label="Was fuel purchased?">
+                  <select value={fieldDailyLogDraft.fuelPurchased ? "yes" : "no"} onChange={(e) => handleFieldDailyLogFieldChange("fuelPurchased", e.target.value === "yes")}>
+                    <option value="no">No</option>
+                    <option value="yes">Yes</option>
+                  </select>
+                </Field>
+              </div>
+
+              <div className="crewLogList" style={{ marginTop: 14 }}>
+                {(fieldDailyLogDraft.vehicleRows || []).map((row) => {
+                  const milesDriven = Math.max(0, toNumber(row.endingMileage, 0) - toNumber(row.startingMileage, 0));
+                  const mileageFlag = toNumber(row.endingMileage, 0) < toNumber(row.startingMileage, 0) || milesDriven >= FIELD_DAILY_LOG_HIGH_MILEAGE_THRESHOLD;
+                  return (
+                    <div key={row.id} className="panel" style={{ marginBottom: 12, padding: 16 }}>
+                      <div className="formGrid">
+                        <Field label="Truck driven">
+                          <select value={row.vehicleId} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "vehicleId", e.target.value)}>
+                            {vehicleDropdownOptions.map((option) => (
+                              <option key={option.value || "blank"} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="Truck driver">
+                          <select value={row.driverEmployeeId} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "driverEmployeeId", e.target.value)}>
+                            <option value="">Select driver</option>
+                            {activeEmployeeDrivers.map((employee) => {
+                              const fullName = employee.displayName || [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim() || "Unnamed driver";
+                              return (
+                                <option key={employee.id} value={employee.id}>
+                                  {fullName}
+                                  {employee.employeeNumber ? ` • ID ${employee.employeeNumber}` : ""}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </Field>
+                        <Field label="Truck name">
+                          <input type="text" value={row.truckName} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "truckName", e.target.value)} />
+                        </Field>
+                        <Field label="Unit number">
+                          <input type="text" value={row.unitNumber} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "unitNumber", e.target.value)} />
+                        </Field>
+                        <Field label="License plate">
+                          <input type="text" value={row.licensePlate} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "licensePlate", e.target.value)} />
+                        </Field>
+                        <Field label="Starting mileage">
+                          <input type="number" min="0" step="1" value={row.startingMileage} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "startingMileage", toNumber(e.target.value))} />
+                        </Field>
+                        <Field label="Ending mileage">
+                          <input type="number" min="0" step="1" value={row.endingMileage} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "endingMileage", toNumber(e.target.value))} />
+                        </Field>
+                        <Field label="Calculated miles driven">
+                          <input type="number" value={milesDriven} disabled />
+                        </Field>
+                        <Field label="Rental / other notes (optional)">
+                          <input type="text" value={row.otherDescription} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "otherDescription", e.target.value)} placeholder="Rental company or notes" />
+                        </Field>
+                      </div>
+                      <div className="detailList" style={{ marginTop: 12 }}>
+                        <DetailRow label="Mileage validation" value={toNumber(row.endingMileage, 0) < toNumber(row.startingMileage, 0) ? "Ending mileage must be greater than starting mileage." : mileageFlag ? "High mileage flagged for office review." : "Mileage looks good."} />
+                      </div>
+                      <div className="actionRow" style={{ marginTop: 12 }}>
+                        <button type="button" className="dangerButton" onClick={() => handleRemoveFieldDailyLogVehicleRow(row.id)}>
+                          Remove vehicle
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="actionRow" style={{ marginTop: 12 }}>
+                <button type="button" className="secondaryButton" onClick={handleAddFieldDailyLogVehicleRow}>
+                  + Add Truck
+                </button>
+              </div>
+              <div className="detailList" style={{ marginTop: 14 }}>
+                <DetailRow label="Total vehicle miles driven" value={num(draftTotals.vehicleMilesDriven, 0)} />
+                <DetailRow label="High mileage flags" value={num(draftTotals.highMileageCount, 0)} />
+              </div>
+
+              {fieldDailyLogDraft.fuelPurchased ? (
+                <>
+                  <div className="detailList" style={{ marginTop: 14 }}>
+                    <DetailRow label="Fuel receipts total" value={money2(totalFuelPurchasedAmount)} />
+                    <DetailRow label="Fuel gallons total" value={num(draftTotals.totalFuelGallons, 2)} />
+                  </div>
+                  <div className="crewLogList" style={{ marginTop: 14 }}>
+                    {(fieldDailyLogDraft.fuelReceipts || []).map((row) => (
+                      <div key={row.id} className="panel" style={{ marginBottom: 12, padding: 16 }}>
+                        <div className="formGrid">
+                          <Field label="Truck driven">
+                            <select value={row.vehicleRowId} onChange={(e) => handleFieldDailyLogFuelReceiptRowChange(row.id, "vehicleRowId", e.target.value)}>
+                              <option value="">Select truck</option>
+                              {(fieldDailyLogDraft.vehicleRows || []).map((vehicleRow) => (
+                                <option key={vehicleRow.id} value={vehicleRow.id}>
+                                  {vehicleRow.truckName || "Truck"} {vehicleRow.unitNumber ? `• Unit ${vehicleRow.unitNumber}` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                          <Field label="Gallons pumped">
+                            <input type="number" min="0" step="0.01" value={row.gallonsPumped} onChange={(e) => handleFieldDailyLogFuelReceiptRowChange(row.id, "gallonsPumped", toNumber(e.target.value))} />
+                          </Field>
+                          <Field label="Total receipt amount">
+                            <input type="number" min="0" step="0.01" value={row.totalReceiptAmount} onChange={(e) => handleFieldDailyLogFuelReceiptRowChange(row.id, "totalReceiptAmount", toNumber(e.target.value))} />
+                          </Field>
+                          <Field label="Price per gallon">
+                            <input type="number" value={row.pricePerGallon} disabled />
+                          </Field>
+                          <Field label="Fuel station (optional)">
+                            <input type="text" value={row.fuelStation} onChange={(e) => handleFieldDailyLogFuelReceiptRowChange(row.id, "fuelStation", e.target.value)} />
+                          </Field>
+                          <Field label="Receipt date/time">
+                            <input type="datetime-local" value={row.receiptDateTime} onChange={(e) => handleFieldDailyLogFuelReceiptRowChange(row.id, "receiptDateTime", e.target.value)} />
+                          </Field>
+                          <Field label="Gas receipt photo upload">
+                            <input type="file" accept="image/*" onChange={(e) => handleFieldDailyLogFuelReceiptPhotoUpload(row.id, e)} />
+                          </Field>
+                          <Field label="Receipt photo">
+                            {row.receiptPhotoUrl ? (
+                              <div className="photoPreviewCard">
+                                <img src={row.receiptPhotoUrl} alt={row.receiptPhotoName || "Fuel receipt"} />
+                                <div className="photoPreviewMeta">
+                                  <strong>{row.receiptPhotoName || "Receipt photo"}</strong>
+                                  <button type="button" className="secondaryButton" onClick={() => handleRemoveFuelReceiptPhoto(row.id)}>
+                                    Remove
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="emptyState">No receipt photo uploaded.</p>
+                            )}
+                          </Field>
+                        </div>
+                        <div className="actionRow" style={{ marginTop: 12 }}>
+                          <button type="button" className="dangerButton" onClick={() => handleRemoveFieldDailyLogFuelReceiptRow(row.id)}>
+                            Remove receipt
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="actionRow" style={{ marginTop: 12 }}>
+                    <button type="button" className="secondaryButton" onClick={handleAddFieldDailyLogFuelReceiptRow}>
+                      + Add Gas Receipt
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="emptyState" style={{ marginTop: 14 }}>
+                  Toggle fuel purchase to add one or more gas receipts.
+                </p>
+              )}
+            </Section>
+
+            <Section
+              title="Workday Time"
+              subtitle="Track the shift timing for the day and show the total time on site."
+            >
+              <div className="formGrid">
+                <Field label="Job start time">
+                  <input type="time" value={fieldDailyLogDraft.jobStartTime} onChange={(e) => handleFieldDailyLogFieldChange("jobStartTime", e.target.value)} />
+                </Field>
+                <Field label="Lunch start time">
+                  <input type="time" value={fieldDailyLogDraft.lunchStartTime} onChange={(e) => handleFieldDailyLogFieldChange("lunchStartTime", e.target.value)} />
+                </Field>
+                <Field label="Lunch end time">
+                  <input type="time" value={fieldDailyLogDraft.lunchEndTime} onChange={(e) => handleFieldDailyLogFieldChange("lunchEndTime", e.target.value)} />
+                </Field>
+                <Field label="Job end time">
+                  <input type="time" value={fieldDailyLogDraft.jobEndTime} onChange={(e) => handleFieldDailyLogFieldChange("jobEndTime", e.target.value)} />
+                </Field>
+              </div>
+              <div className="detailList" style={{ marginTop: 14 }}>
+                <DetailRow label="Calculated lunch duration" value={num(draftTotals.calculatedLunchDurationHours, 2)} />
+                <DetailRow label="Calculated total time on site" value={num(draftTotals.calculatedTimeOnSiteHours, 2)} />
+              </div>
+            </Section>
+
+            <Section
+              title="Employee Crew"
+              subtitle="Add each employee, their timing, hours, and role for the day."
+              right={<button type="button" className="secondaryButton" onClick={handleAddFieldDailyLogCrewRow}>+ Add Crew Member</button>}
+            >
+              <div className="crewLogList">
+                {(fieldDailyLogDraft.crewRows || []).map((row) => {
+                  const shiftHours = Math.max(0, calculateHoursBetweenTimes(row.startTime, row.endTime) - Math.max(0, toNumber(row.lunchDurationHours, 0)));
+                  return (
+                    <div key={row.id} className="panel" style={{ marginBottom: 12, padding: 16 }}>
+                      <div className="formGrid">
+                        <Field label="Employee name dropdown">
+                          <select value={row.employeeLookupId} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "employeeLookupId", e.target.value)}>
+                            {employeeDropdownOptions.map((option) => (
+                              <option key={option.value || "blank"} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="Employee ID (optional)">
+                          <input type="text" value={row.employeeId} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "employeeId", e.target.value)} />
+                        </Field>
+                        <Field label="Start time">
+                          <input type="time" value={row.startTime} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "startTime", e.target.value)} />
+                        </Field>
+                        <Field label="End time">
+                          <input type="time" value={row.endTime} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "endTime", e.target.value)} />
+                        </Field>
+                        <Field label="Lunch duration">
+                          <input type="number" min="0" step="0.25" value={row.lunchDurationHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "lunchDurationHours", toNumber(e.target.value))} />
+                        </Field>
+                        <Field label="Shift duration reference">
+                          <input type="number" value={round(shiftHours, 2)} disabled />
+                        </Field>
+                        <Field label="Regular hours">
+                          <input type="number" min="0" step="0.25" value={row.regularHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "regularHours", toNumber(e.target.value))} />
+                        </Field>
+                        <Field label="Overtime hours">
+                          <input type="number" min="0" step="0.25" value={row.overtimeHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "overtimeHours", toNumber(e.target.value))} />
+                        </Field>
+                        <Field label="Double-time hours">
+                          <input type="number" min="0" step="0.25" value={row.doubleTimeHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "doubleTimeHours", toNumber(e.target.value))} />
+                        </Field>
+                        <Field label="Employee role / classification (optional)">
+                          <input type="text" value={row.role} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "role", e.target.value)} />
+                        </Field>
+                      </div>
+                      <div className="actionRow" style={{ marginTop: 12 }}>
+                        <button type="button" className="dangerButton" onClick={() => handleRemoveFieldDailyLogCrewRow(row.id)}>
+                          Remove employee
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="detailList">
+                <DetailRow label="Total regular hours" value={num(draftTotals.totalRegularHours, 2)} />
+                <DetailRow label="Total overtime hours" value={num(draftTotals.totalOvertimeHours, 2)} />
+                <DetailRow label="Total double-time hours" value={num(draftTotals.totalDoubleTimeHours, 2)} />
+                <DetailRow label="Total crew hours" value={num(draftTotals.totalCrewHours, 2)} />
+              </div>
+            </Section>
+
+            <Section title="Daily Work Details" subtitle="Summarize what was completed and anything the office should know.">
+              <div className="formGrid">
+                <Field label="Work completed">
+                  <textarea rows="4" value={fieldDailyLogDraft.workCompleted} onChange={(e) => handleFieldDailyLogFieldChange("workCompleted", e.target.value)} />
+                </Field>
+                <Field label="Materials used">
+                  <textarea rows="4" value={fieldDailyLogDraft.materialsUsedText} onChange={(e) => handleFieldDailyLogFieldChange("materialsUsedText", e.target.value)} />
+                </Field>
+                <Field label="Equipment used">
+                  <textarea rows="4" value={fieldDailyLogDraft.equipmentUsed} onChange={(e) => handleFieldDailyLogFieldChange("equipmentUsed", e.target.value)} />
+                </Field>
+                <Field label="Delays or problems">
+                  <textarea rows="4" value={fieldDailyLogDraft.delaysOrProblems} onChange={(e) => handleFieldDailyLogFieldChange("delaysOrProblems", e.target.value)} />
+                </Field>
+                <Field label="Safety incidents?">
+                  <select
+                    value={fieldDailyLogDraft.safetyIncidents ? "yes" : "no"}
+                    onChange={(e) => handleFieldDailyLogFieldChange("safetyIncidents", e.target.value === "yes")}
+                  >
+                    <option value="no">No</option>
+                    <option value="yes">Yes</option>
+                  </select>
+                </Field>
+                <Field label="Additional notes">
+                  <textarea rows="4" value={fieldDailyLogDraft.additionalNotes} onChange={(e) => handleFieldDailyLogFieldChange("additionalNotes", e.target.value)} />
+                </Field>
+              </div>
+            </Section>
+
+            <Section
+              title="Photos"
+              subtitle="Upload multiple photos for each job stage. At least one progress or completed-work photo is required before submission."
+            >
+              <div className="photoUploadGrid">
+                {photoGroups.map((group) => (
+                  <div className="photoUploadCard" key={group.value}>
+                    <Field label={group.label}>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        onChange={(e) => handleFieldDailyLogPhotoUpload(group.value, e)}
+                      />
+                    </Field>
+                    <div className="photoPreviewGrid">
+                      {group.photos.length ? (
+                        group.photos.map((photo) => (
+                          <div key={photo.id} className="photoPreviewCard">
+                            {photo.photoUrl ? <img src={photo.photoUrl} alt={photo.fileName || group.label} /> : <div className="photoFallback">No preview</div>}
+                            <div className="photoPreviewMeta">
+                              <strong>{photo.fileName || "Photo"}</strong>
+                              <button type="button" className="secondaryButton" onClick={() => handleRemoveFieldDailyLogPhoto(photo.id)}>
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="emptyState">No {group.label.toLowerCase()} uploaded yet.</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Section>
+
+            <Section title="Submission" subtitle="Save a draft or submit the daily log for office review.">
+              <div className="detailList" style={{ marginBottom: 16 }}>
+                <DetailRow label="Draft photo count" value={num(draftTotals.photoCount, 0)} />
+                <DetailRow label="Required submission photos" value={fieldDailyLogHasProgressOrCompletedPhoto(fieldDailyLogDraft) ? "Ready" : "Need one progress or completed photo"} />
+              </div>
+              <div className="actionRow">
+                <button type="button" className="primaryButton" onClick={handleSaveFieldDailyLogDraft}>
+                  Save Draft
+                </button>
+                <button type="button" className="secondaryButton" onClick={handleSubmitDailyLog}>
+                  Submit Daily Log
+                </button>
+              </div>
+            </Section>
+          </>
+        ) : (
+          <>
+            <Section
+              title="Office Review"
+              subtitle="Review submitted logs, filter by job details, and inspect hours, photos, fuel, and notes."
+              right={<button type="button" className="secondaryButton" onClick={handleExportPayrollCsv}>Export Payroll CSV</button>}
+            >
+              <div className="formGrid">
+                <Field label="Search">
+                  <input type="text" value={fieldDailyLogReviewSearch} onChange={(e) => setFieldDailyLogReviewSearch(e.target.value)} placeholder="Search logs, crew, notes, or materials" />
+                </Field>
+                <Field label="Date start">
+                  <input type="date" value={fieldDailyLogFilters.dateStart} onChange={(e) => handleFieldDailyLogFilterChange("dateStart", e.target.value)} />
+                </Field>
+                <Field label="Date end">
+                  <input type="date" value={fieldDailyLogFilters.dateEnd} onChange={(e) => handleFieldDailyLogFilterChange("dateEnd", e.target.value)} />
+                </Field>
+                <Field label="Job">
+                  <input type="text" value={fieldDailyLogFilters.job} onChange={(e) => handleFieldDailyLogFilterChange("job", e.target.value)} placeholder="Job number or name" />
+                </Field>
+                <Field label="Foreman">
+                  <input type="text" value={fieldDailyLogFilters.foreman} onChange={(e) => handleFieldDailyLogFilterChange("foreman", e.target.value)} />
+                </Field>
+                <Field label="Employee">
+                  <input type="text" value={fieldDailyLogFilters.employee} onChange={(e) => handleFieldDailyLogFilterChange("employee", e.target.value)} placeholder="Search crew member" />
+                </Field>
+                <Field label="Status">
+                  <select value={fieldDailyLogFilters.status} onChange={(e) => handleFieldDailyLogFilterChange("status", e.target.value)}>
+                    <option value="all">All</option>
+                    <option value="draft">Draft</option>
+                    <option value="submitted">Submitted</option>
+                  </select>
+                </Field>
+              </div>
+
+              <div className="actionRow" style={{ marginTop: 12 }}>
+                <label className="statusTag" style={{ cursor: "pointer" }}>
+                  <input type="checkbox" checked={fieldDailyLogFilters.missingPhotos} onChange={(e) => handleFieldDailyLogFilterChange("missingPhotos", e.target.checked)} />
+                  Missing photos
+                </label>
+                <label className="statusTag" style={{ cursor: "pointer" }}>
+                  <input type="checkbox" checked={fieldDailyLogFilters.hasOvertime} onChange={(e) => handleFieldDailyLogFilterChange("hasOvertime", e.target.checked)} />
+                  Has overtime
+                </label>
+                <label className="statusTag" style={{ cursor: "pointer" }}>
+                  <input type="checkbox" checked={fieldDailyLogFilters.hasSafetyIncident} onChange={(e) => handleFieldDailyLogFilterChange("hasSafetyIncident", e.target.checked)} />
+                  Has safety incident
+                </label>
+              </div>
+            </Section>
+
+            <Section title="Daily logs" subtitle="Click a log to review its details.">
+              <div className="savedList">
+                {filteredFieldDailyLogs.length ? (
+                  filteredFieldDailyLogs.map((log) => {
+                    const totals = calculateFieldDailyLogTotals(log);
+                    const isSelected = fieldDailyLogSelectedId === log.id;
+                    return (
+                      <button
+                        type="button"
+                        key={log.id}
+                        className={`savedCard logReviewCard ${isSelected ? "selected" : ""}`}
+                        onClick={() => setFieldDailyLogSelectedId(log.id)}
+                      >
+                        <div className="logReviewHeader">
+                          <div>
+                            <span className="eyebrow">{log.jobNumber || "No job number"}</span>
+                            <strong>{log.jobName || "Untitled daily log"}</strong>
+                            <p>
+                              {log.jobAddress ? `${log.jobAddress} | ` : ""}
+                              {log.workDate || "No work date"} | {log.foreman || "No foreman"}
+                            </p>
+                          </div>
+                          <div className={`statusPill ${log.status === "submitted" ? "" : "bad"}`}>{String(log.status || "draft").toUpperCase()}</div>
+                        </div>
+                        <div className="logReviewSummary">
+                          <span>Regular {num(totals.totalRegularHours, 1)}h</span>
+                          <span>OT {num(totals.totalOvertimeHours, 1)}h</span>
+                          <span>DT {num(totals.totalDoubleTimeHours, 1)}h</span>
+                          <span>Crew {num(totals.totalCrewHours, 1)}h</span>
+                          <span>Miles {num(totals.vehicleMilesDriven, 0)}</span>
+                          <span>Fuel {money2(totals.totalFuelReceipts || 0)}</span>
+                          <span>Photos {num(totals.photoCount, 0)}</span>
+                          <span>{log.safetyIncidents ? "Safety incident" : "No safety incident"}</span>
+                        </div>
+                        <p className="logReviewText">{log.workCompleted || "No work details entered yet."}</p>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p className="emptyState">No logs match the current filters.</p>
+                )}
+              </div>
+            </Section>
+
+            <Section title="Selected log review" subtitle="Read-only details for office review and future correction handling.">
+              {fieldDailyLogSelectedLog ? (
+                <>
+                  <div className="detailList">
+                    <DetailRow label="Job number" value={fieldDailyLogSelectedLog.jobNumber || "—"} />
+                    <DetailRow label="Job name" value={fieldDailyLogSelectedLog.jobName || "—"} />
+                    <DetailRow label="Job address" value={fieldDailyLogSelectedLog.jobAddress || "—"} />
+                    <DetailRow label="Work date" value={fieldDailyLogSelectedLog.workDate || "—"} />
+                    <DetailRow label="Foreman" value={fieldDailyLogSelectedLog.foreman || "—"} />
+                    <DetailRow label="Status" value={String(fieldDailyLogSelectedLog.status || "draft").toUpperCase()} />
+                    <DetailRow label="Submitted at" value={fieldDailyLogSelectedLog.submittedAt ? new Date(fieldDailyLogSelectedLog.submittedAt).toLocaleString() : "Not submitted"} />
+                    <DetailRow label="Submitted by" value={fieldDailyLogSelectedLog.submittedBy || "—"} />
+                    <DetailRow label="Device identifier" value={fieldDailyLogSelectedLog.deviceIdentifier || "—"} />
+                    <DetailRow label="Photo count" value={num(fieldDailyLogSelectedLog.photoCount || 0, 0)} />
+                    <DetailRow label="Regular hours" value={num(fieldDailyLogSelectedLog.totalRegularHours || 0, 2)} />
+                    <DetailRow label="Overtime hours" value={num(fieldDailyLogSelectedLog.totalOvertimeHours || 0, 2)} />
+                    <DetailRow label="Double-time hours" value={num(fieldDailyLogSelectedLog.totalDoubleTimeHours || 0, 2)} />
+                    <DetailRow label="Total crew hours" value={num(fieldDailyLogSelectedLog.totalCrewHours || 0, 2)} />
+                    <DetailRow label="Total vehicle miles driven" value={num(fieldDailyLogSelectedLog.vehicleMilesDriven || 0, 0)} />
+                    <DetailRow label="Total fuel receipts" value={money2(fieldDailyLogSelectedLog.totalFuelReceipts || 0)} />
+                    <DetailRow label="Total fuel gallons" value={num(fieldDailyLogSelectedLog.totalFuelGallons || 0, 2)} />
+                    <DetailRow label="Calculated lunch duration" value={num(fieldDailyLogSelectedLog.calculatedLunchDurationHours || 0, 2)} />
+                    <DetailRow label="Calculated total time on site" value={num(fieldDailyLogSelectedLog.calculatedTimeOnSiteHours || 0, 2)} />
+                  </div>
+
+                  <div className="fieldOpsReviewColumns" style={{ marginTop: 14 }}>
+                    <div className="panel">
+                      <h3>Crew</h3>
+                      <div className="reviewTable">
+                        {(fieldDailyLogSelectedLog.crewRows || []).length ? (
+                          (fieldDailyLogSelectedLog.crewRows || []).map((row) => (
+                            <div key={row.id} className="reviewTableRow">
+                              <span>{row.employeeName || "Unnamed employee"}</span>
+                              <span>{row.role || "No role"}</span>
+                              <span>{row.startTime || "—"} to {row.endTime || "—"}</span>
+                              <span>Lunch {num(row.lunchDurationHours, 2)}h</span>
+                              <span>R {num(row.regularHours, 2)}</span>
+                              <span>OT {num(row.overtimeHours, 2)}</span>
+                              <span>DT {num(row.doubleTimeHours, 2)}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="emptyState">No crew rows saved.</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="panel">
+                      <h3>Vehicle & Fuel</h3>
+                      {(fieldDailyLogSelectedLog.vehicleRows || []).length ? (
+                        <div className="reviewTable">
+                          {(fieldDailyLogSelectedLog.vehicleRows || []).map((row) => (
+                            <div key={row.id} className="reviewTableRow">
+                              <span>{row.truckName || "Truck"}</span>
+                              <span>{row.unitNumber || "No unit"}</span>
+                              <span>{row.driverEmployeeName || "No driver"}</span>
+                              <span>{row.licensePlate || "No plate"}</span>
+                              <span>{num(row.startingMileage, 0)} to {num(row.endingMileage, 0)}</span>
+                              <span>{num(row.milesDriven, 0)} mi</span>
+                              <span>{row.mileageFlag ? "Review" : "OK"}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="emptyState">No vehicle rows recorded.</p>
+                      )}
+                      <div style={{ marginTop: 12 }}>
+                        {(fieldDailyLogSelectedLog.fuelReceipts || []).length ? (
+                          <div className="reviewTable">
+                            {(fieldDailyLogSelectedLog.fuelReceipts || []).map((row) => (
+                              <div key={row.id} className="reviewTableRow">
+                                <span>{row.fuelStation || "Fuel receipt"}</span>
+                                <span>{num(row.gallonsPumped, 2)} gal</span>
+                                <span>{money2(row.totalReceiptAmount || 0)}</span>
+                                <span>{money2(row.pricePerGallon || 0)} / gal</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="emptyState">No fuel receipts recorded.</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="panel">
+                      <h3>Materials</h3>
+                      {(fieldDailyLogSelectedLog.materialsRows || []).length ? (
+                        <div className="reviewTable">
+                          {(fieldDailyLogSelectedLog.materialsRows || []).map((row) => (
+                            <div key={row.id} className="reviewTableRow">
+                              <span>{row.materialName || "Material"}</span>
+                              <span>{num(row.quantity, 2)} {row.unit || ""}</span>
+                              <span>{row.notes || ""}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="emptyState">No materials recorded.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="fieldOpsReviewColumns" style={{ marginTop: 14 }}>
+                    {FIELD_DAILY_LOG_PHOTO_CATEGORIES.map((category) => {
+                      const photos = (fieldDailyLogSelectedLog.photos || []).filter((photo) => String(photo.photoCategory || "") === category.value);
+                      return (
+                        <div key={category.value} className="panel">
+                          <h3>{category.label}</h3>
+                          {photos.length ? (
+                            <div className="photoPreviewGrid">
+                              {photos.map((photo) => (
+                                <div key={photo.id} className="photoPreviewCard">
+                                  {photo.photoUrl ? <img src={photo.photoUrl} alt={photo.fileName || category.label} /> : <div className="photoFallback">No preview</div>}
+                                  <div className="photoPreviewMeta">
+                                    <strong>{photo.fileName || "Photo"}</strong>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="emptyState">No photos in this category.</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <Section title="Work notes" subtitle="Summary fields saved with the log.">
+                    <div className="detailList">
+                      <DetailRow label="Work completed" value={fieldDailyLogSelectedLog.workCompleted || "—"} />
+                      <DetailRow label="Materials used" value={fieldDailyLogSelectedLog.materialsUsedText || "—"} />
+                      <DetailRow label="Equipment used" value={fieldDailyLogSelectedLog.equipmentUsed || "—"} />
+                      <DetailRow label="Delays or problems" value={fieldDailyLogSelectedLog.delaysOrProblems || "—"} />
+                      <DetailRow label="Safety incidents" value={fieldDailyLogSelectedLog.safetyIncidents ? "Yes" : "No"} />
+                      <DetailRow label="Additional notes" value={fieldDailyLogSelectedLog.additionalNotes || "—"} />
+                    </div>
+                  </Section>
+
+                  <Section title="Edit history" subtitle="Audit trail for future corrections and office review.">
+                    {fieldDailyLogSelectedLog.revisions && fieldDailyLogSelectedLog.revisions.length ? (
+                      <div className="reviewTable">
+                        {fieldDailyLogSelectedLog.revisions.map((revision) => (
+                          <div key={revision.id} className="reviewTableRow">
+                            <span>{revision.fieldName}</span>
+                            <span>{revision.originalValue || "—"}</span>
+                            <span>{revision.updatedValue || "—"}</span>
+                            <span>{revision.changedBy || "—"}</span>
+                            <span>{revision.reason || "—"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="emptyState">No corrections recorded yet.</p>
+                    )}
+                  </Section>
+
+                  <p className="smallNote">
+                    Submitted logs are locked here. Unlock/correction tools can be added later for office and admin workflows.
+                  </p>
+                </>
+              ) : (
+                <p className="emptyState">Select a log from the list to review it here.</p>
+              )}
+            </Section>
+          </>
+        )}
+
+        <div className="actionRow" style={{ marginTop: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+            Back to dashboard
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderCfoDashboardScreen = () => {
+    const liquidCashEntries = cfoLiquidCashEntries.filter((entry) => String(entry.bankAccountName || "").trim());
+    const liquidCashTotal = liquidCashEntries.reduce((sum, entry) => {
+      if (String(entry.includedInTotal || "Yes").toLowerCase() === "no") return sum;
+      return sum + Math.max(0, toNumber(entry.currentLiquidBalance, 0));
+    }, 0);
+    const liquidCashIncludedCount = liquidCashEntries.filter((entry) => String(entry.includedInTotal || "Yes").toLowerCase() !== "no").length;
+    const receivableEntries = cfoReceivableEntries.filter((entry) => String(entry.customerName || "").trim());
+    const receivableTotal = receivableEntries.reduce((sum, entry) => sum + Math.max(0, toNumber(entry.amountOwed, 0)), 0);
+    const receivablePastDueTotal = receivableEntries.reduce((sum, entry) => {
+      const periodEnd = String(entry.periodToDate || "").trim();
+      const status = String(entry.paymentStatus || "").toLowerCase();
+      const isPastDue = status === "overdue" || (periodEnd && periodEnd < new Date().toISOString().slice(0, 10));
+      return isPastDue ? sum + Math.max(0, toNumber(entry.amountOwed, 0)) : sum;
+    }, 0);
+    const manualCardConfigs = {
+      proposalsSent: {
+        nameLabel: "Proposal / job number",
+        amountLabel: "Proposal amount",
+        countLabel: "Proposals sent out",
+        showCount: true,
+        helperText: "Enter the proposal dollar amount and how many proposals were sent.",
+      },
+      approvedJobs: {
+        nameLabel: "Job number / project",
+        amountLabel: "Approved contract amount",
+        showCount: false,
+        helperText: "Enter the approved job dollar amount.",
+      },
+      customerOverdue: {
+        nameLabel: "Customer / invoice",
+        amountLabel: "Amount overdue",
+        showCount: false,
+        helperText: "Enter the customer balance that is overdue.",
+      },
+      supplierTotalsPayable: {
+        nameLabel: "Supplier / invoice",
+        amountLabel: "Amount payable",
+        showCount: false,
+        helperText: "Enter the supplier payable amount.",
+      },
+      supplierOverdue: {
+        nameLabel: "Supplier / invoice",
+        amountLabel: "Amount overdue",
+        showCount: false,
+        helperText: "Enter the overdue supplier amount.",
+      },
+      subcontractorPayables: {
+        nameLabel: "Subcontractor / job",
+        amountLabel: "Amount payable",
+        showCount: false,
+        helperText: "Enter the subcontractor payable amount.",
+      },
+      accountsPayable: {
+        nameLabel: "Payee / reference",
+        amountLabel: "Amount payable",
+        showCount: false,
+        helperText: "Enter the payable amount owed to this payee.",
+      },
+    };
+    const getManualCardEntries = (cardKey) => (Array.isArray(cfoManualEntriesByCard[cardKey]) ? cfoManualEntriesByCard[cardKey] : []);
+    const getManualCardTotal = (cardKey) =>
+      getManualCardEntries(cardKey).reduce((sum, entry) => sum + Math.max(0, toNumber(entry.amount, 0)), 0);
+    const getManualCardCount = (cardKey) =>
+      getManualCardEntries(cardKey).reduce((sum, entry) => {
+        if (cardKey === "proposalsSent") return sum + Math.max(0, toNumber(entry.count, 1));
+        return sum + 1;
+      }, 0);
+    const getManualCardLastUpdated = (cardKey) => {
+      const entries = getManualCardEntries(cardKey);
+      return entries.length ? "Updated locally" : "Not connected yet";
+    };
+    const supplierPayableCurrentEntries = getManualCardEntries("supplierTotalsPayable");
+    const supplierPayableOverdueEntries = getManualCardEntries("supplierOverdue");
+    const supplierPayableCurrentTotal = getManualCardTotal("supplierTotalsPayable");
+    const supplierPayableOverdueTotal = getManualCardTotal("supplierOverdue");
+    const supplierPayableLastUpdated =
+      supplierPayableCurrentEntries.length || supplierPayableOverdueEntries.length ? "Updated locally" : "Not connected yet";
+    const deleteLiquidCashEntry = (entryId) => {
+      setCfoLiquidCashEntries((current) => current.filter((entry) => entry.id !== entryId));
+      if (cfoLiquidCashEditingId === entryId) {
+        setCfoLiquidCashEditingId("");
+        setCfoLiquidCashDraft(createBlankCfoLiquidCashEntry());
+      }
+    };
+    const editLiquidCashEntry = (entry) => {
+      setCfoLiquidCashDraft({
+        ...createBlankCfoLiquidCashEntry(),
+        ...normalizeCfoLiquidCashEntry(entry),
+      });
+      setCfoLiquidCashEditingId(String(entry.id));
+    };
+    const deleteReceivableEntry = (entryId) => {
+      setCfoReceivableEntries((current) => current.filter((entry) => entry.id !== entryId));
+      if (cfoReceivableEditingId === entryId) {
+        setCfoReceivableEditingId("");
+        setCfoReceivableDraft(createBlankCfoReceivableEntry());
+      }
+    };
+    const editReceivableEntry = (entry) => {
+      setCfoReceivableDraft({
+        ...createBlankCfoReceivableEntry(),
+        ...normalizeCfoReceivableEntry(entry),
+      });
+      setCfoReceivableEditingId(String(entry.id));
+    };
+    const getManualCardDetailSummary = (cardKey) => {
+      const total = getManualCardTotal(cardKey);
+      const count = getManualCardCount(cardKey);
+      if (cardKey === "proposalsSent") {
+        return [
+          { label: "Proposal total", value: money(total) },
+          { label: "Proposals sent", value: num(count, 0) },
+        ];
+      }
+      return [
+        { label: "Total amount", value: money(total) },
+        { label: "Records added", value: num(count, 0) },
+      ];
+    };
+    const updateManualCardDraft = (cardKey, field, value) => {
+      setCfoManualDraftsByCard((current) => ({
+        ...current,
+        [cardKey]: {
+          ...(current[cardKey] || createBlankCfoManualEntry(cardKey)),
+          [field]: value,
+        },
+      }));
+    };
+    const deleteManualCardEntry = (cardKey, entryId) => {
+      setCfoManualEntriesByCard((current) => ({
+        ...current,
+        [cardKey]: (current[cardKey] || []).filter((entry) => entry.id !== entryId),
+      }));
+      setCfoManualEditingByCard((current) => ({
+        ...current,
+        [cardKey]: current[cardKey] === entryId ? "" : current[cardKey],
+      }));
+      if (cfoManualEditingByCard[cardKey] === entryId) {
+        setCfoManualDraftsByCard((current) => ({
+          ...current,
+          [cardKey]: createBlankCfoManualEntry(cardKey),
+        }));
+      }
+    };
+    const editManualCardEntry = (cardKey, entry) => {
+      setCfoManualDraftsByCard((current) => ({
+        ...current,
+        [cardKey]: {
+          ...createBlankCfoManualEntry(cardKey),
+          ...normalizeCfoManualEntry(entry, cardKey),
+        },
+      }));
+      setCfoManualEditingByCard((current) => ({
+        ...current,
+        [cardKey]: String(entry.id),
+      }));
+    };
+    const addManualCardEntry = (cardKey) => {
+      const config = manualCardConfigs[cardKey];
+      const draft = cfoManualDraftsByCard[cardKey] || createBlankCfoManualEntry(cardKey);
+      const recordName = String(draft.recordName || "").trim();
+      if (!recordName) {
+        setSessionMessageType("error");
+        setSessionMessage("Please enter a record name.");
+        return;
+      }
+      const amountValue = toNumber(draft.amount, 0);
+      if (!Number.isFinite(amountValue)) {
+        setSessionMessageType("error");
+        setSessionMessage("Please enter a valid dollar amount.");
+        return;
+      }
+      const editId = cfoManualEditingByCard[cardKey] || "";
+      const nextEntry = normalizeCfoManualEntry(
+        {
+          ...draft,
+          id: editId || createFieldDailyLogId(),
+          recordName,
+          amount: money2(amountValue),
+          count: cardKey === "proposalsSent" ? Math.max(1, toNumber(draft.count, 1)) : draft.count,
+          recordDate: draft.recordDate || new Date().toISOString().slice(0, 10),
+          status: draft.status || "",
+          note: draft.note || "",
+        },
+        cardKey,
+      );
+      setCfoManualEntriesByCard((current) => {
+        const existing = current[cardKey] || [];
+        if (editId) {
+          return {
+            ...current,
+            [cardKey]: existing.map((entry) => (entry.id === editId ? nextEntry : entry)),
+          };
+        }
+        return {
+          ...current,
+          [cardKey]: [...existing, nextEntry],
+        };
+      });
+      setCfoManualDraftsByCard((current) => ({
+        ...current,
+        [cardKey]: createBlankCfoManualEntry(cardKey),
+      }));
+      setCfoManualEditingByCard((current) => ({
+        ...current,
+        [cardKey]: "",
+      }));
+      setSessionMessageType("success");
+      setSessionMessage(`${editId ? "Updated" : "Added"} ${recordName} in ${config?.amountLabel || "CFO dashboard"}.`);
+    };
+    const renderManualCardRow = (entry, cardKey) => (
+      <tr key={entry.id}>
+        <td>{entry.recordName || "—"}</td>
+        <td>{entry.recordDate || "—"}</td>
+        <td>{money2(toNumber(entry.amount, 0))}</td>
+        <td>{cardKey === "proposalsSent" ? num(Math.max(0, toNumber(entry.count, 0)), 0) : "—"}</td>
+        <td>{entry.status || "—"}</td>
+        <td>{entry.note || "—"}</td>
+        <td>
+          <div className="actionRow">
+            <button type="button" className="secondaryButton" onClick={() => editManualCardEntry(cardKey, entry)}>
+              Edit
+            </button>
+            <button type="button" className="dangerButton" onClick={() => deleteManualCardEntry(cardKey, entry.id)}>
+              Delete
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
+    const cfoCards = [
+      {
+        key: "liquidCash",
+        label: "Liquid Cash",
+        primaryValue: money(liquidCashTotal),
+        secondaryValue: liquidCashEntries.length
+          ? `${liquidCashIncludedCount} account${liquidCashIncludedCount === 1 ? "" : "s"} included`
+          : "Total liquid cash currently available in company bank accounts",
+        lastUpdated: liquidCashEntries.length ? "Updated locally" : "Not connected yet",
+        detailTitle: "Liquid Cash",
+        detailSubtitle: "Bank and operating cash only. Accounts receivable and unused credit are excluded.",
+        detailSummary: [
+          { label: "Total liquid cash", value: money(liquidCashTotal) },
+          { label: "Accounts included", value: num(liquidCashIncludedCount, 0) },
+        ],
+        columns: ["Bank/account name", "Current liquid balance", "Last updated date", "Included in total?", "Total liquid cash", "Actions"],
+        emptyState: liquidCashEntries.length ? "" : "No company bank accounts are connected yet.",
+      },
+      {
+        key: "approvedJobs",
+        label: "Approved Jobs",
+        primaryValue: money(getManualCardTotal("approvedJobs")),
+        secondaryValue: `${num(getManualCardCount("approvedJobs"), 0)} active job${getManualCardCount("approvedJobs") === 1 ? "" : "s"}`,
+        lastUpdated: getManualCardLastUpdated("approvedJobs"),
+        detailTitle: "Approved Jobs",
+        detailSubtitle: "Approved and signed jobs that are not fully closed out.",
+        detailSummary: getManualCardDetailSummary("approvedJobs"),
+        columns: ["Job / project", "Record date", "Amount", "Count", "Status", "Note", "Actions"],
+        emptyState: getManualCardEntries("approvedJobs").length ? "" : "No approved jobs are connected yet.",
+        entryKey: "approvedJobs",
+      },
+      {
+        key: "waitingOnPayment",
+        label: "Waiting on Payment",
+        primaryValue: money(receivableTotal),
+        secondaryValue: receivableEntries.length ? `${money(receivablePastDueTotal)} overdue` : "$0 overdue",
+        lastUpdated: receivableEntries.length ? "Updated locally" : "Not connected yet",
+        detailTitle: "Waiting on Payment",
+        detailSubtitle: "Open customer balances currently unpaid.",
+        detailSummary: [
+          { label: "Accounts receivable", value: money(receivableTotal) },
+          { label: "Past due", value: money(receivablePastDueTotal) },
+        ],
+        columns: ["Customer", "Date from", "Date to", "Amount owed", "Payment status", "Note", "Actions"],
+        emptyState: receivableEntries.length ? "" : "No accounts receivable records are connected yet.",
+      },
+      {
+        key: "subcontractorPayables",
+        label: "Subcontractor Payables",
+        primaryValue: money(getManualCardTotal("subcontractorPayables")),
+        secondaryValue: `${num(getManualCardCount("subcontractorPayables"), 0)} open item${getManualCardCount("subcontractorPayables") === 1 ? "" : "s"}`,
+        lastUpdated: getManualCardLastUpdated("subcontractorPayables"),
+        detailTitle: "Subcontractor Payables",
+        detailSubtitle: "Approved subcontractor amounts not yet paid.",
+        detailSummary: getManualCardDetailSummary("subcontractorPayables"),
+        columns: ["Subcontractor / job", "Record date", "Amount payable", "Count", "Status", "Note", "Actions"],
+        emptyState: getManualCardEntries("subcontractorPayables").length ? "" : "No subcontractor payables are connected yet.",
+        entryKey: "subcontractorPayables",
+      },
+      {
+        key: "supplierTotalsPayable",
+        label: "Supplier Totals Payable",
+        primaryValue: money(supplierPayableCurrentTotal),
+        secondaryValue: `${money(supplierPayableOverdueTotal)} overdue`,
+        lastUpdated: supplierPayableLastUpdated,
+        detailTitle: "Supplier Totals Payable",
+        detailSubtitle: "Current supplier totals and overdue balances shown in one place.",
+        detailSummary: [
+          { label: "Current total", value: money(supplierPayableCurrentTotal) },
+          { label: "Overdue total", value: money(supplierPayableOverdueTotal) },
+        ],
+        columns: ["Supplier / invoice", "Record date", "Amount payable", "Status", "Note", "Actions"],
+        emptyState:
+          supplierPayableCurrentEntries.length || supplierPayableOverdueEntries.length
+            ? ""
+            : "No supplier payable records are connected yet.",
+        entryKey: "supplierTotalsPayable",
+      },
+      {
+        key: "accountsPayable",
+        label: "Accounts Payable",
+        primaryValue: money(getManualCardTotal("accountsPayable")),
+        secondaryValue: `${num(getManualCardCount("accountsPayable"), 0)} open payable${getManualCardCount("accountsPayable") === 1 ? "" : "s"}`,
+        lastUpdated: getManualCardLastUpdated("accountsPayable"),
+        detailTitle: "Accounts Payable",
+        detailSubtitle: "All approved company payables by payee type.",
+        detailSummary: getManualCardDetailSummary("accountsPayable"),
+        columns: ["Payee / reference", "Record date", "Amount payable", "Count", "Status", "Note", "Actions"],
+        emptyState: getManualCardEntries("accountsPayable").length ? "" : "No accounts payable records are connected yet.",
+        entryKey: "accountsPayable",
+      },
+    ];
+
+    const selectedCard = cfoCards.find((card) => card.key === selectedCfoCard) || null;
+    const supplierPayablesCardKey = cfoSupplierPayablesView === "overdue" ? "supplierOverdue" : "supplierTotalsPayable";
+    const selectedSupplierPayablesConfig = manualCardConfigs[supplierPayablesCardKey];
+    const selectedSupplierPayablesEntries = getManualCardEntries(supplierPayablesCardKey);
+
+    const updateCfoFilter = (key, value) => {
+      setCfoDashboardFilters((current) => ({
+        ...current,
+        [key]: value,
+      }));
+    };
+
+    const renderCfoDetailModal = () => {
+      if (!selectedCard) {
+        return null;
+      }
+
+      return (
+        <div className="cfoDetailOverlay" role="presentation" onClick={() => setSelectedCfoCard("")}>
+          <div className="cfoDetailPanel" role="dialog" aria-modal="true" aria-labelledby="cfo-detail-title" onClick={(e) => e.stopPropagation()}>
+            <div className="cfoDetailHeader">
+              <div>
+                <p className="eyebrow">CFO Dashboard</p>
+                <h2 id="cfo-detail-title">{selectedCard.detailTitle}</h2>
+                <p>{selectedCard.detailSubtitle}</p>
+                <div className="cfoDetailMeta">
+                  <span className="cfoDetailChip">Last updated: {selectedCard.lastUpdated}</span>
+                  <span className="cfoDetailChip">Records connected: 0</span>
+                  <span className="cfoDetailChip">Data tables not connected yet</span>
+                </div>
+              </div>
+              <div className="actionRow">
+                <button type="button" className="secondaryButton" onClick={() => setSelectedCfoCard("")}>
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="cfoDetailGrid">
+              {selectedCard.detailSummary.map((item) => (
+                <div className="summaryCard" key={item.label}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
+            </div>
+
+            {selectedCard.key === "liquidCash" ? (
+              <Section
+                title="Add bank account"
+                subtitle="Type dollar amounts directly here. Dollar signs and commas are allowed."
+              >
+                <div className="formGrid">
+                  <Field label="Bank/account name">
+                    <input
+                      type="text"
+                      value={cfoLiquidCashDraft.bankAccountName}
+                      onChange={(e) =>
+                        setCfoLiquidCashDraft((current) => ({
+                          ...current,
+                          bankAccountName: e.target.value,
+                        }))
+                      }
+                      placeholder="Bank of America operating"
+                    />
+                  </Field>
+                  <Field label="Current liquid balance">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={cfoLiquidCashDraft.currentLiquidBalance}
+                      onChange={(e) =>
+                        setCfoLiquidCashDraft((current) => ({
+                          ...current,
+                          currentLiquidBalance: e.target.value,
+                        }))
+                      }
+                      placeholder="$0.00"
+                    />
+                  </Field>
+                  <Field label="Last updated date">
+                    <input
+                      type="date"
+                      value={cfoLiquidCashDraft.lastUpdatedDate}
+                      onChange={(e) =>
+                        setCfoLiquidCashDraft((current) => ({
+                          ...current,
+                          lastUpdatedDate: e.target.value,
+                        }))
+                      }
+                    />
+                  </Field>
+                  <Field label="Included in total?">
+                    <select
+                      value={cfoLiquidCashDraft.includedInTotal}
+                      onChange={(e) =>
+                        setCfoLiquidCashDraft((current) => ({
+                          ...current,
+                          includedInTotal: e.target.value,
+                        }))
+                      }
+                    >
+                      <option value="Yes">Yes</option>
+                      <option value="No">No</option>
+                    </select>
+                  </Field>
+                </div>
+                <div className="actionRow" style={{ marginTop: 14 }}>
+                  <button
+                    type="button"
+                    className="primaryButton"
+                    onClick={() => {
+                      const bankAccountName = cfoLiquidCashDraft.bankAccountName.trim();
+                      if (!bankAccountName) {
+                        setSessionMessageType("error");
+                        setSessionMessage("Please enter a bank or account name.");
+                        return;
+                      }
+                      const nextEntry = normalizeCfoLiquidCashEntry({
+                        ...cfoLiquidCashDraft,
+                        id: cfoLiquidCashEditingId || createFieldDailyLogId(),
+                        currentLiquidBalance: money2(toNumber(cfoLiquidCashDraft.currentLiquidBalance, 0)),
+                        lastUpdatedDate: cfoLiquidCashDraft.lastUpdatedDate || new Date().toISOString().slice(0, 10),
+                      });
+                      setCfoLiquidCashEntries((current) => {
+                        if (cfoLiquidCashEditingId) {
+                          return current.map((entry) => (entry.id === cfoLiquidCashEditingId ? nextEntry : entry));
+                        }
+                        return [...current, nextEntry];
+                      });
+                      setCfoLiquidCashDraft(createBlankCfoLiquidCashEntry());
+                      setCfoLiquidCashEditingId("");
+                      setSessionMessageType("success");
+                      setSessionMessage(`${cfoLiquidCashEditingId ? "Updated" : "Added"} ${bankAccountName} in Liquid Cash.`);
+                    }}
+                  >
+                    {cfoLiquidCashEditingId ? "Update bank account" : "Add bank account"}
+                  </button>
+                  {cfoLiquidCashEditingId ? (
+                    <button
+                      type="button"
+                      className="secondaryButton"
+                      onClick={() => {
+                        setCfoLiquidCashEditingId("");
+                        setCfoLiquidCashDraft(createBlankCfoLiquidCashEntry());
+                      }}
+                    >
+                      Cancel edit
+                    </button>
+                  ) : null}
+                </div>
+              </Section>
+            ) : selectedCard.key === "waitingOnPayment" ? (
+              <Section
+                title="Add amount owed"
+                subtitle="Enter the period this money is owed for and the dollar amount due."
+              >
+                <div className="formGrid">
+                  <Field label="Customer">
+                    <input
+                      type="text"
+                      value={cfoReceivableDraft.customerName}
+                      onChange={(e) =>
+                        setCfoReceivableDraft((current) => ({
+                          ...current,
+                          customerName: e.target.value,
+                        }))
+                      }
+                      placeholder="Customer or account name"
+                    />
+                  </Field>
+                  <Field label="Date from">
+                    <input
+                      type="date"
+                      value={cfoReceivableDraft.periodFromDate}
+                      onChange={(e) =>
+                        setCfoReceivableDraft((current) => ({
+                          ...current,
+                          periodFromDate: e.target.value,
+                        }))
+                      }
+                    />
+                  </Field>
+                  <Field label="Date to">
+                    <input
+                      type="date"
+                      value={cfoReceivableDraft.periodToDate}
+                      onChange={(e) =>
+                        setCfoReceivableDraft((current) => ({
+                          ...current,
+                          periodToDate: e.target.value,
+                        }))
+                      }
+                    />
+                  </Field>
+                  <Field label="Amount owed">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={cfoReceivableDraft.amountOwed}
+                      onChange={(e) =>
+                        setCfoReceivableDraft((current) => ({
+                          ...current,
+                          amountOwed: e.target.value,
+                        }))
+                      }
+                      placeholder="$0.00"
+                    />
+                  </Field>
+                  <Field label="Payment status">
+                    <select
+                      value={cfoReceivableDraft.paymentStatus}
+                      onChange={(e) =>
+                        setCfoReceivableDraft((current) => ({
+                          ...current,
+                          paymentStatus: e.target.value,
+                        }))
+                      }
+                    >
+                      <option value="Current">Current</option>
+                      <option value="Overdue">Overdue</option>
+                    </select>
+                  </Field>
+                  <Field label="Note">
+                    <input
+                      type="text"
+                      value={cfoReceivableDraft.note}
+                      onChange={(e) =>
+                        setCfoReceivableDraft((current) => ({
+                          ...current,
+                          note: e.target.value,
+                        }))
+                      }
+                      placeholder="Optional note"
+                    />
+                  </Field>
+                </div>
+                <div className="actionRow" style={{ marginTop: 14 }}>
+                  <button
+                    type="button"
+                    className="primaryButton"
+                    onClick={() => {
+                      const customerName = cfoReceivableDraft.customerName.trim();
+                      if (!customerName) {
+                        setSessionMessageType("error");
+                        setSessionMessage("Please enter a customer name.");
+                        return;
+                      }
+                      const nextEntry = normalizeCfoReceivableEntry({
+                        ...cfoReceivableDraft,
+                        id: cfoReceivableEditingId || createFieldDailyLogId(),
+                        amountOwed: money2(toNumber(cfoReceivableDraft.amountOwed, 0)),
+                      });
+                      setCfoReceivableEntries((current) => {
+                        if (cfoReceivableEditingId) {
+                          return current.map((entry) => (entry.id === cfoReceivableEditingId ? nextEntry : entry));
+                        }
+                        return [...current, nextEntry];
+                      });
+                      setCfoReceivableDraft(createBlankCfoReceivableEntry());
+                      setCfoReceivableEditingId("");
+                      setSessionMessageType("success");
+                      setSessionMessage(`${cfoReceivableEditingId ? "Updated" : "Added"} ${customerName} in Waiting on Payment.`);
+                    }}
+                  >
+                    {cfoReceivableEditingId ? "Update amount owed" : "Add amount owed"}
+                  </button>
+                  {cfoReceivableEditingId ? (
+                    <button
+                      type="button"
+                      className="secondaryButton"
+                      onClick={() => {
+                        setCfoReceivableEditingId("");
+                        setCfoReceivableDraft(createBlankCfoReceivableEntry());
+                      }}
+                    >
+                      Cancel edit
+                    </button>
+                  ) : null}
+                </div>
+              </Section>
+            ) : selectedCard.key === "supplierTotalsPayable" ? (
+              <Section
+                title="Add supplier payable"
+                subtitle="Use the selector to switch between current and overdue supplier balances."
+              >
+                <div className="formGrid">
+                  <Field label="View">
+                    <select value={cfoSupplierPayablesView} onChange={(e) => setCfoSupplierPayablesView(e.target.value)}>
+                      <option value="current">Current</option>
+                      <option value="overdue">Overdue</option>
+                    </select>
+                  </Field>
+                  <Field label={selectedSupplierPayablesConfig.nameLabel}>
+                    <input
+                      type="text"
+                      value={cfoManualDraftsByCard[supplierPayablesCardKey]?.recordName || ""}
+                      onChange={(e) => updateManualCardDraft(supplierPayablesCardKey, "recordName", e.target.value)}
+                      placeholder={selectedSupplierPayablesConfig.nameLabel}
+                    />
+                  </Field>
+                  <Field label={selectedSupplierPayablesConfig.amountLabel}>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={cfoManualDraftsByCard[supplierPayablesCardKey]?.amount || ""}
+                      onChange={(e) => updateManualCardDraft(supplierPayablesCardKey, "amount", e.target.value)}
+                      placeholder="$0.00"
+                    />
+                  </Field>
+                  <Field label="Date">
+                    <input
+                      type="date"
+                      value={cfoManualDraftsByCard[supplierPayablesCardKey]?.recordDate || ""}
+                      onChange={(e) => updateManualCardDraft(supplierPayablesCardKey, "recordDate", e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Status">
+                    <input
+                      type="text"
+                      value={cfoManualDraftsByCard[supplierPayablesCardKey]?.status || ""}
+                      onChange={(e) => updateManualCardDraft(supplierPayablesCardKey, "status", e.target.value)}
+                      placeholder={cfoSupplierPayablesView === "overdue" ? "Overdue" : "Current"}
+                    />
+                  </Field>
+                  <Field label="Note">
+                    <input
+                      type="text"
+                      value={cfoManualDraftsByCard[supplierPayablesCardKey]?.note || ""}
+                      onChange={(e) => updateManualCardDraft(supplierPayablesCardKey, "note", e.target.value)}
+                      placeholder="Optional note"
+                    />
+                  </Field>
+                </div>
+                <div className="actionRow" style={{ marginTop: 14 }}>
+                  <button type="button" className="primaryButton" onClick={() => addManualCardEntry(supplierPayablesCardKey)}>
+                    {cfoManualEditingByCard[supplierPayablesCardKey] ? "Update entry" : "Add entry"}
+                  </button>
+                  {cfoManualEditingByCard[supplierPayablesCardKey] ? (
+                    <button
+                      type="button"
+                      className="secondaryButton"
+                      onClick={() => {
+                        setCfoManualEditingByCard((current) => ({
+                          ...current,
+                          [supplierPayablesCardKey]: "",
+                        }));
+                        setCfoManualDraftsByCard((current) => ({
+                          ...current,
+                          [supplierPayablesCardKey]: createBlankCfoManualEntry(supplierPayablesCardKey),
+                        }));
+                      }}
+                    >
+                      Cancel edit
+                    </button>
+                  ) : null}
+                </div>
+              </Section>
+            ) : manualCardConfigs[selectedCard.key] ? (
+              <Section
+                title={`Add ${selectedCard.detailTitle} entry`}
+                subtitle={manualCardConfigs[selectedCard.key].helperText}
+              >
+                <div className="formGrid">
+                  <Field label={manualCardConfigs[selectedCard.key].nameLabel}>
+                    <input
+                      type="text"
+                      value={cfoManualDraftsByCard[selectedCard.key]?.recordName || ""}
+                      onChange={(e) => updateManualCardDraft(selectedCard.key, "recordName", e.target.value)}
+                      placeholder={manualCardConfigs[selectedCard.key].nameLabel}
+                    />
+                  </Field>
+                  {manualCardConfigs[selectedCard.key].showCount ? (
+                    <Field label={manualCardConfigs[selectedCard.key].countLabel}>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={cfoManualDraftsByCard[selectedCard.key]?.count || "1"}
+                        onChange={(e) => updateManualCardDraft(selectedCard.key, "count", e.target.value)}
+                        placeholder="1"
+                      />
+                    </Field>
+                  ) : null}
+                  <Field label={manualCardConfigs[selectedCard.key].amountLabel}>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={cfoManualDraftsByCard[selectedCard.key]?.amount || ""}
+                      onChange={(e) => updateManualCardDraft(selectedCard.key, "amount", e.target.value)}
+                      placeholder="$0.00"
+                    />
+                  </Field>
+                  <Field label="Date">
+                    <input
+                      type="date"
+                      value={cfoManualDraftsByCard[selectedCard.key]?.recordDate || ""}
+                      onChange={(e) => updateManualCardDraft(selectedCard.key, "recordDate", e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Status">
+                    <input
+                      type="text"
+                      value={cfoManualDraftsByCard[selectedCard.key]?.status || ""}
+                      onChange={(e) => updateManualCardDraft(selectedCard.key, "status", e.target.value)}
+                      placeholder="Optional status"
+                    />
+                  </Field>
+                  <Field label="Note">
+                    <input
+                      type="text"
+                      value={cfoManualDraftsByCard[selectedCard.key]?.note || ""}
+                      onChange={(e) => updateManualCardDraft(selectedCard.key, "note", e.target.value)}
+                      placeholder="Optional note"
+                    />
+                  </Field>
+                </div>
+                <div className="actionRow" style={{ marginTop: 14 }}>
+                  <button type="button" className="primaryButton" onClick={() => addManualCardEntry(selectedCard.key)}>
+                    {cfoManualEditingByCard[selectedCard.key] ? "Update entry" : "Add entry"}
+                  </button>
+                  {cfoManualEditingByCard[selectedCard.key] ? (
+                    <button
+                      type="button"
+                      className="secondaryButton"
+                      onClick={() => {
+                        setCfoManualEditingByCard((current) => ({
+                          ...current,
+                          [selectedCard.key]: "",
+                        }));
+                        setCfoManualDraftsByCard((current) => ({
+                          ...current,
+                          [selectedCard.key]: createBlankCfoManualEntry(selectedCard.key),
+                        }));
+                      }}
+                    >
+                      Cancel edit
+                    </button>
+                  ) : null}
+                </div>
+              </Section>
+            ) : null}
+
+            <div className="cfoDetailFilters">
+              <Field label="Search">
+                <input
+                  type="search"
+                  value={cfoDashboardFilters.search}
+                  onChange={(e) => updateCfoFilter("search", e.target.value)}
+                  placeholder="Search records"
+                />
+              </Field>
+              <Field label="Date range from">
+                <input
+                  type="date"
+                  value={cfoDashboardFilters.dateFrom}
+                  onChange={(e) => updateCfoFilter("dateFrom", e.target.value)}
+                />
+              </Field>
+              <Field label="Date range to">
+                <input
+                  type="date"
+                  value={cfoDashboardFilters.dateTo}
+                  onChange={(e) => updateCfoFilter("dateTo", e.target.value)}
+                />
+              </Field>
+              <Field label="Customer">
+                <input
+                  type="text"
+                  value={cfoDashboardFilters.customer}
+                  onChange={(e) => updateCfoFilter("customer", e.target.value)}
+                  placeholder="Filter customer"
+                />
+              </Field>
+              <Field label="Supplier">
+                <input
+                  type="text"
+                  value={cfoDashboardFilters.supplier}
+                  onChange={(e) => updateCfoFilter("supplier", e.target.value)}
+                  placeholder="Filter supplier"
+                />
+              </Field>
+              <Field label="Subcontractor">
+                <input
+                  type="text"
+                  value={cfoDashboardFilters.subcontractor}
+                  onChange={(e) => updateCfoFilter("subcontractor", e.target.value)}
+                  placeholder="Filter subcontractor"
+                />
+              </Field>
+              <Field label="Job">
+                <input
+                  type="text"
+                  value={cfoDashboardFilters.job}
+                  onChange={(e) => updateCfoFilter("job", e.target.value)}
+                  placeholder="Filter job"
+                />
+              </Field>
+              <Field label="Current / Overdue">
+                <select
+                  value={cfoDashboardFilters.currentOverdue}
+                  onChange={(e) => updateCfoFilter("currentOverdue", e.target.value)}
+                >
+                  <option value="all">All</option>
+                  <option value="current">Current</option>
+                  <option value="overdue">Overdue</option>
+                </select>
+              </Field>
+              <Field label="Aging bucket">
+                <select value={cfoDashboardFilters.agingBucket} onChange={(e) => updateCfoFilter("agingBucket", e.target.value)}>
+                  <option value="all">All</option>
+                  <option value="1-30">1-30 days</option>
+                  <option value="31-60">31-60 days</option>
+                  <option value="61-90">61-90 days</option>
+                  <option value="90+">90+ days</option>
+                </select>
+              </Field>
+              <Field label="Status">
+                <input
+                  type="text"
+                  value={cfoDashboardFilters.status}
+                  onChange={(e) => updateCfoFilter("status", e.target.value)}
+                  placeholder="Status"
+                />
+              </Field>
+              <Field label="Sort by">
+                <select value={cfoDashboardFilters.sortBy} onChange={(e) => updateCfoFilter("sortBy", e.target.value)}>
+                  <option value="lastUpdated">Last updated</option>
+                  <option value="date">Date</option>
+                  <option value="amount">Amount</option>
+                  <option value="customer">Customer</option>
+                </select>
+              </Field>
+              <Field label="Sort order">
+                <select value={cfoDashboardFilters.sortDirection} onChange={(e) => updateCfoFilter("sortDirection", e.target.value)}>
+                  <option value="desc">Newest / highest first</option>
+                  <option value="asc">Oldest / lowest first</option>
+                </select>
+              </Field>
+            </div>
+
+            <div className="cfoDetailBody">
+              <div className="cfoDetailTableWrap">
+                <table className="cfoDetailTable">
+                  <thead>
+                    <tr>
+                      {selectedCard.columns.map((column) => (
+                        <th key={column}>{column}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedCard.key === "waitingOnPayment" && receivableEntries.length ? (
+                      receivableEntries.map((entry) => {
+                        const periodTo = String(entry.periodToDate || "").trim();
+                        const isPastDue = String(entry.paymentStatus || "").toLowerCase() === "overdue" || (periodTo && periodTo < new Date().toISOString().slice(0, 10));
+                        return (
+                          <tr key={entry.id}>
+                            <td>{entry.customerName || "—"}</td>
+                            <td>{entry.periodFromDate || "—"}</td>
+                            <td>{entry.periodToDate || "—"}</td>
+                            <td>{money2(toNumber(entry.amountOwed, 0))}</td>
+                            <td>{isPastDue ? "Overdue" : "Current"}</td>
+                            <td>{entry.note || "—"}</td>
+                            <td>
+                              <div className="actionRow">
+                                <button type="button" className="secondaryButton" onClick={() => editReceivableEntry(entry)}>
+                                  Edit
+                                </button>
+                                <button type="button" className="dangerButton" onClick={() => deleteReceivableEntry(entry.id)}>
+                                  Delete
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : selectedCard.key === "supplierTotalsPayable" && selectedSupplierPayablesEntries.length ? (
+                      selectedSupplierPayablesEntries.map((entry) => (
+                        <tr key={entry.id}>
+                          <td>{entry.recordName || "—"}</td>
+                          <td>{entry.recordDate || "—"}</td>
+                          <td>{money2(toNumber(entry.amount, 0))}</td>
+                          <td>{cfoSupplierPayablesView === "overdue" ? "Overdue" : "Current"}</td>
+                          <td>{entry.note || "—"}</td>
+                          <td>
+                            <div className="actionRow">
+                              <button type="button" className="secondaryButton" onClick={() => editManualCardEntry(supplierPayablesCardKey, entry)}>
+                                Edit
+                              </button>
+                              <button type="button" className="dangerButton" onClick={() => deleteManualCardEntry(supplierPayablesCardKey, entry.id)}>
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    ) : manualCardConfigs[selectedCard.key] && getManualCardEntries(selectedCard.key).length ? (
+                      getManualCardEntries(selectedCard.key).map((entry) => renderManualCardRow(entry, selectedCard.key))
+                    ) : selectedCard.key === "liquidCash" && liquidCashEntries.length ? (
+                      liquidCashEntries.map((entry) => (
+                        <tr key={entry.id}>
+                          <td>{entry.bankAccountName || "—"}</td>
+                          <td>{money2(toNumber(entry.currentLiquidBalance, 0))}</td>
+                          <td>{entry.lastUpdatedDate || "—"}</td>
+                          <td>{String(entry.includedInTotal || "Yes").toLowerCase() === "no" ? "No" : "Yes"}</td>
+                          <td>{money2(String(entry.includedInTotal || "Yes").toLowerCase() === "no" ? 0 : toNumber(entry.currentLiquidBalance, 0))}</td>
+                          <td>
+                            <div className="actionRow">
+                              <button type="button" className="secondaryButton" onClick={() => editLiquidCashEntry(entry)}>
+                                Edit
+                              </button>
+                              <button type="button" className="dangerButton" onClick={() => deleteLiquidCashEntry(entry.id)}>
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={selectedCard.columns.length}>
+                          <div className="cfoDetailEmpty">
+                            <strong>{selectedCard.emptyState}</strong>
+                            <p style={{ margin: "8px 0 0", color: "#a7c7d6" }}>
+                              No financial data has been connected yet. Once the data tables are available, this view will show the records that create the card total.
+                            </p>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="detailList">
+                <DetailRow
+                  label="Filtered records"
+                  value="0"
+                  note="Search, filters, and sorting are ready for when finance records are connected."
+                />
+                <DetailRow
+                  label="Primary total"
+                  value={selectedCard.primaryValue}
+                  note="This total will be calculated from the detail records once the data tables are connected."
+                />
+                <DetailRow
+                  label="Secondary summary"
+                  value={selectedCard.secondaryValue}
+                  note="Helpful context shown on the dashboard card."
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    return (
+      <div className="appShell">
+        <style>{css}</style>
+
+        <div className="actionRow" style={{ marginBottom: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard") }>
+            Back to dashboard
+          </button>
+        </div>
+
+        <header className="hero">
+          <div>
+            <div className="brandRow">
+              <div className="brandMark">
+                <img src={LOGO_SRC} alt="CRT Roofing logo" />
+              </div>
+              <div>
+                <p className="eyebrow">CRT Roofing Estimating Platform</p>
+                <h1>CFO Dashboard</h1>
+                <p className="intro">Executive financial overview for CRT Roofing.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="heroCard">
+            <span>Signed in</span>
+            <strong>{authUser.displayName}</strong>
+            <p>Local mode only</p>
+          </div>
+        </header>
+
+        <Section title="Financial overview" subtitle="Placeholder KPI cards only. Live reporting will be added later.">
+          <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginTop: 0 }}>
+            {cfoCards.map((card) => (
+              <button
+                key={card.key}
+                type="button"
+                className="summaryCard cfoKpiCard"
+                onClick={() => {
+                  if (card.key === "supplierTotalsPayable") {
+                    setCfoSupplierPayablesView("current");
+                  }
+                  setSelectedCfoCard(card.key);
+                }}
+              >
+                <span>{card.label}</span>
+                <strong>{card.primaryValue}</strong>
+                <p>{card.secondaryValue}</p>
+                <p className="smallNote" style={{ marginTop: 8 }}>Last updated: {card.lastUpdated}</p>
+              </button>
+            ))}
+          </div>
+          <p className="smallNote" style={{ marginTop: 14 }}>
+            CFO Dashboard is under construction. Data connections and live reporting will be added later.
+          </p>
+        </Section>
+
+        {renderCfoDetailModal()}
+      </div>
+    );
+  };
+
+  function getApprovedJobStartDateLabel(job) {
+    return String(job?.anticipatedStartDate || "").trim() || "Start Date Needed";
+  }
+
+  function getApprovedJobDaysUntilStart(job) {
+    if (!String(job?.anticipatedStartDate || "").trim()) return null;
+    const start = new Date(job.anticipatedStartDate);
+    if (Number.isNaN(start.getTime())) return null;
+    const today = new Date();
+    const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+    const startUtc = new Date(Date.UTC(start.getFullYear(), start.getMonth(), start.getDate()));
+    return Math.round((startUtc.getTime() - todayUtc.getTime()) / 86400000);
+  }
+
+  function isApprovedJobStartingSoon(job) {
+    const days = getApprovedJobDaysUntilStart(job);
+    return days != null && days >= 0 && days <= 14;
+  }
+
+  function hasApprovedJobWarnings(job) {
+    return Boolean(
+      job?.warningText ||
+        job?.documentsIncomplete ||
+        job?.subcontractorIncomplete ||
+        job?.materialOrderIncomplete ||
+        job?.customerDocumentIncomplete,
+    );
+  }
+
+  function renderApprovedJobsTableSection({ title, subtitle, jobs, showViewAllButton = false, onViewAll = null, limit = null }) {
+    const visibleJobs = limit ? jobs.slice(0, limit) : jobs;
+    const startingSoonCount = jobs.filter((job) => isApprovedJobStartingSoon(job)).length;
+    const warningCount = jobs.filter((job) => hasApprovedJobWarnings(job)).length;
+
+    return (
+      <Section title={title} subtitle={subtitle}>
+        <div className="formGrid" style={{ marginBottom: 12 }}>
+          <Field label="Search approved jobs">
+            <input
+              type="search"
+              value={approvedJobsSearch}
+              onChange={(e) => updateApprovedJobsFilter("search", e.target.value)}
+              placeholder="Search customer, address, contact, or status"
+            />
+          </Field>
+          <Field label="Customer">
+            <input
+              type="text"
+              value={approvedJobsFilters.customer}
+              onChange={(e) => updateApprovedJobsFilter("customer", e.target.value)}
+              placeholder="Filter customer"
+            />
+          </Field>
+          <Field label="Project address">
+            <input
+              type="text"
+              value={approvedJobsFilters.address}
+              onChange={(e) => updateApprovedJobsFilter("address", e.target.value)}
+              placeholder="Filter address"
+            />
+          </Field>
+          <Field label="Project status">
+            <select value={approvedJobsFilters.status} onChange={(e) => updateApprovedJobsFilter("status", e.target.value)}>
+              <option value="all">All statuses</option>
+              {APPROVED_JOB_STATUS_OPTIONS.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Assigned project contact">
+            <input
+              type="text"
+              value={approvedJobsFilters.contact}
+              onChange={(e) => updateApprovedJobsFilter("contact", e.target.value)}
+              placeholder="Filter contact"
+            />
+          </Field>
+          <Field label="Anticipated start date">
+            <input
+              type="date"
+              value={approvedJobsFilters.startDate}
+              onChange={(e) => updateApprovedJobsFilter("startDate", e.target.value)}
+            />
+          </Field>
+          <Field label="Sort by">
+            <select value={approvedJobsFilters.sortBy} onChange={(e) => updateApprovedJobsFilter("sortBy", e.target.value)}>
+              <option value="startDate">Anticipated start date</option>
+              <option value="customer">Customer</option>
+              <option value="status">Project status</option>
+              <option value="contact">Project contact</option>
+            </select>
+          </Field>
+          <Field label="Sort order">
+            <select value={approvedJobsFilters.sortDirection} onChange={(e) => updateApprovedJobsFilter("sortDirection", e.target.value)}>
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </select>
+          </Field>
+        </div>
+
+        <div className="detailList" style={{ marginBottom: 14 }}>
+          <DetailRow label="Visible jobs" value={num(visibleJobs.length, 0)} />
+          <DetailRow label="Starting within 14 days" value={num(startingSoonCount, 0)} />
+          <DetailRow label="Checklist warnings" value={num(warningCount, 0)} />
+        </div>
+
+        <div className="tableWrap">
+          <table className="dataTable">
+            <thead>
+              <tr>
+                <th>Job number</th>
+                <th>Customer name</th>
+                <th>Property or project name</th>
+                <th>Project address</th>
+                <th>Contract amount</th>
+                <th>Approval date</th>
+                <th>Anticipated start date</th>
+                <th>Project status</th>
+                <th>Assigned project contact</th>
+                <th>Assigned field supervisor</th>
+                <th>Permit status</th>
+                <th>Action button</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleJobs.length ? (
+                visibleJobs.map((job) => {
+                  const startDays = getApprovedJobDaysUntilStart(job);
+                  const startSoon = isApprovedJobStartingSoon(job);
+                  const warnings = hasApprovedJobWarnings(job);
+                  const rowTone = warnings ? "rgba(245, 158, 11, 0.08)" : startSoon ? "rgba(34, 197, 94, 0.08)" : "transparent";
+                  return (
+                    <tr
+                      key={job.id}
+                      style={{ cursor: "pointer", background: rowTone }}
+                      onClick={() => openApprovedJobDetail(job)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          openApprovedJobDetail(job);
+                        }
+                      }}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`Open approved job ${job.jobNumber || job.projectName || "record"}`}
+                    >
+                      <td>
+                        <strong>{job.jobNumber || "—"}</strong>
+                      </td>
+                      <td>{job.customerName || "—"}</td>
+                      <td>{job.projectName || "—"}</td>
+                      <td>{job.projectAddress || "—"}</td>
+                      <td>{money(job.contractAmount || 0)}</td>
+                      <td>{job.approvalDate || "—"}</td>
+                      <td>
+                        <div style={{ display: "grid", gap: 4 }}>
+                          <span>{getApprovedJobStartDateLabel(job)}</span>
+                          {startDays != null && startDays >= 0 ? (
+                            <span className="smallNote">{startDays === 0 ? "Starts today" : `${startDays} day${startDays === 1 ? "" : "s"} away`}</span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td>
+                        <div style={{ display: "grid", gap: 4 }}>
+                          <span className={`statusTag statusTag-${String(job.projectStatus || job.status || "approved").toLowerCase().replace(/\s+/g, "-")}`}>
+                            {job.projectStatus || job.status || "Approved"}
+                          </span>
+                          {warnings ? (
+                            <span className="smallNote" style={{ color: "var(--danger)" }}>
+                              {job.warningText || "Checklist incomplete"}
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td>{job.projectContact || "—"}</td>
+                      <td>{job.fieldSupervisor || "—"}</td>
+                      <td>{job.permitStatus || "—"}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="secondaryButton"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openApprovedJobDetail(job);
+                          }}
+                        >
+                          Open
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={12}>
+                    <div className="cfoDetailEmpty">
+                      <strong>No approved jobs match the current filters.</strong>
+                      <p style={{ margin: "8px 0 0", color: "#a7c7d6" }}>
+                        Adjust the search or filters to see more upcoming work.
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {showViewAllButton && onViewAll ? (
+          <div className="actionRow" style={{ marginTop: 16 }}>
+            <button type="button" className="secondaryButton" onClick={onViewAll}>
+              View All Approved Jobs
+            </button>
+          </div>
+        ) : null}
+      </Section>
+    );
+  }
+
+  function renderProposalBuilderScreen() {
+    const selectedProposalVersionHistory = Array.isArray(proposalDraft?.proposalHistory) ? proposalDraft.proposalHistory : [];
+    const currentProposalSelection = selectedProposal || proposalDraft;
+    const proposalTemplateSectionOrderText = Array.isArray(proposalTemplateDraft?.sectionOrder)
+      ? proposalTemplateDraft.sectionOrder.join(", ")
+      : "";
+
+    return (
+      <div className="appShell">
+        <style>{css}</style>
+        <header className="hero">
+          <div>
+            <div className="brandRow">
+              <div className="brandMark">
+                <img src={LOGO_SRC} alt="CRT Roofing logo" />
+              </div>
+              <div>
+                <p className="eyebrow">CRT Roofing Sales Workflow</p>
+                <h1>Proposal Builder</h1>
+                <p className="intro">Turn saved estimates into customer-ready proposals without re-entering the scope.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="heroCard">
+            <span>Signed in</span>
+            <strong>{authUser.displayName}</strong>
+            <p>Local mode only</p>
+          </div>
+        </header>
+
+        <div className="actionRow" style={{ marginBottom: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+            Back to dashboard
+          </button>
+          <button
+            type="button"
+            className="secondaryButton"
+            onClick={() => {
+              setProposalDraft(createBlankProposal());
+              setProposalSelectedId("");
+              setSessionMessageType("success");
+              setSessionMessage("Started a blank proposal.");
+            }}
+          >
+            New proposal
+          </button>
+          <button type="button" className="primaryButton" onClick={() => saveProposalDraft()}>
+            Save Draft
+          </button>
+          <button type="button" className="secondaryButton" onClick={handleSendProposal}>
+            Send Proposal
+          </button>
+          <button type="button" className="secondaryButton" onClick={() => handleConvertProposalToApprovedJob(proposalDraft)}>
+            Accept &amp; Convert to Approved Job
+          </button>
+        </div>
+
+        {sessionMessage ? (
+          <div
+            style={{
+              margin: "0 0 16px 0",
+              padding: 12,
+              borderRadius: 4,
+              backgroundColor: sessionMessageType === "success" ? "#e8f5e9" : "#ffebee",
+              color: sessionMessageType === "success" ? "#2e7d32" : "#c62828",
+            }}
+          >
+            {sessionMessage}
+          </div>
+        ) : null}
+
+        <Section title="Proposal library" subtitle="Search and open proposals created from saved estimates.">
+          <div className="formGrid" style={{ marginBottom: 12 }}>
+            <Field label="Search proposals">
+              <input
+                type="search"
+                value={proposalSearch}
+                onChange={(e) => setProposalSearch(e.target.value)}
+                placeholder="Search by customer, address, proposal number, or estimate code"
+              />
+            </Field>
+            <Field label="Customer">
+              <input type="text" value={proposalFilters.customer} onChange={(e) => updateProposalFilter("customer", e.target.value)} />
+            </Field>
+            <Field label="Project address">
+              <input type="text" value={proposalFilters.address} onChange={(e) => updateProposalFilter("address", e.target.value)} />
+            </Field>
+            <Field label="Salesperson">
+              <input type="text" value={proposalFilters.salesperson} onChange={(e) => updateProposalFilter("salesperson", e.target.value)} />
+            </Field>
+            <Field label="Proposal status">
+              <select value={proposalFilters.status} onChange={(e) => updateProposalFilter("status", e.target.value)}>
+                <option value="all">All statuses</option>
+                {PROPOSAL_STATUS_OPTIONS.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Sort by">
+              <select value={proposalFilters.sortBy} onChange={(e) => updateProposalFilter("sortBy", e.target.value)}>
+                <option value="updatedAt">Updated</option>
+                <option value="proposalNumber">Proposal number</option>
+                <option value="customer">Customer</option>
+                <option value="status">Status</option>
+              </select>
+            </Field>
+            <Field label="Sort order">
+              <select value={proposalFilters.sortDirection} onChange={(e) => updateProposalFilter("sortDirection", e.target.value)}>
+                <option value="desc">Newest / highest first</option>
+                <option value="asc">Oldest / lowest first</option>
+              </select>
+            </Field>
+          </div>
+
+          <div className="detailList" style={{ marginBottom: 14 }}>
+            <DetailRow label="Proposal count" value={num(filteredProposals.length, 0)} />
+            <DetailRow label="Selected proposal" value={currentProposalSelection?.proposalTitle || currentProposalSelection?.proposalNumber || "New proposal"} />
+            <DetailRow label="Source estimate" value={currentProposalSelection?.sourceEstimateCode || currentProposalSelection?.estimateCode || "—"} />
+          </div>
+
+          <div className="savedList">
+            {filteredProposals.length ? (
+              filteredProposals.map((proposal) => (
+                <div className="savedCard" key={proposal.id}>
+                  <div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                      <span className="eyebrow">Proposal #{num(proposal.proposalNumber || 0, 0)}</span>
+                      <span className={`statusTag statusTag-${String(proposal.status || "draft").toLowerCase().replace(/\s+/g, "-")}`}>
+                        {String(proposal.status || "Draft").toUpperCase()}
+                      </span>
+                    </div>
+                    <strong>{proposal.proposalTitle || proposal.projectName || proposal.customerName || "Untitled proposal"}</strong>
+                    <p>
+                      {proposal.customerName ? `${proposal.customerName} | ` : ""}
+                      {proposal.projectName ? `${proposal.projectName} | ` : ""}
+                      {proposal.projectAddress ? `${proposal.projectAddress} | ` : ""}
+                      {money(proposal.totalPrice || 0)} total | Version {num(proposal.version || 1, 0)}
+                    </p>
+                  </div>
+                  <div className="savedActions">
+                    <button type="button" className="secondaryButton" onClick={() => openProposalBuilder(proposal)}>
+                      Open
+                    </button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="emptyState">No proposals yet. Convert a saved estimate to start one.</p>
+            )}
+          </div>
+        </Section>
+
+        <Section title="Proposal builder" subtitle="Edit the public-facing proposal and keep internal costs hidden from customers.">
+          <div className="formGrid">
+            <Field label="Proposal title">
+              <input
+                type="text"
+                value={proposalDraft.proposalTitle}
+                onChange={(e) => handleProposalDraftChange("proposalTitle", e.target.value)}
+                placeholder="Customer-facing proposal title"
+              />
+            </Field>
+            <Field label="Status">
+              <select value={proposalDraft.status} onChange={(e) => handleProposalDraftChange("status", e.target.value)}>
+                {PROPOSAL_STATUS_OPTIONS.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Proposal number">
+              <input type="number" min="1" step="1" value={proposalDraft.proposalNumber} onChange={(e) => handleProposalDraftChange("proposalNumber", toNumber(e.target.value, 1))} />
+            </Field>
+            <Field label="Version">
+              <input type="number" min="1" step="1" value={proposalDraft.version} onChange={(e) => handleProposalDraftChange("version", toNumber(e.target.value, 1))} />
+            </Field>
+            <Field label="Customer name">
+              <input type="text" value={proposalDraft.customerName} onChange={(e) => handleProposalDraftChange("customerName", e.target.value)} />
+            </Field>
+            <Field label="Customer contact">
+              <input type="text" value={proposalDraft.customerContact} onChange={(e) => handleProposalDraftChange("customerContact", e.target.value)} />
+            </Field>
+            <Field label="Project name">
+              <input type="text" value={proposalDraft.projectName} onChange={(e) => handleProposalDraftChange("projectName", e.target.value)} />
+            </Field>
+            <Field label="Project address">
+              <input type="text" value={proposalDraft.projectAddress} onChange={(e) => handleProposalDraftChange("projectAddress", e.target.value)} />
+            </Field>
+            <Field label="Estimate code">
+              <input type="text" value={proposalDraft.estimateCode} onChange={(e) => handleProposalDraftChange("estimateCode", e.target.value)} />
+            </Field>
+            <Field label="Roof system">
+              <input type="text" value={proposalDraft.roofSystem} onChange={(e) => handleProposalDraftChange("roofSystem", e.target.value)} />
+            </Field>
+            <Field label="Salesperson">
+              <input type="text" value={proposalDraft.salesperson} onChange={(e) => handleProposalDraftChange("salesperson", e.target.value)} />
+            </Field>
+            <Field label="Total price">
+              <input type="number" min="0" step="0.01" value={proposalDraft.totalPrice} onChange={(e) => handleProposalDraftChange("totalPrice", toNumber(e.target.value))} />
+            </Field>
+            <Field label="Estimate date">
+              <input type="date" value={proposalDraft.estimateDate} onChange={(e) => handleProposalDraftChange("estimateDate", e.target.value)} />
+            </Field>
+            <Field label="Expiration date">
+              <input type="date" value={proposalDraft.expirationDate} onChange={(e) => handleProposalDraftChange("expirationDate", e.target.value)} />
+            </Field>
+            <Field label="Approval required">
+              <select
+                value={proposalDraft.approvalRequired ? "yes" : "no"}
+                onChange={(e) => handleProposalDraftChange("approvalRequired", e.target.value === "yes")}
+              >
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </Field>
+            <Field label="Approval threshold">
+              <input type="number" min="0" step="0.01" value={proposalDraft.approvalThreshold} onChange={(e) => handleProposalDraftChange("approvalThreshold", toNumber(e.target.value))} />
+            </Field>
+            <Field label="Approval review level">
+              <input type="text" value={proposalDraft.approvalReviewLevel} onChange={(e) => handleProposalDraftChange("approvalReviewLevel", e.target.value)} />
+            </Field>
+            <Field label="Sent at">
+              <input type="datetime-local" value={proposalDraft.sentAt ? String(proposalDraft.sentAt).slice(0, 16) : ""} onChange={(e) => handleProposalDraftChange("sentAt", e.target.value)} />
+            </Field>
+            <Field label="Sent by">
+              <input type="text" value={proposalDraft.sentBy} onChange={(e) => handleProposalDraftChange("sentBy", e.target.value)} />
+            </Field>
+            <Field label="Send to">
+              <input type="text" value={proposalDraft.sentTo} onChange={(e) => handleProposalDraftChange("sentTo", e.target.value)} />
+            </Field>
+            <Field label="CC recipients">
+              <input type="text" value={proposalDraft.ccRecipients} onChange={(e) => handleProposalDraftChange("ccRecipients", e.target.value)} />
+            </Field>
+          </div>
+
+          <div className="formGrid" style={{ marginTop: 12 }}>
+            <Field label="Message">
+              <textarea rows="4" value={proposalDraft.message} onChange={(e) => handleProposalDraftChange("message", e.target.value)} />
+            </Field>
+            <Field label="Warranty">
+              <textarea rows="4" value={proposalDraft.warranty} onChange={(e) => handleProposalDraftChange("warranty", e.target.value)} />
+            </Field>
+            <Field label="Payment schedule">
+              <textarea rows="4" value={proposalDraft.paymentSchedule} onChange={(e) => handleProposalDraftChange("paymentSchedule", e.target.value)} />
+            </Field>
+            <Field label="Estimated schedule">
+              <textarea rows="4" value={proposalDraft.estimatedSchedule} onChange={(e) => handleProposalDraftChange("estimatedSchedule", e.target.value)} />
+            </Field>
+            <Field label="Terms and conditions">
+              <textarea rows="4" value={proposalDraft.termsAndConditions} onChange={(e) => handleProposalDraftChange("termsAndConditions", e.target.value)} />
+            </Field>
+            <Field label="Internal job notes">
+              <textarea rows="4" value={proposalDraft.internalJobNotes} onChange={(e) => handleProposalDraftChange("internalJobNotes", e.target.value)} />
+            </Field>
+          </div>
+
+          <div className="detailList" style={{ marginTop: 14 }}>
+            <DetailRow label="Source estimate" value={proposalDraft.sourceEstimateCode || proposalDraft.estimateCode || "—"} />
+            <DetailRow label="Version history entries" value={num(selectedProposalVersionHistory.length, 0)} />
+            <DetailRow label="Customer acceptance" value={proposalDraft.customerAcceptance?.status || "Not recorded"} />
+            <DetailRow label="Current total" value={money(proposalDraft.totalPrice || 0)} />
+          </div>
+
+          {proposalDraft.scopeItems?.length ? (
+            <div className="detailList" style={{ marginTop: 14 }}>
+              {proposalDraft.scopeItems.map((item) => (
+                <DetailRow key={`${item.label}-${item.value}`} label={item.label} value={String(item.value)} />
+              ))}
+            </div>
+          ) : null}
+        </Section>
+
+        <Section title="Alternates, exclusions, allowances, and taxes" subtitle="Carry over only the customer-facing items from the estimate.">
+          <div className="formGrid">
+            <Field label="Alternates">
+              <textarea rows="4" value={(proposalDraft.alternates || []).join("\n")} onChange={(e) => handleProposalDraftChange("alternates", String(e.target.value || "").split("\n").filter(Boolean))} />
+            </Field>
+            <Field label="Exclusions">
+              <textarea rows="4" value={(proposalDraft.exclusions || []).join("\n")} onChange={(e) => handleProposalDraftChange("exclusions", String(e.target.value || "").split("\n").filter(Boolean))} />
+            </Field>
+            <Field label="Allowances">
+              <textarea rows="4" value={(proposalDraft.allowances || []).join("\n")} onChange={(e) => handleProposalDraftChange("allowances", String(e.target.value || "").split("\n").filter(Boolean))} />
+            </Field>
+            <Field label="Taxes">
+              <textarea rows="4" value={(proposalDraft.taxes || []).join("\n")} onChange={(e) => handleProposalDraftChange("taxes", String(e.target.value || "").split("\n").filter(Boolean))} />
+            </Field>
+          </div>
+        </Section>
+
+        <Section title="Version history" subtitle="A simple audit trail for proposal updates and resends.">
+          {selectedProposalVersionHistory.length ? (
+            <div className="savedList">
+              {selectedProposalVersionHistory.map((entry, index) => (
+                <div className="savedCard" key={`${entry.status || "history"}-${index}`}>
+                  <div>
+                    <strong>{entry.status || "Update"}</strong>
+                    <p>
+                      {entry.updatedAt ? `Updated ${entry.updatedAt}` : "Updated time not recorded"}
+                      {entry.supersededBy ? ` | Superseded by ${entry.supersededBy}` : ""}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="emptyState">No proposal history yet.</p>
+          )}
+        </Section>
+
+        <Section
+          title="Template manager"
+          subtitle="Edit the CRT proposal baseline from one central place. Newly generated proposals will use these defaults until finalized."
+        >
+          <div className="actionRow" style={{ marginBottom: 12 }}>
+            <button type="button" className="primaryButton" onClick={saveProposalTemplateDraft}>
+              Save template
+            </button>
+            <button type="button" className="secondaryButton" onClick={resetProposalTemplateDraft}>
+              Reset to CRT baseline
+            </button>
+          </div>
+
+          <div className="formGrid">
+            <Field label="Template name">
+              <input type="text" value={proposalTemplateDraft.templateName} onChange={(e) => handleProposalTemplateDraftChange("templateName", e.target.value)} />
+            </Field>
+            <Field label="Brand name">
+              <input type="text" value={proposalTemplateDraft.brandName} onChange={(e) => handleProposalTemplateDraftChange("brandName", e.target.value)} />
+            </Field>
+            <Field label="Cover page title">
+              <input type="text" value={proposalTemplateDraft.coverPageTitle} onChange={(e) => handleProposalTemplateDraftChange("coverPageTitle", e.target.value)} />
+            </Field>
+            <Field label="Cover page subtitle">
+              <textarea rows="3" value={proposalTemplateDraft.coverPageSubtitle} onChange={(e) => handleProposalTemplateDraftChange("coverPageSubtitle", e.target.value)} />
+            </Field>
+            <Field label="Executive summary title">
+              <input type="text" value={proposalTemplateDraft.executiveSummaryTitle} onChange={(e) => handleProposalTemplateDraftChange("executiveSummaryTitle", e.target.value)} />
+            </Field>
+            <Field label="Executive summary body">
+              <textarea rows="4" value={proposalTemplateDraft.executiveSummaryBody} onChange={(e) => handleProposalTemplateDraftChange("executiveSummaryBody", e.target.value)} />
+            </Field>
+            <Field label="Scope of work title">
+              <input type="text" value={proposalTemplateDraft.scopeOfWorkTitle} onChange={(e) => handleProposalTemplateDraftChange("scopeOfWorkTitle", e.target.value)} />
+            </Field>
+            <Field label="Scope of work intro">
+              <textarea rows="3" value={proposalTemplateDraft.scopeOfWorkIntro} onChange={(e) => handleProposalTemplateDraftChange("scopeOfWorkIntro", e.target.value)} />
+            </Field>
+          </div>
+
+          <div className="formGrid" style={{ marginTop: 12 }}>
+            <Field label="Photo title">
+              <input type="text" value={proposalTemplateDraft.photoTitle} onChange={(e) => handleProposalTemplateDraftChange("photoTitle", e.target.value)} />
+            </Field>
+            <Field label="Upgrade options title">
+              <input type="text" value={proposalTemplateDraft.upgradeOptionsTitle} onChange={(e) => handleProposalTemplateDraftChange("upgradeOptionsTitle", e.target.value)} />
+            </Field>
+            <Field label="Product information title">
+              <input type="text" value={proposalTemplateDraft.productInformationTitle} onChange={(e) => handleProposalTemplateDraftChange("productInformationTitle", e.target.value)} />
+            </Field>
+            <Field label="Warranty comparison title">
+              <input type="text" value={proposalTemplateDraft.warrantyComparisonTitle} onChange={(e) => handleProposalTemplateDraftChange("warrantyComparisonTitle", e.target.value)} />
+            </Field>
+            <Field label="Pricing title">
+              <input type="text" value={proposalTemplateDraft.pricingTitle} onChange={(e) => handleProposalTemplateDraftChange("pricingTitle", e.target.value)} />
+            </Field>
+            <Field label="Signature title">
+              <input type="text" value={proposalTemplateDraft.signatureTitle} onChange={(e) => handleProposalTemplateDraftChange("signatureTitle", e.target.value)} />
+            </Field>
+            <Field label="Legal title">
+              <input type="text" value={proposalTemplateDraft.legalTitle} onChange={(e) => handleProposalTemplateDraftChange("legalTitle", e.target.value)} />
+            </Field>
+            <Field label="Payment terms title">
+              <input type="text" value={proposalTemplateDraft.paymentTermsTitle} onChange={(e) => handleProposalTemplateDraftChange("paymentTermsTitle", e.target.value)} />
+            </Field>
+          </div>
+
+          <div className="formGrid" style={{ marginTop: 12 }}>
+            <Field label="Payment terms">
+              <textarea rows="4" value={proposalTemplateDraft.paymentTerms} onChange={(e) => handleProposalTemplateDraftChange("paymentTerms", e.target.value)} />
+            </Field>
+            <Field label="Contract language">
+              <textarea rows="4" value={proposalTemplateDraft.contractLanguage} onChange={(e) => handleProposalTemplateDraftChange("contractLanguage", e.target.value)} />
+            </Field>
+            <Field label="Legal notice">
+              <textarea rows="4" value={proposalTemplateDraft.legalNotice} onChange={(e) => handleProposalTemplateDraftChange("legalNotice", e.target.value)} />
+            </Field>
+            <Field label="Footer text">
+              <textarea rows="4" value={proposalTemplateDraft.footerText} onChange={(e) => handleProposalTemplateDraftChange("footerText", e.target.value)} />
+            </Field>
+          </div>
+
+          <div className="formGrid" style={{ marginTop: 12 }}>
+            <Field label="Signature line label">
+              <input type="text" value={proposalTemplateDraft.signatureLineLabel} onChange={(e) => handleProposalTemplateDraftChange("signatureLineLabel", e.target.value)} />
+            </Field>
+            <Field label="Signature date label">
+              <input type="text" value={proposalTemplateDraft.signatureDateLabel} onChange={(e) => handleProposalTemplateDraftChange("signatureDateLabel", e.target.value)} />
+            </Field>
+            <Field label="Section order">
+              <textarea
+                rows="3"
+                value={proposalTemplateSectionOrderText}
+                onChange={(e) =>
+                  handleProposalTemplateDraftChange(
+                    "sectionOrder",
+                    String(e.target.value || "")
+                      .split(/[\n,]+/)
+                      .map((item) => item.trim())
+                      .filter(Boolean),
+                  )
+                }
+                placeholder="coverPage, executiveSummary, scopeOfWork, photos, upgradeOptions, productInformation, warrantyComparison, pricing, signature, legal"
+              />
+            </Field>
+          </div>
+        </Section>
+      </div>
+    );
+  }
 
   if (!authUser?.key) {
     return (
@@ -3389,11 +21591,21 @@ function App() {
     return renderDashboard();
   }
 
+  if (activeTemplate === "cfoDashboard") return renderCfoDashboardScreen();
+  if (activeTemplate === "administration") return renderAdministrationScreen();
+  if (activeTemplate === "activeJobs") return renderActiveJobsScreen();
+  if (activeTemplate === "activeJob") return renderActiveJobScreen();
+  if (activeTemplate === "fieldOperations") return renderFieldOperationsScreen();
   if (activeTemplate === "fieldNotes") return renderFieldNotesScreen();
   if (activeTemplate === "estimateTemplates") return renderEstimateTemplatesScreen();
-  if (activeTemplate === "sprayFoam") return renderTemplateScreen("Spray Foam Estimate");
-  if (activeTemplate === "tile") return renderTemplateScreen("Tile Estimate");
-  if (activeTemplate === "shingle") return renderTemplateScreen("Shingle Estimate");
+  if (activeTemplate === "approvedJobs") return renderApprovedJobsScreen();
+  if (activeTemplate === "approvedJob") return renderApprovedJobScreen();
+  if (activeTemplate === "proposalBuilder") return renderProposalBuilderScreen();
+  if (activeTemplate === "jobMetrics") return renderJobMetricsScreen();
+  if (activeTemplate === "pastJobInsights") return renderPastJobInsightsScreen();
+  if (activeTemplate === "sprayFoam") return renderSprayFoamScreen();
+  if (activeTemplate === "shingle") return renderShingleScreen();
+  if (activeTemplate === "tile") return renderTileScreen();
   if (activeTemplate === "coating") return renderTemplateScreen("Coating Estimate");
   if (activeTemplate === "maintenance") return renderMaintenanceScreen();
   if (activeTemplate === "repair") return renderTemplateScreen("Repair / Service Estimate");
@@ -3407,7 +21619,10 @@ function App() {
         <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
           Back to dashboard
         </button>
+        {renderQuickMeasureUploadControl()}
       </div>
+
+      {renderQuickMeasureReviewPanel()}
 
       <header className="hero">
         <div>
@@ -3473,12 +21688,17 @@ function App() {
             />
           </Field>
           <Field label="Job address">
-            <input
-              type="text"
-              value={inputs.jobAddress}
-              onChange={(e) => setField("jobAddress", e.target.value)}
-              placeholder="Job address"
-            />
+            <div style={{ display: "grid", gap: 8 }}>
+              <input
+                type="text"
+                value={inputs.jobAddress}
+                onChange={(e) => setField("jobAddress", e.target.value)}
+                placeholder="Job address"
+              />
+              <button type="button" className="secondaryButton" onClick={handleCalculateDistance}>
+                Search travel distance
+              </button>
+            </div>
           </Field>
         </div>
       </Section>
@@ -3609,9 +21829,110 @@ function App() {
                       terminationMethod: e.target.value,
                     }))
                   }
-                />
+                  />
               ))}
+              <ChoiceCard
+                key="multiTermination"
+                name="terminationMethod"
+                value="multiTermination"
+                label="Two or more different types of terminations"
+                checked={inputs.terminationMethod === "multiTermination"}
+                onChange={() =>
+                  setInputs((current) => ({
+                    ...current,
+                    terminationMethod: "multiTermination",
+                    multiTerminationRows:
+                      current.multiTerminationRows && current.multiTerminationRows.length > 0
+                        ? current.multiTerminationRows
+                        : [createBlankTerminationRow()],
+                  }))
+                }
+              />
             </div>
+
+            {inputs.terminationMethod === "multiTermination" ? (
+              <div className="inputSection" style={{ marginTop: 14 }}>
+                <h3>Termination methods breakdown</h3>
+                {(inputs.multiTerminationRows || []).map((row, idx) => {
+                  const rowType = row.terminationType || row.type || "";
+                  return (
+                    <div key={row.id || idx} className="formGrid" style={{ alignItems: "end" }}>
+                      <Field label="Termination type">
+                        <select
+                          value={rowType}
+                          onChange={(e) =>
+                            setInputs((current) => {
+                              const next = [...(current.multiTerminationRows || [])];
+                              next[idx] = {
+                                ...next[idx],
+                                terminationType: e.target.value,
+                                type: e.target.value,
+                              };
+                              return { ...current, multiTerminationRows: next };
+                            })
+                          }
+                        >
+                          <option value="">Select type</option>
+                          {TERMINATION_METHOD_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Linear feet">
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={row.linearFeet}
+                          onChange={(e) =>
+                            setInputs((current) => {
+                              const next = [...(current.multiTerminationRows || [])];
+                              next[idx] = {
+                                ...next[idx],
+                                linearFeet: e.target.value,
+                              };
+                              return { ...current, multiTerminationRows: next };
+                            })
+                          }
+                        />
+                      </Field>
+                      {inputs.multiTerminationRows.length > 1 ? (
+                        <div className="actionRow">
+                          <button
+                            type="button"
+                            className="dangerButton"
+                            onClick={() =>
+                              setInputs((current) => ({
+                                ...current,
+                                multiTerminationRows: current.multiTerminationRows.filter((_, i) => i !== idx),
+                              }))
+                            }
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                <div className="actionRow" style={{ marginTop: 8 }}>
+                  <button
+                    type="button"
+                    className="secondaryButton"
+                    onClick={() =>
+                      setInputs((current) => ({
+                        ...current,
+                        multiTerminationRows: [...(current.multiTerminationRows || []), createBlankTerminationRow()],
+                      }))
+                    }
+                  >
+                    Next termination method
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             {inputs.terminationMethod === "copingMetal" ? (
               <div className="formGrid">
@@ -4069,232 +22390,203 @@ function App() {
         </div>
       </Section>
 
-      <Section title="Travel & Overtime Cost" subtitle="Use Google Maps when available, with manual fallback always editable.">
-        <div className="formGrid">
-          <Field label="Company HQ address" hint="Default: CRT Roofing office in Fontana, CA">
-            <input
-              type="text"
-              value={inputs.companyHqAddress}
-              onChange={(e) => setTravelField("companyHqAddress", e.target.value)}
-            />
-          </Field>
-          <Field label="Job site address">
-            <input
-              type="text"
-              value={inputs.jobSiteAddress}
-              onChange={(e) => setTravelField("jobSiteAddress", e.target.value)}
-            />
-          </Field>
-          <div className="field" style={{ alignSelf: "end" }}>
-            {!isLoaded && !loadError ? <em>Google Maps loading...</em> : null}
-            {loadError ? <em>Google Maps failed to load: {loadError.message}</em> : null}
-            <button type="button" className="secondaryButton" onClick={handleCalculateDistance} disabled={!isLoaded || isLookingUpDistance}>
-              {isLookingUpDistance ? "Calculating..." : "Calculate Distance"}
-            </button>
-            <button type="button" className="secondaryButton" onClick={handleTestGoogleGeocoder} disabled={!isLoaded || isLookingUpDistance}>
-              Test Google Geocoder
-            </button>
-            <button type="button" className="secondaryButton" onClick={handleTestDirections} disabled={!isLoaded || isLookingUpDistance}>
-              Test Directions
-            </button>
-            {travelLookupMessage ? <em>{travelLookupMessage}</em> : null}
+      <Section title="Overhead" subtitle="Apply overhead before markup is calculated.">
+        <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", marginTop: 0 }}>
+          <div className="summaryCard">
+            <span>Direct job cost</span>
+            <strong>{money(calculation.directJobCost || 0)}</strong>
           </div>
-          <Field label="One-way distance from HQ/shop to job site in miles">
+          <div className="summaryCard">
+            <span>Overhead markup</span>
+            <strong>{money(calculation.overheadCost || 0)}</strong>
+          </div>
+          <div className="summaryCard">
+            <span>Operating markup</span>
+            <strong>{money(calculation.operatingCost || 0)}</strong>
+          </div>
+          <div className="summaryCard">
+            <span>Total before profit</span>
+            <strong>{money(calculation.totalCostBeforeProfit || 0)}</strong>
+          </div>
+        </div>
+        <div className="formGrid">
+          <Field label="Overhead / operating rate">
             <input
               type="number"
               min="0"
               step="0.1"
-              value={inputs.oneWayMiles}
-              onChange={(e) => setTravelField("oneWayMiles", e.target.value)}
+              value={inputs.overheadPercent ?? 17.5}
+              onChange={(e) => setField("overheadPercent", e.target.value)}
             />
           </Field>
-          <Field label="Average driving speed">
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={inputs.averageDrivingSpeedMph}
-              onChange={(e) => setTravelField("averageDrivingSpeedMph", e.target.value)}
-            />
-          </Field>
-          <Field label="Driver hourly rate">
+          <Field label="Scope adders">
             <input
               type="number"
               min="0"
               step="0.01"
-              value={inputs.travelDriverHourlyRate}
-              onChange={(e) => setField("travelDriverHourlyRate", e.target.value)}
+              value={inputs.scopeAdders || 0}
+              onChange={(e) => setField("scopeAdders", e.target.value)}
             />
-            <em>Typical range $22-$32/hr</em>
-          </Field>
-          <Field label="Work hours per day">
-            <input
-              type="number"
-              min="0"
-              step="0.1"
-              value={inputs.workHoursPerDay}
-              onChange={(e) => setField("workHoursPerDay", e.target.value)}
-            />
-          </Field>
-          <Field label="Number of job days">
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={inputs.numberOfJobDays}
-              onChange={(e) => setField("numberOfJobDays", e.target.value)}
-            />
-          </Field>
-          <Field label="Number of drivers">
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={inputs.numberOfDrivers}
-              onChange={(e) => setField("numberOfDrivers", e.target.value)}
-            />
-          </Field>
-        </div>
-
-        <div className="detailList" style={{ marginTop: 14 }}>
-          <DetailRow label="HQ address" value={calculation.travelAndOvertime.companyHqAddress || "Not entered"} />
-          <DetailRow label="Job site address" value={calculation.travelAndOvertime.jobSiteAddress || "Not entered"} />
-          <DetailRow label="Source" value={calculation.travelAndOvertime.travelDistanceSource === "google" ? "Google Maps" : "Manual"} />
-          <DetailRow label="One-way miles" value={num(calculation.travelAndOvertime.oneWayMiles, 1)} />
-          <DetailRow label="Average speed" value={`${num(calculation.travelAndOvertime.averageDrivingSpeedMph, 1)} mph`} />
-          <DetailRow label="One-way drive time" value={formatHoursMinutes(calculation.travelAndOvertime.oneWayDriveTimeHours)} />
-          <DetailRow label="Round trip drive time" value={formatHoursMinutes(calculation.travelAndOvertime.roundTripDriveTime)} />
-          <DetailRow label="Driver hourly rate" value={money2(calculation.travelAndOvertime.travelDriverHourlyRate)} />
-          <DetailRow label="Overtime hours per day" value={`${num(calculation.travelAndOvertime.overtimeHoursPerDay, 2)} hrs`} />
-          <DetailRow label="Overtime pay per day" value={money(calculation.travelAndOvertime.overtimePayPerDay)} />
-          <DetailRow label="Total driver travel cost" value={money(calculation.travelAndOvertime.totalDriverTravelCost)} />
-        </div>
-        <div className="detailList" style={{ marginTop: 14 }}>
-          <DetailRow label="API key" value={googleDebug.apiKeyFound ? "Found" : "Missing"} />
-          <DetailRow label="Maps JS loaded" value={String(googleDebug.mapsJsLoaded)} />
-          <DetailRow label="DirectionsService available" value={String(googleDebug.directionsServiceAvailable)} />
-          <DetailRow label="Last Google callback status" value={googleDebug.lastGoogleStatus} />
-          <DetailRow label="Last element status" value={googleDebug.lastElementStatus} />
-          <DetailRow label="Last Google error" value={googleDebug.lastError} />
-        </div>
-      </Section>
-
-      <Section title="Overhead/Operating Cost" subtitle="Direct job cost gets loaded with overhead before markup is applied.">
-        <div className="formGrid">
-          <Field label="Overhead / operating rate">
-            <input type="text" value={`${OVERHEAD_OPERATING_RATE}%`} readOnly />
-          </Field>
-          <Field label="Scope adders">
-            <input type="number" min="0" step="0.01" value={inputs.scopeAdders} onChange={(e) => setField("scopeAdders", e.target.value)} />
           </Field>
           <Field label="Misc cost">
-            <input type="number" min="0" step="0.01" value={inputs.miscCost} onChange={(e) => setField("miscCost", e.target.value)} />
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={inputs.miscCost || 0}
+              onChange={(e) => setField("miscCost", e.target.value)}
+            />
           </Field>
         </div>
-
-        <div className="detailList" style={{ marginTop: 14 }}>
-          <DetailRow label="Direct job cost" value={money(calculation.directJobCost)} />
-          <DetailRow label="Overhead / operating cost" value={money(calculation.overheadOperatingCost)} />
-          <DetailRow label="Total cost before profit" value={money(calculation.totalCostBeforeProfit)} />
-        </div>
       </Section>
 
-      <Section title="Bid options" subtitle="These are markup percentages, not gross margin percentages.">
-        <div className="bidGrid">
-          {calculation.bidOptions.options.map((option) => (
-            <button
-              key={option.percent}
-              type="button"
-              className={`bidCard ${option.percent === calculation.selectedMarkupPercent ? "active" : ""}`}
-              onClick={() => handleSelectedMarkup(option.percent)}
-            >
-              <span className="bidCardTitle">{option.percent}% Markup</span>
-              <strong>Bid: {money(option.bidAmount)}</strong>
-              <span>$/SQ: {money2(option.pricePerSq)}</span>
-              <span>Profit: {money(option.profitDollars)}</span>
+      <SafeTileSection>
+        <Section title="Travel / Overtime" subtitle="Tile travel will be restored after the overhead placement is confirmed.">
+          <p style={{ color: "var(--text-muted)", margin: 0 }}>
+            Travel controls are temporarily hidden while we confirm the Tile overhead section renders in the live browser.
+          </p>
+        </Section>
+
+        <Section title="Bid options" subtitle="These are markup percentages, not gross margin percentages.">
+          <div className="bidGrid">
+            {calculation.bidOptions.options.map((option) => (
+              <button
+                key={option.percent}
+                type="button"
+                className={`bidCard ${option.percent === calculation.selectedMarkupPercent ? "active" : ""}`}
+                onClick={() => handleSelectedMarkup(option.percent)}
+              >
+                <span className="bidCardTitle">{option.percent}% Markup</span>
+                <strong>Bid: {money(option.bidAmount)}</strong>
+                <span>$/SQ: {money2(option.pricePerSq)}</span>
+                <span>Profit: {money(option.profitDollars)}</span>
+              </button>
+            ))}
+          </div>
+
+          <h3 style={{ margin: "18px 0 10px", color: "var(--text-main)", fontSize: "1.05rem", letterSpacing: "0.02em" }}>
+            Custom Bid Amount
+          </h3>
+          <div className="summaryCard">
+            <span className="eyebrow" style={{ display: "block", marginBottom: 8 }}>
+              Custom Bid Amount
+            </span>
+            <label style={{ display: "block", marginBottom: 8, color: "var(--text-muted)", fontSize: "0.95rem" }}>
+              Custom Bid Amount
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={inputs.sprayFoamCustomBidAmount}
+              onChange={(e) => {
+                setField("sprayFoamCustomBidAmount", e.target.value);
+                setField("sprayFoamCustomBidSelected", Number(e.target.value || 0) > 0);
+              }}
+            />
+            <div className="detailList" style={{ marginTop: 12 }}>
+              <DetailRow label="Custom Profit" value={money(calculation.customProfitDollars)} />
+              <DetailRow label="Custom Price Per Square" value={money2(calculation.customPricePerSq)} />
+            </div>
+          </div>
+
+          <div className="detailList" style={{ marginTop: 14 }}>
+            <DetailRow label="Selected markup" value={calculation.customBidSelected ? "Custom Bid" : `${num(calculation.selectedMarkupPercent, 0)}%`} />
+            <DetailRow
+              label={calculation.customBidSelected ? "Custom bid amount" : "Selected bid amount"}
+              value={money(calculation.selectedBidAmount)}
+            />
+            <DetailRow
+              label={calculation.customBidSelected ? "Custom price per SQ" : "Selected price per SQ"}
+              value={money2(calculation.selectedPricePerSq)}
+            />
+            <DetailRow
+              label={calculation.customBidSelected ? "Custom profit" : "Selected profit dollars"}
+              value={money(calculation.selectedProfitDollars)}
+            />
+          </div>
+
+          <div className="actionRow" style={{ marginTop: 16 }}>
+            <button type="button" className="primaryButton" onClick={handleDownloadEstimatePDF}>
+              Download Estimate PDF
             </button>
-          ))}
-        </div>
+          </div>
+        </Section>
 
-        <div className="detailList" style={{ marginTop: 14 }}>
-          <DetailRow label="Selected markup percent" value={`${num(calculation.selectedMarkupPercent, 0)}%`} />
-          <DetailRow label="Selected bid amount" value={money(calculation.selectedBidAmount)} />
-          <DetailRow label="Selected price per SQ" value={money2(calculation.selectedPricePerSq)} />
-          <DetailRow label="Selected profit dollars" value={money(calculation.selectedProfitDollars)} />
-        </div>
-
-        <div className="actionRow" style={{ marginTop: 16 }}>
-          <button type="button" className="primaryButton" onClick={handleDownloadEstimatePDF}>
-            Download Estimate PDF
-          </button>
-        </div>
-      </Section>
-
-      <Section title="Saved estimates" subtitle="Load or delete anything you saved in Supabase.">
-        <div className="savedList">
-          {activeSavedEstimates.length ? (
-            activeSavedEstimates.map((estimate) => (
-              <div className="savedCard" key={estimate.id}>
-                <div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-                    <span className="eyebrow">{estimate.estimateCode || estimateCode(estimate.estimateNumber || 1)}</span>
-                    <span className={`statusTag statusTag-${(estimate.status || "draft").toLowerCase()}`}>
-                      {String(estimate.status || "draft").toUpperCase()}
-                    </span>
+        <Section title="Saved estimates" subtitle="Load or delete anything you saved in Supabase.">
+          <div className="savedList">
+            {activeSavedEstimates.length ? (
+              activeSavedEstimates.map((estimate) => (
+                <div className="savedCard" key={estimate.id}>
+                  <div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                      <span className="eyebrow">{estimate.estimateCode || estimateCode(estimate.estimateNumber || 1)}</span>
+                      <span className={`statusTag statusTag-${(estimate.status || "draft").toLowerCase()}`}>
+                        {String(estimate.status || "draft").toUpperCase()}
+                      </span>
+                    </div>
+                    <strong>{estimate.name || "Untitled estimate"}</strong>
+                    <p>
+                      {estimate.estimateType ? `${estimate.estimateType} | ` : ""}
+                      {estimate.inputs?.jobName ? `${estimate.inputs.jobName} | ` : ""}
+                      {estimate.inputs?.customerName ? `${estimate.inputs.customerName} | ` : ""}
+                      {num(estimate.summary?.totalSquares ?? estimate.inputs?.totalSquares ?? 0, 0)} SQ |{" "}
+                      {money(estimate.summary?.selectedBidAmount ?? 0)} bid |{" "}
+                      {num(estimate.summary?.selectedMarkupPercent ?? 0, 0)}% markup
+                    </p>
                   </div>
-                  <strong>{estimate.name || "Untitled estimate"}</strong>
-                  <p>
-                    {estimate.estimateType ? `${estimate.estimateType} | ` : ""}
-                    {estimate.inputs?.jobName ? `${estimate.inputs.jobName} | ` : ""}
-                    {estimate.inputs?.customerName ? `${estimate.inputs.customerName} | ` : ""}
-                    {num(estimate.summary?.totalSquares ?? estimate.inputs?.totalSquares ?? 0, 0)} SQ |{" "}
-                    {money(estimate.summary?.selectedBidAmount ?? 0)} bid |{" "}
-                    {num(estimate.summary?.selectedMarkupPercent ?? 0, 0)}% markup
-                  </p>
-                </div>
 
-                <div className="savedActions">
-                  <button type="button" className="secondaryButton" onClick={() => handleLoadEstimate(estimate)}>
-                    Load
-                  </button>
-                  <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate.id)}>
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))
-          ) : (
-            <p className="emptyState">No saved estimates yet.</p>
-          )}
-        </div>
-      </Section>
-
-      <Section title="Completed jobs" subtitle="Track jobs marked completed in Supabase.">
-        <div className="savedList">
-          {completedJobs.length ? (
-            completedJobs.map((job) => (
-              <div className="savedCard" key={job.id}>
-                <div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-                    <span className="eyebrow">{job.estimateCode || "Completed Job"}</span>
-                    <span className={`statusTag statusTag-${(job.status || "completed").toLowerCase()}`}>
-                      {String(job.status || "completed").toUpperCase()}
-                    </span>
+                  <div className="savedActions">
+                    <button type="button" className="secondaryButton" onClick={() => handleConvertEstimateToProposal(estimate)}>
+                      Generate Proposal
+                    </button>
+                    <button type="button" className="secondaryButton" onClick={() => handleLoadEstimate(estimate)}>
+                      Load
+                    </button>
+                    <button type="button" className="secondaryButton" onClick={() => handleApproveJob(estimate)}>
+                      Approve Job
+                    </button>
+                    <button type="button" className="secondaryButton" onClick={() => handleCompleteJob(estimate)}>
+                      Complete Job
+                    </button>
+                    <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate.id)}>
+                      Delete
+                    </button>
                   </div>
-                  <strong>{job.customerName || "Unknown customer"}</strong>
-                  <p>
-                    {job.jobAddress ? `${job.jobAddress} | ` : ""}
-                    {job.roofType ? `${job.roofType} | ` : ""}
-                    {num(job.squareCount ?? 0, 0)} SQ | {money(job.finalBid ?? 0)} bid
-                  </p>
                 </div>
-              </div>
-            ))
-          ) : (
-            <p className="emptyState">No completed jobs yet.</p>
-          )}
-        </div>
-      </Section>
+              ))
+            ) : (
+              <p className="emptyState">No saved estimates yet.</p>
+            )}
+          </div>
+        </Section>
+
+        <Section title="Completed jobs" subtitle="Track jobs marked completed in Supabase.">
+          <div className="savedList">
+            {completedJobs.length ? (
+              completedJobs.map((job) => (
+                <div className="savedCard" key={job.id}>
+                  <div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                      <span className="eyebrow">{job.estimateCode || "Completed Job"}</span>
+                      <span className={`statusTag statusTag-${(job.status || "completed").toLowerCase()}`}>
+                        {String(job.status || "completed").toUpperCase()}
+                      </span>
+                    </div>
+                    <strong>{job.customerName || "Unknown customer"}</strong>
+                    <p>
+                      {job.jobAddress ? `${job.jobAddress} | ` : ""}
+                      {job.roofType ? `${job.roofType} | ` : ""}
+                      {num(job.squareCount ?? 0, 0)} SQ | {money(job.finalBid ?? 0)} bid
+                    </p>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="emptyState">No completed jobs yet.</p>
+            )}
+          </div>
+        </Section>
 
       <Section title="Material pricing" subtitle="Edit the unit prices. Leave anything at zero if you want to price it manually later.">
         <div className="formGrid">
@@ -4309,6 +22601,55 @@ function App() {
               />
             </Field>
           ))}
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <div className="actionRow">
+            <button type="button" className="secondaryButton" onClick={addCustomMaterial}>
+              Add material
+            </button>
+            <em style={{ marginLeft: 8 }}>Custom materials saved with estimate</em>
+          </div>
+
+          {Array.isArray(inputs.customMaterials) && inputs.customMaterials.length ? (
+            <div className="tableWrap" style={{ marginTop: 12 }}>
+              <table className="dataTable">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Quantity</th>
+                    <th>Unit</th>
+                    <th>Unit price</th>
+                    <th>Total</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {inputs.customMaterials.map((mat, idx) => (
+                    <tr key={mat.id || idx}>
+                      <td>
+                        <input type="text" value={mat.name} onChange={(e) => updateCustomMaterial(idx, "name", e.target.value)} />
+                      </td>
+                      <td>
+                        <input type="number" min="0" step="1" value={mat.quantity} onChange={(e) => updateCustomMaterial(idx, "quantity", e.target.value)} />
+                      </td>
+                      <td>
+                        <input type="text" value={mat.unit} onChange={(e) => updateCustomMaterial(idx, "unit", e.target.value)} />
+                      </td>
+                      <td>
+                        <input type="number" min="0" step="0.01" value={mat.unitPrice} onChange={(e) => updateCustomMaterial(idx, "unitPrice", e.target.value)} />
+                      </td>
+                      <td>{money((toNumber(mat.quantity, 0) * toNumber(mat.unitPrice, 0)) || 0)}</td>
+                      <td>
+                        <button type="button" className="dangerButton" onClick={() => deleteCustomMaterial(idx)}>
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
         </div>
       </Section>
 
@@ -4400,6 +22741,9 @@ function App() {
             <button type="button" className="primaryButton" onClick={handleSaveEstimate}>
               Save estimate
             </button>
+            <button type="button" className="secondaryButton" onClick={handleConvertCurrentEstimateToProposal}>
+              Generate Proposal
+            </button>
             <button type="button" className="secondaryButton" onClick={handleLogout}>
               Log out
             </button>
@@ -4470,6 +22814,7 @@ function App() {
           <div className="checklistEmpty">All required scope items are filled in. The estimate is ready for bid.</div>
         )}
       </Section>
+      </SafeTileSection>
     </div>
   );
 }
