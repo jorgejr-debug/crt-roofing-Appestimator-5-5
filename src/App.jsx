@@ -473,6 +473,16 @@ function createBlankShingleTearOffSection(index = 0) {
   };
 }
 
+function createBlankShingleSubcontractorItem(type = "") {
+  return {
+    type,
+    unit: "",
+    quantity: 0,
+    unitPrice: 0,
+    licensed: true,
+  };
+}
+
 function createBlankShingleLaborSection(index = 0) {
   return {
     id: `labor-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1567,7 +1577,11 @@ const DEFAULT_INPUTS = {
   shingleTearOffCostPerSquare: 0,
   shingleDumpTrailerFee: 0,
   shingleDryRotAllowance: 0,
+  shingleTearOffPricingUnit: "SQ",
   shingleTearOffSections: [createBlankShingleTearOffSection()],
+  shingleSubcontractorItems: [
+    { ...createBlankShingleSubcontractorItem("Tear-Off Subcontractor"), quantity: 0, unitPrice: 0 },
+  ],
   shingleLaborType: "inHouse",
   shingleLaborersPerDay: 0,
   shingleTotalDaysOnJob: 0,
@@ -4713,6 +4727,17 @@ function normalizeShingleLaborSections(items = []) {
   }));
 }
 
+function normalizeShingleSubcontractorItems(items = []) {
+  const source = Array.isArray(items) && items.length > 0 ? items : DEFAULT_INPUTS.shingleSubcontractorItems || [];
+  return source.map((item, index) => ({
+    type: String(item?.type || (index === 0 ? "Tear-Off Subcontractor" : "")),
+    unit: String(item?.unit || ""),
+    quantity: Math.max(0, toNumber(item?.quantity, 0)),
+    unitPrice: Math.max(0, toNumber(item?.unitPrice, 0)),
+    licensed: typeof item?.licensed === "boolean" ? item.licensed : true,
+  }));
+}
+
 function normalizeSprayFoamSubcontractorItems(items = []) {
   const defaults = DEFAULT_INPUTS.sprayFoamSubcontractorItems || [];
   return defaults.map((defaultItem, index) => {
@@ -4779,7 +4804,7 @@ function calculateSprayFoamRoofAreaTotalsSafe(items = [], setCost = DEFAULT_SPF_
     const parapetWallSquares = row.hasParapetWalls ? row.parapetWallSquares : 0;
     const totalAreaSquares = row.fieldRoofSquares + parapetWallSquares;
     const yieldPerKit = yieldPerInch / Math.max(0.1, row.foamThicknessInches);
-    const kitsNeeded = totalAreaSquares > 0 ? Math.ceil(totalAreaSquares / yieldPerKit) : 0;
+    const kitsNeeded = totalAreaSquares > 0 ? totalAreaSquares / yieldPerKit : 0;
     return {
       ...row,
       parapetWallSquares,
@@ -5120,6 +5145,10 @@ function buildEstimateNameForTemplate(templateKey, inputs) {
   }
 
   return buildEstimateName(inputs);
+}
+
+function handleNumberInputWheel(event) {
+  event.currentTarget.blur();
 }
 
 function Field({ label, hint, children }) {
@@ -5873,8 +5902,8 @@ async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName
         ["Field Squares:", `${num(calculation.fieldSquares ?? calculation.totalFieldSquares ?? calculation.fieldRoofSquares, 2)} SQ`],
         ["Parapet Wall Squares:", `${num(calculation.parapetWallSquares ?? calculation.totalParapetWallSquares ?? calculation.totalParapetSquares, 2)} SQ`],
         ["Total Roof Squares:", `${num(calculation.totalRoofSquares, 2)} SQ`],
-        ["Total Foam Kits:", `${num(calculation.totalFoamKits ?? calculation.foamKitsNeeded, 0)}`],
-        ["Total Foam Cost:", `$${num(calculation.totalFoamCost ?? calculation.foamMaterialCost, 2)}`],
+        ["SPF Material Used:", `${num(calculation.totalFoamKits ?? calculation.foamKitsNeeded, calculation?.isWallFoamEstimate ? 0 : 3)}`],
+        ["SPF Usage Cost:", `$${num(calculation.totalFoamCost ?? calculation.foamMaterialCost, 2)}`],
         ["Estimated Days:", `${num(calculation.estimatedCompletionDays, 0)}`],
         ["Laborers / Day:", `${num(calculation.laborersNeededPerDay, 0)}`],
         ["Total Laborers:", `${num(calculation.totalLaborers, 0)}`],
@@ -5903,7 +5932,7 @@ async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName
         doc.text("Parapet SQ", margin + 82, yPosition);
         doc.text("Total SQ", margin + 123, yPosition);
         doc.text("Yield/Kit", margin + 154, yPosition);
-        doc.text("Kits", margin + 186, yPosition);
+        doc.text("SPF used", margin + 186, yPosition);
         yPosition += 5;
         doc.setFont(undefined, "normal");
         calculation.roofAreas.forEach((row) => {
@@ -5913,7 +5942,7 @@ async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName
           doc.text(`${num(row.parapetWallSquares || 0, 2)}`, margin + 82, yPosition);
           doc.text(`${num(row.totalAreaSquares || 0, 2)}`, margin + 123, yPosition);
           doc.text(`${num(row.yieldPerKit || 0, 2)}`, margin + 154, yPosition);
-          doc.text(`${num(row.kitsNeeded || 0, 0)}`, margin + 186, yPosition);
+          doc.text(`${num(row.kitsNeeded || 0, 3)}`, margin + 186, yPosition);
           yPosition += 5;
         });
       }
@@ -5954,7 +5983,7 @@ function calculateSprayFoamRoofAreaTotals(items = [], setCost = DEFAULT_SPF_RATE
     const parapetWallSquares = row.hasParapetWalls ? row.parapetWallSquares : 0;
     const totalAreaSquares = row.fieldRoofSquares + parapetWallSquares;
     const yieldPerKit = yieldPerInch / Math.max(0.1, row.foamThicknessInches);
-    const kitsNeeded = totalAreaSquares > 0 ? Math.ceil(totalAreaSquares / yieldPerKit) : 0;
+    const kitsNeeded = totalAreaSquares > 0 ? totalAreaSquares / yieldPerKit : 0;
     return {
       ...row,
       parapetWallSquares,
@@ -6130,7 +6159,7 @@ function calculateSprayFoamRoofAreaTotals(items = [], setCost = DEFAULT_SPF_RATE
       doc.setFontSize(10);
       doc.setFont(undefined, "normal");
       const shingleCostRows = [
-        ["Tear-off / disposal:", `$${num(calculation.tearOffDisposalCost, 2)}`],
+        ["Subcontractor cost:", `$${num(calculation.shingleSubcontractorCost, 2)}`],
         ["Labor cost:", `$${num(calculation.laborCost, 2)}`],
         ["Travel & overtime:", `$${num(calculation.totalTravelCost, 2)}`],
         ["City permit fee:", `$${num(calculation.cityPermitFee, 2)}`],
@@ -6670,7 +6699,7 @@ function calculateSprayFoamEstimate(inputs) {
     : isWallFoamEstimate
       ? wallFoamFullKitsNeeded
       : totalRoofSquares > 0
-        ? Math.ceil(totalRoofSquares / yieldPerKitAtSelectedThickness)
+        ? totalRoofSquares / yieldPerKitAtSelectedThickness
         : 0;
   const foamKitCost = foamSetCost;
   const wallFoamMaterialCost =
@@ -7480,6 +7509,7 @@ function calculateShingleEstimate(inputs, travelAndOvertime = calculateTravelAnd
   const inHouseLaborCost = laborersPerDay * totalDaysOnJob * hoursPerDay * laborHourlyRate;
   const shingleSubcontractorLicensed = Boolean(inputs.shingleSubcontractorLicensed);
   const shingleSubcontractorWorkersComp = Boolean(inputs.shingleSubcontractorWorkersComp);
+  const shingleTearOffPricingUnit = String(inputs.shingleTearOffPricingUnit || "SQ");
   const shingleSubcontractorSections = normalizeShingleLaborSections(inputs.shingleSubcontractorSections);
   const shingleSubcontractorSectionTotals = shingleSubcontractorSections.map((section) => {
     const installSquares = Math.max(0, toNumber(section.installSquares, 0));
@@ -7492,6 +7522,27 @@ function calculateShingleEstimate(inputs, travelAndOvertime = calculateTravelAnd
       sectionInstallTotal,
     };
   });
+  const shingleSubcontractorRawItems = normalizeShingleSubcontractorItems(inputs.shingleSubcontractorItems);
+  const shingleSubcontractorItems = shingleSubcontractorRawItems.map((item, index) => {
+    const quantity = Math.max(0, toNumber(item.quantity, 0));
+    const unitPrice = Math.max(0, toNumber(item.unitPrice, 0));
+    const unit = index === 0 ? shingleTearOffPricingUnit : String(item.unit || "");
+    const baseCost = quantity * unitPrice;
+    const workersCompRate = item.licensed ? 0 : 0.198;
+    const workersCompCost = baseCost * workersCompRate;
+    const totalCost = baseCost + workersCompCost;
+    return {
+      ...item,
+      unit,
+      quantity,
+      unitPrice,
+      baseCost,
+      workersCompRate,
+      workersCompCost,
+      totalCost,
+    };
+  });
+  const shingleSubcontractorCost = shingleSubcontractorItems.reduce((sum, item) => sum + item.totalCost, 0);
   const subcontractorInstallSubtotal = shingleSubcontractorSectionTotals.reduce((sum, section) => sum + section.sectionInstallTotal, 0);
   const workersCompRiskAddOn =
     shingleLaborType === "subcontracted" && (!shingleSubcontractorLicensed || !shingleSubcontractorWorkersComp)
@@ -7504,7 +7555,7 @@ function calculateShingleEstimate(inputs, travelAndOvertime = calculateTravelAnd
   const crewSize = laborersPerDay;
   const cityPermitFee = Math.max(0, toNumber(inputs.shingleCityPermitFee, 0));
   const travelCost = travelAndOvertime.totalTravelCost;
-  const directJobCost = materialCost + laborCost + tearOffDisposalCost + travelCost;
+  const directJobCost = materialCost + laborCost + shingleSubcontractorCost + travelCost;
   const overheadOperatingCost = directJobCost * (OVERHEAD_OPERATING_RATE / 100);
   const totalCostBeforeProfit = directJobCost + overheadOperatingCost + cityPermitFee;
   const totalJobCost = totalCostBeforeProfit;
@@ -7580,7 +7631,10 @@ function calculateShingleEstimate(inputs, travelAndOvertime = calculateTravelAnd
     shingleHoursPerDay: hoursPerDay,
     shingleSubcontractorLicensed,
     shingleSubcontractorWorkersComp,
+    shingleTearOffPricingUnit,
     shingleSubcontractorSections: shingleSubcontractorSectionTotals,
+    shingleSubcontractorItems,
+    shingleSubcontractorCost,
     shingleSubcontractorInstallSubtotal: subcontractorInstallSubtotal,
     shingleWorkersCompRiskAddOn: workersCompRiskAddOn,
     shingleTotalSubcontractorLaborCost: totalSubcontractorLaborCost,
@@ -8184,10 +8238,10 @@ function TravelCalculator({
                   <input type="text" value={safeInputs.sprayFoamLodgingName || ""} onChange={(e) => onLodgingNameChange?.(e.target.value)} />
                 </Field>
                 <Field label="Nightly lodging cost">
-                  <input type="number" min="0" step="0.01" value={safeInputs.sprayFoamNightlyLodgingCost || 0} onChange={(e) => onNightlyLodgingCostChange?.(e.target.value)} />
+                  <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={safeInputs.sprayFoamNightlyLodgingCost || 0} onChange={(e) => onNightlyLodgingCostChange?.(e.target.value)} />
                 </Field>
                 <Field label="Number of nights">
-                  <input type="number" min="0" step="1" value={safeInputs.sprayFoamLodgingNights || 0} onChange={(e) => onLodgingNightsChange?.(e.target.value)} />
+                  <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={safeInputs.sprayFoamLodgingNights || 0} onChange={(e) => onLodgingNightsChange?.(e.target.value)} />
                 </Field>
               </>
             ) : null}
@@ -8208,23 +8262,23 @@ function TravelCalculator({
           {travelLookupMessage ? <em>{travelLookupMessage}</em> : null}
         </div>
         <Field label={oneWayMilesLabel}>
-          <input type="number" min="0" step="0.1" value={safeInputs.oneWayMiles || 0} onChange={(e) => onOneWayMilesChange?.(e.target.value)} />
+          <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={safeInputs.oneWayMiles || 0} onChange={(e) => onOneWayMilesChange?.(e.target.value)} />
         </Field>
         <Field label="Average driving speed">
-          <input type="number" min="0" step="1" value={safeInputs.averageDrivingSpeedMph || 0} onChange={(e) => onAverageDrivingSpeedChange?.(e.target.value)} />
+          <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={safeInputs.averageDrivingSpeedMph || 0} onChange={(e) => onAverageDrivingSpeedChange?.(e.target.value)} />
         </Field>
         <Field label="Driver hourly rate">
-          <input type="number" min="0" step="0.01" value={safeInputs.travelDriverHourlyRate || 0} onChange={(e) => onDriverHourlyRateChange?.(e.target.value)} />
+          <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={safeInputs.travelDriverHourlyRate || 0} onChange={(e) => onDriverHourlyRateChange?.(e.target.value)} />
           <em>Typical range $22-$32/hr</em>
         </Field>
         <Field label="Work hours per day">
-          <input type="number" min="0" step="0.1" value={safeInputs.workHoursPerDay || 0} onChange={(e) => onWorkHoursPerDayChange?.(e.target.value)} />
+          <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={safeInputs.workHoursPerDay || 0} onChange={(e) => onWorkHoursPerDayChange?.(e.target.value)} />
         </Field>
         <Field label="Number of job days">
-          <input type="number" min="0" step="1" value={safeInputs.numberOfJobDays || 0} onChange={(e) => onNumberOfJobDaysChange?.(e.target.value)} />
+          <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={safeInputs.numberOfJobDays || 0} onChange={(e) => onNumberOfJobDaysChange?.(e.target.value)} />
         </Field>
         <Field label="Number of drivers">
-          <input type="number" min="0" step="1" value={safeInputs.numberOfDrivers || 0} onChange={(e) => onNumberOfDriversChange?.(e.target.value)} />
+          <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={safeInputs.numberOfDrivers || 0} onChange={(e) => onNumberOfDriversChange?.(e.target.value)} />
         </Field>
         <div className="field" style={{ gridColumn: "1 / -1" }}>
           <label>Trucks on jobsite</label>
@@ -8338,7 +8392,7 @@ function OverheadCalculator({
       <div className="formGrid">
         <Field label="Overhead / operating rate">
           <input
-            type="number"
+            type="number" onWheel={handleNumberInputWheel}
             min="0"
             step="0.1"
             value={inputs.overheadPercent ?? 17.5}
@@ -8347,7 +8401,7 @@ function OverheadCalculator({
         </Field>
         <Field label="Scope adders">
           <input
-            type="number"
+            type="number" onWheel={handleNumberInputWheel}
             min="0"
             step="0.01"
             value={inputs.scopeAdders || 0}
@@ -8356,7 +8410,7 @@ function OverheadCalculator({
         </Field>
         <Field label="Misc cost">
           <input
-            type="number"
+            type="number" onWheel={handleNumberInputWheel}
             min="0"
             step="0.01"
             value={inputs.miscCost || 0}
@@ -8385,6 +8439,56 @@ function App() {
   const [quickMeasureStatus, setQuickMeasureStatus] = useState("");
   const [quickMeasureIsProcessing, setQuickMeasureIsProcessing] = useState(false);
   const quickMeasureFileInputRef = useRef(null);
+  useEffect(() => {
+    const onFocusIn = (e) => {
+      try {
+        const t = e.target;
+        if (!t || t.tagName !== "INPUT" || t.type !== "number") return;
+        const v = String(t.value || "");
+        if (/^0+(?:\.0+)?$/.test(v)) {
+          t.select();
+        }
+      } catch (err) {
+        // ignore
+      }
+    };
+
+    const onBlur = (e) => {
+      try {
+        const t = e.target;
+        if (!t || t.tagName !== "INPUT" || t.type !== "number") return;
+        if (t.value === "") {
+          t.value = "0";
+          const ev = new Event("input", { bubbles: true });
+          t.dispatchEvent(ev);
+        }
+      } catch (err) {
+        // ignore
+      }
+    };
+
+    const onWheel = (e) => {
+      try {
+        const active = document.activeElement;
+        if (!active || active.tagName !== "INPUT" || active.type !== "number") return;
+        // prevent accidental scroll changes to focused numeric inputs
+        active.blur();
+        e.preventDefault();
+      } catch (err) {
+        // ignore
+      }
+    };
+
+    document.addEventListener("focusin", onFocusIn);
+    document.addEventListener("blur", onBlur, true);
+    document.addEventListener("wheel", onWheel, { passive: false });
+
+    return () => {
+      document.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("blur", onBlur, true);
+      document.removeEventListener("wheel", onWheel, { passive: false });
+    };
+  }, []);
   const [googleDebug, setGoogleDebug] = useState({
     apiKeyFound: Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY),
     mapsJsLoaded: false,
@@ -9478,6 +9582,48 @@ function App() {
       return {
         ...current,
         shingleLaborSections: [...rows, createBlankShingleLaborSection(rows.length)],
+      };
+    });
+  };
+
+  const setShingleSubcontractorItem = (index, key, value) => {
+    setInputs((current) => {
+      const rows = normalizeShingleSubcontractorItems(current.shingleSubcontractorItems);
+      const nextRows = rows.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              [key]: key === "licensed" ? Boolean(value) : value,
+            }
+          : row,
+      );
+      return {
+        ...current,
+        shingleSubcontractorItems: nextRows,
+      };
+    });
+  };
+
+  const addShingleSubcontractorItem = () => {
+    setInputs((current) => {
+      const rows = normalizeShingleSubcontractorItems(current.shingleSubcontractorItems);
+      return {
+        ...current,
+        shingleSubcontractorItems: [...rows, createBlankShingleSubcontractorItem()],
+      };
+    });
+  };
+
+  const removeShingleSubcontractorItem = (index) => {
+    setInputs((current) => {
+      const rows = normalizeShingleSubcontractorItems(current.shingleSubcontractorItems);
+      const nextRows = rows.filter((_, rowIndex) => rowIndex !== index);
+      return {
+        ...current,
+        shingleSubcontractorItems:
+          nextRows.length > 0
+            ? nextRows
+            : [{ ...createBlankShingleSubcontractorItem("Tear-Off Subcontractor") }],
       };
     });
   };
@@ -12718,7 +12864,7 @@ function App() {
           </Field>
           <Field label="Total roof area">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.totalRoofArea ?? ""}
@@ -12727,7 +12873,7 @@ function App() {
           </Field>
           <Field label="Total squares">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.totalSquares ?? ""}
@@ -12736,7 +12882,7 @@ function App() {
           </Field>
           <Field label="Perimeter linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.perimeterLinearFeet ?? ""}
@@ -12745,7 +12891,7 @@ function App() {
           </Field>
           <Field label="Ridges/Hips linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.ridgeHipLinearFeet ?? ""}
@@ -12754,7 +12900,7 @@ function App() {
           </Field>
           <Field label="Ridge linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.ridgeLinearFeet ?? ""}
@@ -12763,7 +12909,7 @@ function App() {
           </Field>
           <Field label="Hip linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.hipLinearFeet ?? ""}
@@ -12772,7 +12918,7 @@ function App() {
           </Field>
           <Field label="Valley linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.valleyLinearFeet ?? ""}
@@ -12781,7 +12927,7 @@ function App() {
           </Field>
           <Field label="Rake linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.rakeLinearFeet ?? ""}
@@ -12790,7 +12936,7 @@ function App() {
           </Field>
           <Field label="Eave linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.eaveLinearFeet ?? ""}
@@ -12799,7 +12945,7 @@ function App() {
           </Field>
           <Field label="Starter linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.starterLinearFeet ?? ""}
@@ -12808,7 +12954,7 @@ function App() {
           </Field>
           <Field label="Drip edge linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.dripEdgeLinearFeet ?? ""}
@@ -12820,7 +12966,7 @@ function App() {
           </Field>
           <Field label="Roof facets / sections">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={quickMeasureReport.fields?.roofFacets ?? ""}
@@ -12829,7 +12975,7 @@ function App() {
           </Field>
           <Field label="Pro-Start Starter">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.shingleStarterQuantity ?? ""}
@@ -12838,7 +12984,7 @@ function App() {
           </Field>
           <Field label='2"x2" Drip Edge 10 ft Pieces'>
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.shingleDripEdgePieces ?? ""}
@@ -12847,7 +12993,7 @@ function App() {
           </Field>
           <Field label='Rapid Ridge 8" Ridge Cap'>
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={quickMeasureReport.fields?.shingleRapidRidgeBoxes ?? ""}
@@ -13320,7 +13466,7 @@ function App() {
           </Field>
           <Field label="City permit fee">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.01"
               value={inputs.sprayFoamCityPermitFee}
@@ -13356,7 +13502,7 @@ function App() {
                     <th>Parapet wall squares</th>
                     <th>Total area squares</th>
                     <th>Yield / kit</th>
-                    <th>{(inputs.sprayFoamEstimateType || "roof") === "wall" ? "Sets needed" : "Kits needed"}</th>
+                    <th>{(inputs.sprayFoamEstimateType || "roof") === "wall" ? "Sets needed" : "SPF used"}</th>
                     <th />
                   </tr>
                 </thead>
@@ -13375,7 +13521,7 @@ function App() {
                       <td>
                         <input
                           className="tableInput"
-                          type="number"
+                          type="number" onWheel={handleNumberInputWheel}
                           min="0"
                           step="0.1"
                           value={row.fieldRoofSquares}
@@ -13385,7 +13531,7 @@ function App() {
                       <td>
                         <input
                           className="tableInput"
-                          type="number"
+                          type="number" onWheel={handleNumberInputWheel}
                           min="1"
                           max="16"
                           step="0.1"
@@ -13407,7 +13553,7 @@ function App() {
                         {row.hasParapetWalls ? (
                           <input
                             className="tableInput"
-                            type="number"
+                            type="number" onWheel={handleNumberInputWheel}
                             min="0"
                             step="0.1"
                             value={row.parapetWallSquares}
@@ -13419,7 +13565,7 @@ function App() {
                       </td>
                       <td>{num(row.totalAreaSquares, 2)}</td>
                       <td>{num(row.yieldPerKit, 2)}</td>
-                      <td>{num(row.kitsNeeded, 0)}</td>
+                      <td>{num(row.kitsNeeded, 3)}</td>
                       <td>
                         <button type="button" className="dangerButton" onClick={() => deleteSprayFoamRoofArea(index)}>
                           Delete
@@ -13441,7 +13587,7 @@ function App() {
           <div className="formGrid" style={{ marginTop: 14 }}>
             <Field label="Field roof squares">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="0.1"
                 value={inputs.sprayFoamFieldRoofSquares}
@@ -13450,7 +13596,7 @@ function App() {
             </Field>
             <Field label="Parapet wall squares">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="0.1"
                 value={inputs.sprayFoamParapetWallSquares}
@@ -13464,8 +13610,8 @@ function App() {
           <DetailRow label="Total field squares" value={num(calculation.fieldSquares ?? calculation.totalFieldSquares ?? calculation.fieldRoofSquares, 2)} />
           <DetailRow label="Total parapet wall squares" value={num(calculation.parapetWallSquares ?? calculation.totalParapetWallSquares ?? calculation.totalParapetSquares, 2)} />
           <DetailRow label="Total roof squares" value={num(calculation.totalRoofSquares, 2)} />
-          <DetailRow label={calculation.isWallFoamEstimate ? "Total foam sets" : "Total foam kits"} value={num(calculation.totalFoamKits ?? calculation.foamKitsNeeded, 0)} />
-          <DetailRow label="Total foam cost" value={money2(calculation.totalFoamCost ?? calculation.foamMaterialCost)} />
+          <DetailRow label={calculation.isWallFoamEstimate ? "Total foam sets" : "SPF material used"} value={num(calculation.totalFoamKits ?? calculation.foamKitsNeeded, calculation.isWallFoamEstimate ? 0 : 3)} />
+          <DetailRow label="SPF usage cost" value={money2(calculation.totalFoamCost ?? calculation.foamMaterialCost)} />
         </div>
       </Section>
 
@@ -13473,7 +13619,7 @@ function App() {
         <div className="formGrid">
           <Field label="Selected foam thickness (inches)">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="1"
               max="16"
               step="0.1"
@@ -13483,7 +13629,7 @@ function App() {
           </Field>
           <Field label="Wall thickness">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={inputs.sprayFoamWallThickness}
@@ -13495,7 +13641,7 @@ function App() {
         <div className="detailList" style={{ marginTop: 14 }}>
           <DetailRow label="Selected foam thickness" value={`${num(calculation.selectedFoamThicknessInches, 1)} in`} />
           <DetailRow label={calculation.isWallFoamEstimate ? "Yield per set" : "Yield per kit"} value={`${num(calculation.yieldPerKitAtSelectedThickness, 2)} squares`} />
-          <DetailRow label={calculation.isWallFoamEstimate ? "Sets needed" : "Kits needed"} value={num(calculation.foamKitsNeeded, 0)} />
+          <DetailRow label={calculation.isWallFoamEstimate ? "Sets needed" : "SPF material used"} value={num(calculation.foamKitsNeeded, calculation.isWallFoamEstimate ? 0 : 3)} />
           <DetailRow label={calculation.isWallFoamEstimate ? "Set cost" : "Kit cost"} value={money2(calculation.foamKitCost)} />
           <DetailRow label="Total material cost" value={money2(calculation.totalMaterialCost)} />
         </div>
@@ -13569,7 +13715,7 @@ function App() {
         </div>
 
         <div className="detailList" style={{ marginTop: 14 }}>
-          <DetailRow label="Foam kit cost" value={money2(calculation.foamMaterialCost)} />
+          <DetailRow label="SPF usage cost" value={money2(calculation.foamMaterialCost)} />
           <DetailRow label="Drip edge cost" value={money2(calculation.foamStopDripEdgeCost)} />
         </div>
       </Section>
@@ -13578,7 +13724,7 @@ function App() {
         <div className="formGrid" style={{ marginBottom: 14 }}>
           <Field label="Total linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={inputs.sprayFoamLinearFeet}
@@ -13618,7 +13764,7 @@ function App() {
                         <span style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>Manual</span>
                         <input
                           className="tableInput"
-                          type="number"
+                          type="number" onWheel={handleNumberInputWheel}
                           min="0"
                           step="0.1"
                           value={item.quantity}
@@ -13630,7 +13776,7 @@ function App() {
                     ) : (
                       <input
                         className="tableInput"
-                        type="number"
+                        type="number" onWheel={handleNumberInputWheel}
                         min="0"
                         step="0.1"
                         value={item.quantity}
@@ -13641,7 +13787,7 @@ function App() {
                   <td>
                     <input
                       className="tableInput"
-                      type="number"
+                      type="number" onWheel={handleNumberInputWheel}
                       min="0"
                       step="0.01"
                       value={item.unitCost}
@@ -13676,7 +13822,7 @@ function App() {
                   Rooftop Delivery Fee
                 </label>
                 <input
-                  type="number"
+                  type="number" onWheel={handleNumberInputWheel}
                   min="0"
                   step="0.01"
                   value={inputs.sprayFoamRooftopDeliveryFee}
@@ -13714,7 +13860,7 @@ function App() {
             <div className="formGrid" style={{ marginTop: 12 }}>
               <Field label="Board quantity">
                 <input
-                  type="number"
+                  type="number" onWheel={handleNumberInputWheel}
                   min="0"
                   step="1"
                   value={inputs.sprayFoamSkylightCurbLumberBoardQuantity}
@@ -13724,7 +13870,7 @@ function App() {
               </Field>
               <Field label="Unit cost per 2x8x12 board">
                 <input
-                  type="number"
+                  type="number" onWheel={handleNumberInputWheel}
                   min="0"
                   step="0.01"
                   value={inputs.sprayFoamSkylightCurbLumberBoardUnitCost}
@@ -13769,7 +13915,7 @@ function App() {
                       <td>
                         <input
                           className="tableInput"
-                          type="number"
+                          type="number" onWheel={handleNumberInputWheel}
                           min="0"
                           step="0.1"
                           value={item.quantity}
@@ -13779,7 +13925,7 @@ function App() {
                       <td>
                         <input
                           className="tableInput"
-                          type="number"
+                          type="number" onWheel={handleNumberInputWheel}
                           min="0"
                           step="0.01"
                           value={item.unitCost}
@@ -13850,7 +13996,7 @@ function App() {
                   <td>
                     <input
                       className="tableInput"
-                      type="number"
+                      type="number" onWheel={handleNumberInputWheel}
                       min="0"
                       step="0.01"
                       value={item.rateAmount}
@@ -13860,7 +14006,7 @@ function App() {
                   <td>
                     <input
                       className="tableInput"
-                      type="number"
+                      type="number" onWheel={handleNumberInputWheel}
                       min="0"
                       step="0.1"
                       value={item.quantity}
@@ -13870,7 +14016,7 @@ function App() {
                   <td>
                     <input
                       className="tableInput"
-                      type="number"
+                      type="number" onWheel={handleNumberInputWheel}
                       min="0"
                       step="1"
                       value={item.days}
@@ -13880,7 +14026,7 @@ function App() {
                   <td>
                     <input
                       className="tableInput"
-                      type="number"
+                      type="number" onWheel={handleNumberInputWheel}
                       min="0"
                       step="0.1"
                       value={item.hours}
@@ -13918,7 +14064,7 @@ function App() {
         <div className="formGrid">
           <Field label="Laborers needed per day">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={inputs.sprayFoamLaborersNeededPerDay}
@@ -13927,7 +14073,7 @@ function App() {
           </Field>
           <Field label="Total estimated days">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={inputs.sprayFoamEstimatedCompletionDays}
@@ -13955,7 +14101,7 @@ function App() {
           <div className="formGrid" style={{ marginTop: 14 }}>
             <Field label="Prevailing wage hourly rate">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="0.01"
                 value={inputs.sprayFoamPrevailingWageHourlyRate}
@@ -13964,7 +14110,7 @@ function App() {
             </Field>
             <Field label="Crew size">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="1"
                 value={inputs.sprayFoamPrevailingWageCrewSize}
@@ -13973,7 +14119,7 @@ function App() {
             </Field>
             <Field label="Hours per day">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="0.1"
                 value={inputs.sprayFoamPrevailingWageHoursPerDay}
@@ -13982,7 +14128,7 @@ function App() {
             </Field>
             <Field label="Number of job days">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="1"
                 value={inputs.sprayFoamPrevailingWageJobDays}
@@ -14024,7 +14170,7 @@ function App() {
                     <td>
                       <input
                         className="tableInput"
-                        type="number"
+                        type="number" onWheel={handleNumberInputWheel}
                         min="0"
                         step="0.01"
                         value={item.quantity ?? 0}
@@ -14034,7 +14180,7 @@ function App() {
                     <td>
                       <input
                         className="tableInput"
-                        type="number"
+                        type="number" onWheel={handleNumberInputWheel}
                         min="0"
                         step="0.01"
                         value={item.unitPrice ?? 0}
@@ -14303,7 +14449,7 @@ function App() {
           </Field>
           <Field label="City permit fee">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.01"
               value={inputs.shingleCityPermitFee}
@@ -14317,7 +14463,7 @@ function App() {
         <div className="formGrid">
           <Field label="Roof squares">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={inputs.shingleTotalRoofSquares}
@@ -14326,22 +14472,22 @@ function App() {
           </Field>
           <Field label="Waste percentage">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={inputs.shingleWastePercent}
               onChange={(e) => setField("shingleWastePercent", e.target.value)}
             />
           </Field>
-          <Field label="Valley linear feet"><input type="number" min="0" step="0.1" value={inputs.shingleValleyLf} onChange={(e) => setField("shingleValleyLf", e.target.value)} /></Field>
-          <Field label="Ridge linear feet"><input type="number" min="0" step="0.1" value={inputs.shingleRidgeLf} onChange={(e) => setField("shingleRidgeLf", e.target.value)} /></Field>
-          <Field label="Hip linear feet"><input type="number" min="0" step="0.1" value={inputs.shingleHipLf} onChange={(e) => setField("shingleHipLf", e.target.value)} /></Field>
-          <Field label="Drip edge / perimeter linear feet"><input type="number" min="0" step="0.1" value={inputs.shingleDripEdgeLf} onChange={(e) => setField("shingleDripEdgeLf", e.target.value)} /></Field>
-          <Field label="Starter linear feet"><input type="number" min="0" step="0.1" value={inputs.shingleStarterLf} onChange={(e) => setField("shingleStarterLf", e.target.value)} /></Field>
-          <Field label="Pipe jacks count"><input type="number" min="0" step="1" value={inputs.shinglePipeJacksCount} onChange={(e) => setField("shinglePipeJacksCount", e.target.value)} /></Field>
-          <Field label="Vents count"><input type="number" min="0" step="1" value={inputs.shingleVentsCount} onChange={(e) => setField("shingleVentsCount", e.target.value)} /></Field>
-          <Field label="Skylights count"><input type="number" min="0" step="1" value={inputs.shingleSkylightsCount} onChange={(e) => setField("shingleSkylightsCount", e.target.value)} /></Field>
-          <Field label="Chimney count"><input type="number" min="0" step="1" value={inputs.shingleChimneyCount} onChange={(e) => setField("shingleChimneyCount", e.target.value)} /></Field>
+          <Field label="Valley linear feet"><input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.shingleValleyLf} onChange={(e) => setField("shingleValleyLf", e.target.value)} /></Field>
+          <Field label="Ridge linear feet"><input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.shingleRidgeLf} onChange={(e) => setField("shingleRidgeLf", e.target.value)} /></Field>
+          <Field label="Hip linear feet"><input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.shingleHipLf} onChange={(e) => setField("shingleHipLf", e.target.value)} /></Field>
+          <Field label="Drip edge / perimeter linear feet"><input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.shingleDripEdgeLf} onChange={(e) => setField("shingleDripEdgeLf", e.target.value)} /></Field>
+          <Field label="Starter linear feet"><input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.shingleStarterLf} onChange={(e) => setField("shingleStarterLf", e.target.value)} /></Field>
+          <Field label="Pipe jacks count"><input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.shinglePipeJacksCount} onChange={(e) => setField("shinglePipeJacksCount", e.target.value)} /></Field>
+          <Field label="Vents count"><input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.shingleVentsCount} onChange={(e) => setField("shingleVentsCount", e.target.value)} /></Field>
+          <Field label="Skylights count"><input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.shingleSkylightsCount} onChange={(e) => setField("shingleSkylightsCount", e.target.value)} /></Field>
+          <Field label="Chimney count"><input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.shingleChimneyCount} onChange={(e) => setField("shingleChimneyCount", e.target.value)} /></Field>
         </div>
 
         <div className="detailList" style={{ marginTop: 14 }}>
@@ -14407,7 +14553,7 @@ function App() {
                           <td>
                             <div>
                               <input
-                                type="number"
+                                type="number" onWheel={handleNumberInputWheel}
                                 min="0"
                                 step="0.01"
                                 value={item.quantity}
@@ -14447,7 +14593,7 @@ function App() {
                           <td>{item.unit}</td>
                           <td>
                             <input
-                              type="number"
+                              type="number" onWheel={handleNumberInputWheel}
                               min="0"
                               step="0.01"
                               value={item.unitPrice}
@@ -14532,89 +14678,116 @@ function App() {
         </div>
       </Section>
 
-      <Section title="Tear Off / Disposal" subtitle="How many roof sections need to be torn off?">
-        <div className="actionRow">
-          <button type="button" className="secondaryButton" onClick={addShingleTearOffSection}>
-            Add section
-          </button>
-          <button
-            type="button"
-            className="secondaryButton"
-            onClick={() => removeShingleTearOffSection((normalizeShingleTearOffSections(inputs.shingleTearOffSections).length || 1) - 1)}
-          >
-            Remove section
+      <Section title="Subcontractor" subtitle="Add subcontractor line items for tear-off and additional partner costs.">
+        <div className="formGrid">
+          <Field label="Tear-Off Pricing Unit">
+            <select value={inputs.shingleTearOffPricingUnit} onChange={(e) => setField("shingleTearOffPricingUnit", e.target.value)}>
+              <option value="SQ">SQ</option>
+              <option value="Section">Section</option>
+              <option value="Hour">Hour</option>
+              <option value="Day">Day</option>
+              <option value="Flat rate">Flat rate</option>
+              <option value="Other">Other</option>
+            </select>
+          </Field>
+        </div>
+
+        <div className="tableWrap">
+          <table className="dataTable">
+            <thead>
+              <tr>
+                <th>Subcontractor</th>
+                <th>Quantity</th>
+                <th>Unit</th>
+                <th>Cost per unit</th>
+                <th>Licensed?</th>
+                <th>Workers comp</th>
+                <th>Total cost</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {calculation.shingleSubcontractorItems.map((item, index) => (
+                <tr key={`${item.type || "subcontractor"}-${index}`}>
+                  <td>
+                    {index === 0 ? (
+                      item.type
+                    ) : (
+                      <input
+                        className="tableInput"
+                        type="text"
+                        value={item.type}
+                        placeholder="other subcontractor"
+                        onChange={(e) => setShingleSubcontractorItem(index, "type", e.target.value)}
+                      />
+                    )}
+                  </td>
+                  <td>
+                    <input
+                      className="tableInput"
+                      type="number" onWheel={handleNumberInputWheel}
+                      min="0"
+                      step="0.01"
+                      value={item.quantity ?? 0}
+                      onChange={(e) => setShingleSubcontractorItem(index, "quantity", e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    {index === 0 ? (
+                      calculation.shingleTearOffPricingUnit || "SQ"
+                    ) : (
+                      <input
+                        className="tableInput"
+                        type="text"
+                        value={item.unit}
+                        placeholder="unit"
+                        onChange={(e) => setShingleSubcontractorItem(index, "unit", e.target.value)}
+                      />
+                    )}
+                  </td>
+                  <td>
+                    <input
+                      className="tableInput"
+                      type="number" onWheel={handleNumberInputWheel}
+                      min="0"
+                      step="0.01"
+                      value={item.unitPrice ?? 0}
+                      onChange={(e) => setShingleSubcontractorItem(index, "unitPrice", e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <select
+                      value={item.licensed ? "yes" : "no"}
+                      onChange={(e) => setShingleSubcontractorItem(index, "licensed", e.target.value === "yes")}
+                    >
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </td>
+                  <td>{money2(item.workersCompCost || 0)}</td>
+                  <td>{money2(item.totalCost || 0)}</td>
+                  <td>
+                    {index > 0 ? (
+                      <button type="button" className="secondaryButton" onClick={() => removeShingleSubcontractorItem(index)}>
+                        Remove
+                      </button>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="actionRow" style={{ marginTop: 14 }}>
+          <button type="button" className="secondaryButton" onClick={addShingleSubcontractorItem}>
+            Add subcontractor
           </button>
         </div>
+
         <div className="detailList" style={{ marginTop: 14 }}>
-          <DetailRow label="Number of tear-off sections" value={num(calculation.shingleTearOffSectionTotals?.length || 0, 0)} />
-          <DetailRow label="Total Tear-Off / Disposal Cost" value={money2(calculation.tearOffDisposalCost)} />
-        </div>
-        <div className="detailList" style={{ marginTop: 14 }}>
-          {normalizeShingleTearOffSections(inputs.shingleTearOffSections).map((section, index) => {
-            const sectionTotal = calculation.shingleTearOffSectionTotals?.[index]?.sectionTearOffTotal ?? 0;
-            return (
-              <div className="summaryCard" key={section.id || index}>
-                <h3 style={{ marginTop: 0 }}>Section {index + 1}</h3>
-                <div className="formGrid">
-                  <Field label="Section name/label">
-                    <input
-                      type="text"
-                      value={section.label}
-                      onChange={(e) => setShingleTearOffSection(index, "label", e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Squares for this section">
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.1"
-                      value={section.squares}
-                      onChange={(e) => setShingleTearOffSection(index, "squares", e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Number of existing layers">
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={section.layers}
-                      onChange={(e) => setShingleTearOffSection(index, "layers", e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Tear-off cost per square">
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={section.tearOffCostPerSquare}
-                      onChange={(e) => setShingleTearOffSection(index, "tearOffCostPerSquare", e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Disposal fee / dump fee">
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={section.disposalFee}
-                      onChange={(e) => setShingleTearOffSection(index, "disposalFee", e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Dry rot allowance">
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={section.dryRotAllowance}
-                      onChange={(e) => setShingleTearOffSection(index, "dryRotAllowance", e.target.value)}
-                    />
-                  </Field>
-                </div>
-                <div className="detailList" style={{ marginTop: 12 }}>
-                  <DetailRow label="Section tear-off total" value={money2(sectionTotal)} />
-                </div>
-              </div>
-            );
-          })}
+          <DetailRow label="Subcontractor rows" value={num(calculation.shingleSubcontractorItems.length, 0)} />
+          <DetailRow label="Total subcontractor cost" value={money2(calculation.shingleSubcontractorCost || 0)} />
         </div>
       </Section>
 
@@ -14632,16 +14805,16 @@ function App() {
           <>
             <div className="formGrid" style={{ marginTop: 14 }}>
               <Field label="Laborers per day">
-                <input type="number" min="0" step="1" value={inputs.shingleLaborersPerDay} onChange={(e) => setField("shingleLaborersPerDay", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.shingleLaborersPerDay} onChange={(e) => setField("shingleLaborersPerDay", e.target.value)} />
               </Field>
               <Field label="Total days on job">
-                <input type="number" min="0" step="1" value={inputs.shingleTotalDaysOnJob} onChange={(e) => setField("shingleTotalDaysOnJob", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.shingleTotalDaysOnJob} onChange={(e) => setField("shingleTotalDaysOnJob", e.target.value)} />
               </Field>
               <Field label="Labor hourly rate">
-                <input type="number" min="0" step="0.01" value={inputs.shingleLaborHourlyRate} onChange={(e) => setField("shingleLaborHourlyRate", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={inputs.shingleLaborHourlyRate} onChange={(e) => setField("shingleLaborHourlyRate", e.target.value)} />
               </Field>
               <Field label="Hours per day">
-                <input type="number" min="0" step="0.1" value={inputs.shingleHoursPerDay} onChange={(e) => setField("shingleHoursPerDay", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.shingleHoursPerDay} onChange={(e) => setField("shingleHoursPerDay", e.target.value)} />
               </Field>
             </div>
             <div className="detailList" style={{ marginTop: 14 }}>
@@ -14687,10 +14860,10 @@ function App() {
                         <input type="text" value={section.label} onChange={(e) => setShingleLaborSection(index, "label", e.target.value)} />
                       </Field>
                       <Field label="Install squares">
-                        <input type="number" min="0" step="0.1" value={section.installSquares} onChange={(e) => setShingleLaborSection(index, "installSquares", e.target.value)} />
+                        <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={section.installSquares} onChange={(e) => setShingleLaborSection(index, "installSquares", e.target.value)} />
                       </Field>
                       <Field label="Cost per install SQ">
-                        <input type="number" min="0" step="0.01" value={section.costPerInstallSq} onChange={(e) => setShingleLaborSection(index, "costPerInstallSq", e.target.value)} />
+                        <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={section.costPerInstallSq} onChange={(e) => setShingleLaborSection(index, "costPerInstallSq", e.target.value)} />
                       </Field>
                     </div>
                     <div className="detailList" style={{ marginTop: 10 }}>
@@ -14751,7 +14924,7 @@ function App() {
           {calculation.prevailingWageJob ? (
             <DetailRow label="Prevailing wage labor" value={money2(calculation.prevailingWageLaborCost)} />
           ) : null}
-          <DetailRow label="Tear-off / disposal cost" value={money2(calculation.tearOffDisposalCost)} />
+          <DetailRow label="Subcontractor cost" value={money2(calculation.shingleSubcontractorCost || 0)} />
           <DetailRow label="Travel cost" value={money2(calculation.travelCost)} />
           <DetailRow label="City permit fee" value={money2(calculation.cityPermitFee)} />
           <DetailRow label="Equipment / rental total" value={money2(calculation.equipmentRentalTotal)} />
@@ -14799,7 +14972,7 @@ function App() {
           <h3>Custom Bid Amount</h3>
           <label>Custom Bid Amount</label>
           <input
-            type="number"
+            type="number" onWheel={handleNumberInputWheel}
             min="0"
             step="0.01"
             value={inputs.shingleCustomBidAmount}
@@ -14914,17 +15087,17 @@ function App() {
             />
           </Field>
           <Field label="A/C units count">
-            <input type="number" min="0" step="1" value={fieldNotes.acUnitsCount} onChange={(e) => handleFieldNotesChange("acUnitsCount", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={fieldNotes.acUnitsCount} onChange={(e) => handleFieldNotesChange("acUnitsCount", e.target.value)} />
           </Field>
           <Field label="Drains count">
-            <input type="number" min="0" step="1" value={fieldNotes.drainsCount} onChange={(e) => handleFieldNotesChange("drainsCount", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={fieldNotes.drainsCount} onChange={(e) => handleFieldNotesChange("drainsCount", e.target.value)} />
           </Field>
           <Field label="Scuppers count">
-            <input type="number" min="0" step="1" value={fieldNotes.scuppersCount} onChange={(e) => handleFieldNotesChange("scuppersCount", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={fieldNotes.scuppersCount} onChange={(e) => handleFieldNotesChange("scuppersCount", e.target.value)} />
           </Field>
           <Field label="Penetrations / vents count">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={fieldNotes.penetrationsCount}
@@ -15186,7 +15359,7 @@ function App() {
               <input type="date" value={employeeManagementDraft.hireDate} onChange={(e) => updateEmployeeDraftField("hireDate", e.target.value)} />
             </Field>
             <Field label="Hourly Rate">
-              <input type="number" min="0" step="0.01" value={employeeManagementDraft.hourlyRate} onChange={(e) => updateEmployeeDraftField("hourlyRate", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={employeeManagementDraft.hourlyRate} onChange={(e) => updateEmployeeDraftField("hourlyRate", e.target.value)} />
             </Field>
             <Field label="Payroll ID">
               <input type="text" value={employeeManagementDraft.payrollId} onChange={(e) => updateEmployeeDraftField("payrollId", e.target.value)} />
@@ -15720,13 +15893,13 @@ function App() {
                         </select>
                       </Field>
                       <Field label="Contract amount">
-                        <input type="number" min="0" step="0.01" value={job.contractAmount} onChange={(e) => updateCrmJobField(job.id, "contractAmount", e.target.value)} />
+                        <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={job.contractAmount} onChange={(e) => updateCrmJobField(job.id, "contractAmount", e.target.value)} />
                       </Field>
                       <Field label="Amount billed">
-                        <input type="number" min="0" step="0.01" value={job.amountBilled} onChange={(e) => updateCrmJobField(job.id, "amountBilled", e.target.value)} />
+                        <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={job.amountBilled} onChange={(e) => updateCrmJobField(job.id, "amountBilled", e.target.value)} />
                       </Field>
                       <Field label="Amount collected">
-                        <input type="number" min="0" step="0.01" value={job.amountCollected} onChange={(e) => updateCrmJobField(job.id, "amountCollected", e.target.value)} />
+                        <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={job.amountCollected} onChange={(e) => updateCrmJobField(job.id, "amountCollected", e.target.value)} />
                       </Field>
                       <Field label="Start date">
                         <input type="date" value={job.startDate} onChange={(e) => updateCrmJobField(job.id, "startDate", e.target.value)} />
@@ -16051,7 +16224,7 @@ function App() {
                 <input type="text" value={crmLeadDraft.referredBy} onChange={(e) => updateCrmLeadDraftField("referredBy", e.target.value)} />
               </Field>
               <Field label="Estimated value">
-                <input type="number" min="0" step="0.01" value={crmLeadDraft.estimatedValue} onChange={(e) => updateCrmLeadDraftField("estimatedValue", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={crmLeadDraft.estimatedValue} onChange={(e) => updateCrmLeadDraftField("estimatedValue", e.target.value)} />
               </Field>
               <Field label="Next follow-up date">
                 <input type="date" value={crmLeadDraft.nextFollowUpDate} onChange={(e) => updateCrmLeadDraftField("nextFollowUpDate", e.target.value)} />
@@ -16463,7 +16636,7 @@ function App() {
         <div className="formGrid">
           {ADMIN_PRICING_SECTIONS.materials.map(([key, label]) => (
             <Field key={key} label={label}>
-              <input type="number" min="0" step="0.01" value={adminPricing[key]} onChange={(e) => setAdminPricingField(key, e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={adminPricing[key]} onChange={(e) => setAdminPricingField(key, e.target.value)} />
             </Field>
           ))}
         </div>
@@ -16473,7 +16646,7 @@ function App() {
         <div className="formGrid">
           {ADMIN_PRICING_SECTIONS.labor.map(([key, label]) => (
             <Field key={key} label={label}>
-              <input type="number" min="0" step="0.01" value={adminPricing[key]} onChange={(e) => setAdminPricingField(key, e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={adminPricing[key]} onChange={(e) => setAdminPricingField(key, e.target.value)} />
             </Field>
           ))}
         </div>
@@ -16483,7 +16656,7 @@ function App() {
         <div className="formGrid">
           {ADMIN_PRICING_SECTIONS.companyDefaults.map(([key, label]) => (
             <Field key={key} label={label}>
-              <input type="number" min="0" step="0.01" value={adminPricing[key]} onChange={(e) => setAdminPricingField(key, e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={adminPricing[key]} onChange={(e) => setAdminPricingField(key, e.target.value)} />
             </Field>
           ))}
         </div>
@@ -16700,10 +16873,10 @@ function App() {
               <input type="text" value={approvedJobData.roofType} disabled />
             </Field>
             <Field label="Total squares">
-              <input type="number" value={approvedJobData.totalSquares} disabled />
+              <input type="number" onWheel={handleNumberInputWheel} value={approvedJobData.totalSquares} disabled />
             </Field>
             <Field label="Approved bid amount">
-              <input type="number" value={approvedJobData.approvedBidAmount} onChange={(e) => handleApprovedJobFormChange("approvedBidAmount", toNumber(e.target.value))} />
+              <input type="number" onWheel={handleNumberInputWheel} value={approvedJobData.approvedBidAmount} onChange={(e) => handleApprovedJobFormChange("approvedBidAmount", toNumber(e.target.value))} />
             </Field>
             <Field label="Job status">
               <select value={approvedJobData.status} onChange={(e) => handleApprovedJobFormChange("status", e.target.value)}>
@@ -16731,7 +16904,7 @@ function App() {
                     <input type="date" value={day.date} onChange={(e) => handleDailyProgressFieldChange(day.id, "date", e.target.value)} />
                   </Field>
                   <Field label="Crew size">
-                    <input type="number" min="0" step="1" value={day.crewSize} onChange={(e) => handleDailyProgressFieldChange(day.id, "crewSize", toNumber(e.target.value))} />
+                    <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={day.crewSize} onChange={(e) => handleDailyProgressFieldChange(day.id, "crewSize", toNumber(e.target.value))} />
                   </Field>
                   <div style={{ display: "flex", alignItems: "flex-end" }}>
                     <button type="button" className="dangerButton" style={{ marginTop: 24 }} onClick={() => handleDeleteDailyProgressDay(day.id)}>
@@ -16752,13 +16925,13 @@ function App() {
                                 <input type="text" value={employee.employeeName} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "employeeName", e.target.value)} />
                               </Field>
                               <Field label="Hours">
-                                <input type="number" min="0" step="0.5" value={employee.hoursWorked} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "hoursWorked", toNumber(e.target.value))} />
+                                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.5" value={employee.hoursWorked} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "hoursWorked", toNumber(e.target.value))} />
                               </Field>
                               <Field label="Hourly rate">
-                                <input type="number" min="0" step="0.01" value={employee.hourlyRate} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "hourlyRate", toNumber(e.target.value))} />
+                                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={employee.hourlyRate} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "hourlyRate", toNumber(e.target.value))} />
                               </Field>
                               <Field label="Labor cost">
-                                <input type="number" value={round(laborCost, 2)} disabled />
+                                <input type="number" onWheel={handleNumberInputWheel} value={round(laborCost, 2)} disabled />
                               </Field>
                             </div>
                             <div className="actionRow" style={{ marginTop: 12 }}>
@@ -16788,13 +16961,13 @@ function App() {
                                 <input type="text" value={material.description} onChange={(e) => handleMaterialItemChange(day.id, material.id, "description", e.target.value)} />
                               </Field>
                               <Field label="Quantity">
-                                <input type="number" min="0" step="0.01" value={material.quantity} onChange={(e) => handleMaterialItemChange(day.id, material.id, "quantity", toNumber(e.target.value))} />
+                                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={material.quantity} onChange={(e) => handleMaterialItemChange(day.id, material.id, "quantity", toNumber(e.target.value))} />
                               </Field>
                               <Field label="Unit cost">
-                                <input type="number" min="0" step="0.01" value={material.unitCost} onChange={(e) => handleMaterialItemChange(day.id, material.id, "unitCost", toNumber(e.target.value))} />
+                                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={material.unitCost} onChange={(e) => handleMaterialItemChange(day.id, material.id, "unitCost", toNumber(e.target.value))} />
                               </Field>
                               <Field label="Total cost">
-                                <input type="number" value={round(totalCost, 2)} disabled />
+                                <input type="number" onWheel={handleNumberInputWheel} value={round(totalCost, 2)} disabled />
                               </Field>
                             </div>
                             <div className="actionRow" style={{ marginTop: 12 }}>
@@ -16985,7 +17158,7 @@ function App() {
               <input type="text" value={metricsFormData.customerName} disabled />
             </Field>
             <Field label="Total squares">
-              <input type="number" value={metricsFormData.totalSquares} disabled />
+              <input type="number" onWheel={handleNumberInputWheel} value={metricsFormData.totalSquares} disabled />
             </Field>
             <Field label="Roof type">
               <input type="text" value={metricsFormData.roofType} disabled />
@@ -16994,16 +17167,16 @@ function App() {
 
           <div className="formGrid" style={{ marginTop: 12 }}>
             <Field label="Estimated final bid">
-              <input type="number" value={money(metricsFormData.estimateFinalBid)} disabled />
+              <input type="number" onWheel={handleNumberInputWheel} value={money(metricsFormData.estimateFinalBid)} disabled />
             </Field>
             <Field label="Estimated material cost">
-              <input type="number" value={money(metricsFormData.estimateMaterialCost)} disabled />
+              <input type="number" onWheel={handleNumberInputWheel} value={money(metricsFormData.estimateMaterialCost)} disabled />
             </Field>
             <Field label="Estimated labor cost">
-              <input type="number" value={money(metricsFormData.estimateLaborCost)} disabled />
+              <input type="number" onWheel={handleNumberInputWheel} value={money(metricsFormData.estimateLaborCost)} disabled />
             </Field>
             <Field label="Estimated travel cost">
-              <input type="number" value={money(metricsFormData.estimateTravelCost)} disabled />
+              <input type="number" onWheel={handleNumberInputWheel} value={money(metricsFormData.estimateTravelCost)} disabled />
             </Field>
           </div>
         </Section>
@@ -17012,7 +17185,7 @@ function App() {
           <div className="formGrid">
             <Field label="Actual material cost">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="0.01"
                 value={metricsFormData.actualMaterialCost}
@@ -17021,7 +17194,7 @@ function App() {
             </Field>
             <Field label="Actual labor cost">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="0.01"
                 value={metricsFormData.actualLaborCost}
@@ -17030,7 +17203,7 @@ function App() {
             </Field>
             <Field label="Actual labor hours">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="0.5"
                 value={metricsFormData.actualLaborHours}
@@ -17039,7 +17212,7 @@ function App() {
             </Field>
             <Field label="Actual travel cost">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="0.01"
                 value={metricsFormData.actualTravelCost}
@@ -17048,7 +17221,7 @@ function App() {
             </Field>
             <Field label="Change orders">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="0.01"
                 value={metricsFormData.changeOrders}
@@ -17057,7 +17230,7 @@ function App() {
             </Field>
             <Field label="Final invoice amount">
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="0.01"
                 value={metricsFormData.finalInvoiceAmount}
@@ -17270,6 +17443,10 @@ function App() {
         : tileProfile === "sTile" || tileProfile === "claySTile"
           ? "3\""
           : "2-1/2\"";
+    const tileAdjustedTileSquares = Number(calculation?.tileAdjustedTileSquares ?? 0);
+    const totalNailsNeededCalculated = tileAdjustedTileSquares * 10 * Math.max(0, toNumber(inputs.tileFastenersNailsPerTile, 1));
+    const fastenerNailsPerBox = Math.max(1, toNumber(inputs.tileFastenersNailsPerBox, 400));
+    const fastenerBoxesCalculated = totalNailsNeededCalculated > 0 ? Math.ceil(totalNailsNeededCalculated / fastenerNailsPerBox) : 0;
 
     return (
     <div className="appShell" onFocusCapture={handleSelectZeroOnFocus}>
@@ -17319,7 +17496,7 @@ function App() {
             <input type="text" value={inputs.salesperson} onChange={(e) => setField("salesperson", e.target.value)} />
           </Field>
           <Field label="City permit fee">
-            <input type="number" min="0" step="0.01" value={inputs.cityPermitFee || 0} onChange={(e) => setField("cityPermitFee", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={inputs.cityPermitFee || 0} onChange={(e) => setField("cityPermitFee", e.target.value)} />
           </Field>
         </div>
       </Section>
@@ -17371,48 +17548,48 @@ function App() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 16 }}>
           <div className="formGrid">
             <Field label="Roof squares">
-              <input type="number" min="0" step="0.1" value={inputs.tileTotalRoofSquares} onChange={(e) => setField("tileTotalRoofSquares", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileTotalRoofSquares} onChange={(e) => setField("tileTotalRoofSquares", e.target.value)} />
             </Field>
             <Field label="Valley linear feet">
-              <input type="number" min="0" step="0.1" value={inputs.tileValleyLf} onChange={(e) => setField("tileValleyLf", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileValleyLf} onChange={(e) => setField("tileValleyLf", e.target.value)} />
             </Field>
             <Field label="Hip linear feet">
-              <input type="number" min="0" step="0.1" value={inputs.tileHipLf} onChange={(e) => setField("tileHipLf", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileHipLf} onChange={(e) => setField("tileHipLf", e.target.value)} />
             </Field>
             <Field label="Battens linear feet">
-              <input type="number" min="0" step="0.1" value={inputs.tileBattensLf || 0} onChange={(e) => setField("tileBattensLf", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileBattensLf || 0} onChange={(e) => setField("tileBattensLf", e.target.value)} />
             </Field>
             <Field label="Left rake linear feet">
-              <input type="number" min="0" step="0.1" value={inputs.tileLeftRakeLf || 0} onChange={(e) => setField("tileLeftRakeLf", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileLeftRakeLf || 0} onChange={(e) => setField("tileLeftRakeLf", e.target.value)} />
             </Field>
             <Field label="Bird stop linear feet (if required)">
-              <input type="number" min="0" step="0.1" value={inputs.tileBirdStopLf || 0} onChange={(e) => setField("tileBirdStopLf", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileBirdStopLf || 0} onChange={(e) => setField("tileBirdStopLf", e.target.value)} />
             </Field>
             <Field label="Vents count">
-              <input type="number" min="0" step="1" value={inputs.tileVentsCount} onChange={(e) => setField("tileVentsCount", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileVentsCount} onChange={(e) => setField("tileVentsCount", e.target.value)} />
             </Field>
             <Field label="Chimney count">
-              <input type="number" min="0" step="1" value={inputs.tileChimneyCount} onChange={(e) => setField("tileChimneyCount", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileChimneyCount} onChange={(e) => setField("tileChimneyCount", e.target.value)} />
             </Field>
           </div>
           <div className="formGrid">
             <Field label="Waste percentage">
-              <input type="number" min="0" step="0.1" value={inputs.tileWastePercent} onChange={(e) => setField("tileWastePercent", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileWastePercent} onChange={(e) => setField("tileWastePercent", e.target.value)} />
             </Field>
             <Field label="Ridge linear feet">
-              <input type="number" min="0" step="0.1" value={inputs.tileRidgeLf} onChange={(e) => setField("tileRidgeLf", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileRidgeLf} onChange={(e) => setField("tileRidgeLf", e.target.value)} />
             </Field>
             <Field label="Drip edge / perimeter linear feet">
-              <input type="number" min="0" step="0.1" value={inputs.tileDripEdgeLf} onChange={(e) => setField("tileDripEdgeLf", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileDripEdgeLf} onChange={(e) => setField("tileDripEdgeLf", e.target.value)} />
             </Field>
             <Field label="Right rake linear feet">
-              <input type="number" min="0" step="0.1" value={inputs.tileRightRakeLf || 0} onChange={(e) => setField("tileRightRakeLf", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileRightRakeLf || 0} onChange={(e) => setField("tileRightRakeLf", e.target.value)} />
             </Field>
             <Field label="Tile raiser linear feet (if required)">
-              <input type="number" min="0" step="0.1" value={inputs.tileTileRaiserLf || 0} onChange={(e) => setField("tileTileRaiserLf", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileTileRaiserLf || 0} onChange={(e) => setField("tileTileRaiserLf", e.target.value)} />
             </Field>
             <Field label="Skylights count">
-              <input type="number" min="0" step="1" value={inputs.tileSkylightsCount} onChange={(e) => setField("tileSkylightsCount", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileSkylightsCount} onChange={(e) => setField("tileSkylightsCount", e.target.value)} />
             </Field>
           </div>
         </div>
@@ -17420,25 +17597,25 @@ function App() {
           <h3 style={{ marginTop: 0 }}>Roof Jack Penetrations</h3>
           <div className="formGrid" style={{ marginTop: 10 }}>
             <Field label='1-1/2" pipe penetrations'>
-              <input type="number" min="0" step="1" value={inputs.tileOneHalfPipePenetrations} onChange={(e) => setField("tileOneHalfPipePenetrations", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileOneHalfPipePenetrations} onChange={(e) => setField("tileOneHalfPipePenetrations", e.target.value)} />
             </Field>
             <Field label='2" pipe penetrations'>
-              <input type="number" min="0" step="1" value={inputs.tileTwoInchPipePenetrations} onChange={(e) => setField("tileTwoInchPipePenetrations", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileTwoInchPipePenetrations} onChange={(e) => setField("tileTwoInchPipePenetrations", e.target.value)} />
             </Field>
             <Field label='3" pipe penetrations'>
-              <input type="number" min="0" step="1" value={inputs.tileThreeInchPipePenetrations} onChange={(e) => setField("tileThreeInchPipePenetrations", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileThreeInchPipePenetrations} onChange={(e) => setField("tileThreeInchPipePenetrations", e.target.value)} />
             </Field>
             <Field label='4" pipe penetrations'>
-              <input type="number" min="0" step="1" value={inputs.tileFourInchPipePenetrations} onChange={(e) => setField("tileFourInchPipePenetrations", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileFourInchPipePenetrations} onChange={(e) => setField("tileFourInchPipePenetrations", e.target.value)} />
             </Field>
             <Field label="Oval pipe penetrations">
-              <input type="number" min="0" step="1" value={inputs.tileOvalPipePenetrations} onChange={(e) => setField("tileOvalPipePenetrations", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileOvalPipePenetrations} onChange={(e) => setField("tileOvalPipePenetrations", e.target.value)} />
             </Field>
             <Field label="Americap quantity">
-              <input type="number" min="0" step="1" value={inputs.tileAmericapQuantity} onChange={(e) => setField("tileAmericapQuantity", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileAmericapQuantity} onChange={(e) => setField("tileAmericapQuantity", e.target.value)} />
             </Field>
             <Field label="Oval cap quantity">
-              <input type="number" min="0" step="1" value={inputs.tileOvalCapQuantity} onChange={(e) => setField("tileOvalCapQuantity", e.target.value)} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileOvalCapQuantity} onChange={(e) => setField("tileOvalCapQuantity", e.target.value)} />
             </Field>
           </div>
         </div>
@@ -17554,7 +17731,7 @@ function App() {
                     <div className="formGrid" style={{ marginTop: 10 }}>
                       <Field label="Tile pallet yield in SQ per pallet">
                         <input
-                          type="number"
+                          type="number" onWheel={handleNumberInputWheel}
                           min="0"
                           step="0.1"
                           value={inputs.tilePalletYieldSqPerPallet || 0}
@@ -17563,7 +17740,7 @@ function App() {
                       </Field>
                       <Field label="Tile waste percentage">
                         <input
-                          type="number"
+                          type="number" onWheel={handleNumberInputWheel}
                           min="0"
                           step="0.1"
                           value={inputs.tileWastePercent}
@@ -17572,7 +17749,7 @@ function App() {
                       </Field>
                       <Field label="Broken tile allowance percentage">
                         <input
-                          type="number"
+                          type="number" onWheel={handleNumberInputWheel}
                           min="0"
                           step="0.1"
                           value={inputs.tileBrokenTileAllowancePercent || 3}
@@ -17752,7 +17929,7 @@ function App() {
                         </td>
                         <td>
                           <input
-                            type="number"
+                            type="number" onWheel={handleNumberInputWheel}
                             min="0"
                             step="0.01"
                             readOnly={lockedQuantityKeys.has(item.key)}
@@ -17823,7 +18000,7 @@ function App() {
                         <td>{item.unit}</td>
                         <td>
                           <input
-                            type="number"
+                            type="number" onWheel={handleNumberInputWheel}
                             min="0"
                             step="0.01"
                             value={item.unitPrice}
@@ -17871,7 +18048,7 @@ function App() {
                         </td>
                         <td>
                           <input
-                            type="number"
+                            type="number" onWheel={handleNumberInputWheel}
                             min="0"
                             step="0.01"
                             value={quantity}
@@ -17880,7 +18057,7 @@ function App() {
                         </td>
                         <td>
                           <input
-                            type="number"
+                            type="number" onWheel={handleNumberInputWheel}
                             min="0"
                             step="0.01"
                             value={unitPrice}
@@ -17934,19 +18111,19 @@ function App() {
                     <input type="text" value={section.label} onChange={(e) => setTileTearOffSection(index, "label", e.target.value)} />
                   </Field>
                   <Field label="Squares for this section">
-                    <input type="number" min="0" step="0.1" value={section.squares} onChange={(e) => setTileTearOffSection(index, "squares", e.target.value)} />
+                    <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={section.squares} onChange={(e) => setTileTearOffSection(index, "squares", e.target.value)} />
                   </Field>
                   <Field label="Number of existing layers">
-                    <input type="number" min="1" step="1" value={section.layers} onChange={(e) => setTileTearOffSection(index, "layers", e.target.value)} />
+                    <input type="number" onWheel={handleNumberInputWheel} min="1" step="1" value={section.layers} onChange={(e) => setTileTearOffSection(index, "layers", e.target.value)} />
                   </Field>
                   <Field label="Tear-off cost per square">
-                    <input type="number" min="0" step="0.01" value={section.tearOffCostPerSquare} onChange={(e) => setTileTearOffSection(index, "tearOffCostPerSquare", e.target.value)} />
+                    <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={section.tearOffCostPerSquare} onChange={(e) => setTileTearOffSection(index, "tearOffCostPerSquare", e.target.value)} />
                   </Field>
                   <Field label="Disposal fee / dump fee">
-                    <input type="number" min="0" step="0.01" value={section.disposalFee} onChange={(e) => setTileTearOffSection(index, "disposalFee", e.target.value)} />
+                    <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={section.disposalFee} onChange={(e) => setTileTearOffSection(index, "disposalFee", e.target.value)} />
                   </Field>
                   <Field label="Dry rot allowance">
-                    <input type="number" min="0" step="0.01" value={section.dryRotAllowance} onChange={(e) => setTileTearOffSection(index, "dryRotAllowance", e.target.value)} />
+                    <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={section.dryRotAllowance} onChange={(e) => setTileTearOffSection(index, "dryRotAllowance", e.target.value)} />
                   </Field>
                 </div>
                 <div className="detailList" style={{ marginTop: 12 }}>
@@ -17972,17 +18149,17 @@ function App() {
           <>
             <div className="formGrid" style={{ marginTop: 14 }}>
               <Field label="Laborers per day">
-                <input type="number" min="0" step="1" value={inputs.tileLaborersPerDay} onChange={(e) => setField("tileLaborersPerDay", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileLaborersPerDay} onChange={(e) => setField("tileLaborersPerDay", e.target.value)} />
               </Field>
               <Field label="Total days on job">
-                <input type="number" min="0" step="1" value={inputs.tileTotalDaysOnJob} onChange={(e) => setField("tileTotalDaysOnJob", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tileTotalDaysOnJob} onChange={(e) => setField("tileTotalDaysOnJob", e.target.value)} />
               </Field>
               <Field label="Labor hourly rate">
-                <input type="number" min="0" step="0.01" value={inputs.tileLaborHourlyRate} onChange={(e) => setField("tileLaborHourlyRate", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={inputs.tileLaborHourlyRate} onChange={(e) => setField("tileLaborHourlyRate", e.target.value)} />
                 <div className="fieldHelp">Default rate: $50.00/hour (includes payroll taxes and workers' compensation).</div>
               </Field>
               <Field label="Hours per day">
-                <input type="number" min="0" step="0.1" value={inputs.tileHoursPerDay} onChange={(e) => setField("tileHoursPerDay", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.tileHoursPerDay} onChange={(e) => setField("tileHoursPerDay", e.target.value)} />
               </Field>
             </div>
             <div className="detailList" style={{ marginTop: 14 }}>
@@ -18028,10 +18205,10 @@ function App() {
                         <input type="text" value={section.label} onChange={(e) => setTileLaborSection(index, "label", e.target.value)} />
                       </Field>
                       <Field label="Install squares">
-                        <input type="number" min="0" step="0.1" value={section.installSquares} onChange={(e) => setTileLaborSection(index, "installSquares", e.target.value)} />
+                        <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={section.installSquares} onChange={(e) => setTileLaborSection(index, "installSquares", e.target.value)} />
                       </Field>
                       <Field label="Cost per install SQ">
-                        <input type="number" min="0" step="0.01" value={section.costPerInstallSq} onChange={(e) => setTileLaborSection(index, "costPerInstallSq", e.target.value)} />
+                        <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={section.costPerInstallSq} onChange={(e) => setTileLaborSection(index, "costPerInstallSq", e.target.value)} />
                       </Field>
                     </div>
                     <div className="detailList" style={{ marginTop: 10 }}>
@@ -18136,7 +18313,7 @@ function App() {
           <h3>Custom Bid Amount</h3>
           <label>Custom Bid Amount</label>
           <input
-            type="number"
+            type="number" onWheel={handleNumberInputWheel}
             min="0"
             step="0.01"
             value={inputs.tileCustomBidAmount}
@@ -19296,13 +19473,13 @@ function App() {
                           <input type="text" value={row.licensePlate} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "licensePlate", e.target.value)} />
                         </Field>
                         <Field label="Starting mileage">
-                          <input type="number" min="0" step="1" value={row.startingMileage} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "startingMileage", toNumber(e.target.value))} />
+                          <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={row.startingMileage} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "startingMileage", toNumber(e.target.value))} />
                         </Field>
                         <Field label="Ending mileage">
-                          <input type="number" min="0" step="1" value={row.endingMileage} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "endingMileage", toNumber(e.target.value))} />
+                          <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={row.endingMileage} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "endingMileage", toNumber(e.target.value))} />
                         </Field>
                         <Field label="Calculated miles driven">
-                          <input type="number" value={milesDriven} disabled />
+                          <input type="number" onWheel={handleNumberInputWheel} value={milesDriven} disabled />
                         </Field>
                         <Field label="Rental / other notes (optional)">
                           <input type="text" value={row.otherDescription} onChange={(e) => handleFieldDailyLogVehicleRowChange(row.id, "otherDescription", e.target.value)} placeholder="Rental company or notes" />
@@ -19351,13 +19528,13 @@ function App() {
                             </select>
                           </Field>
                           <Field label="Gallons pumped">
-                            <input type="number" min="0" step="0.01" value={row.gallonsPumped} onChange={(e) => handleFieldDailyLogFuelReceiptRowChange(row.id, "gallonsPumped", toNumber(e.target.value))} />
+                            <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={row.gallonsPumped} onChange={(e) => handleFieldDailyLogFuelReceiptRowChange(row.id, "gallonsPumped", toNumber(e.target.value))} />
                           </Field>
                           <Field label="Total receipt amount">
-                            <input type="number" min="0" step="0.01" value={row.totalReceiptAmount} onChange={(e) => handleFieldDailyLogFuelReceiptRowChange(row.id, "totalReceiptAmount", toNumber(e.target.value))} />
+                            <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={row.totalReceiptAmount} onChange={(e) => handleFieldDailyLogFuelReceiptRowChange(row.id, "totalReceiptAmount", toNumber(e.target.value))} />
                           </Field>
                           <Field label="Price per gallon">
-                            <input type="number" value={row.pricePerGallon} disabled />
+                            <input type="number" onWheel={handleNumberInputWheel} value={row.pricePerGallon} disabled />
                           </Field>
                           <Field label="Fuel station (optional)">
                             <input type="text" value={row.fuelStation} onChange={(e) => handleFieldDailyLogFuelReceiptRowChange(row.id, "fuelStation", e.target.value)} />
@@ -19459,19 +19636,19 @@ function App() {
                           <input type="time" value={row.endTime} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "endTime", e.target.value)} />
                         </Field>
                         <Field label="Lunch duration">
-                          <input type="number" min="0" step="0.25" value={row.lunchDurationHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "lunchDurationHours", toNumber(e.target.value))} />
+                          <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.25" value={row.lunchDurationHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "lunchDurationHours", toNumber(e.target.value))} />
                         </Field>
                         <Field label="Shift duration reference">
-                          <input type="number" value={round(shiftHours, 2)} disabled />
+                          <input type="number" onWheel={handleNumberInputWheel} value={round(shiftHours, 2)} disabled />
                         </Field>
                         <Field label="Regular hours">
-                          <input type="number" min="0" step="0.25" value={row.regularHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "regularHours", toNumber(e.target.value))} />
+                          <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.25" value={row.regularHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "regularHours", toNumber(e.target.value))} />
                         </Field>
                         <Field label="Overtime hours">
-                          <input type="number" min="0" step="0.25" value={row.overtimeHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "overtimeHours", toNumber(e.target.value))} />
+                          <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.25" value={row.overtimeHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "overtimeHours", toNumber(e.target.value))} />
                         </Field>
                         <Field label="Double-time hours">
-                          <input type="number" min="0" step="0.25" value={row.doubleTimeHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "doubleTimeHours", toNumber(e.target.value))} />
+                          <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.25" value={row.doubleTimeHours} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "doubleTimeHours", toNumber(e.target.value))} />
                         </Field>
                         <Field label="Employee role / classification (optional)">
                           <input type="text" value={row.role} onChange={(e) => handleFieldDailyLogCrewRowChange(row.id, "role", e.target.value)} />
@@ -20545,7 +20722,7 @@ function App() {
                   {manualCardConfigs[selectedCard.key].showCount ? (
                     <Field label={manualCardConfigs[selectedCard.key].countLabel}>
                       <input
-                        type="number"
+                        type="number" onWheel={handleNumberInputWheel}
                         min="0"
                         step="1"
                         value={cfoManualDraftsByCard[selectedCard.key]?.count || "1"}
@@ -21286,10 +21463,10 @@ function App() {
               </select>
             </Field>
             <Field label="Proposal number">
-              <input type="number" min="1" step="1" value={proposalDraft.proposalNumber} onChange={(e) => handleProposalDraftChange("proposalNumber", toNumber(e.target.value, 1))} />
+              <input type="number" onWheel={handleNumberInputWheel} min="1" step="1" value={proposalDraft.proposalNumber} onChange={(e) => handleProposalDraftChange("proposalNumber", toNumber(e.target.value, 1))} />
             </Field>
             <Field label="Version">
-              <input type="number" min="1" step="1" value={proposalDraft.version} onChange={(e) => handleProposalDraftChange("version", toNumber(e.target.value, 1))} />
+              <input type="number" onWheel={handleNumberInputWheel} min="1" step="1" value={proposalDraft.version} onChange={(e) => handleProposalDraftChange("version", toNumber(e.target.value, 1))} />
             </Field>
             <Field label="Customer name">
               <input type="text" value={proposalDraft.customerName} onChange={(e) => handleProposalDraftChange("customerName", e.target.value)} />
@@ -21313,7 +21490,7 @@ function App() {
               <input type="text" value={proposalDraft.salesperson} onChange={(e) => handleProposalDraftChange("salesperson", e.target.value)} />
             </Field>
             <Field label="Total price">
-              <input type="number" min="0" step="0.01" value={proposalDraft.totalPrice} onChange={(e) => handleProposalDraftChange("totalPrice", toNumber(e.target.value))} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={proposalDraft.totalPrice} onChange={(e) => handleProposalDraftChange("totalPrice", toNumber(e.target.value))} />
             </Field>
             <Field label="Estimate date">
               <input type="date" value={proposalDraft.estimateDate} onChange={(e) => handleProposalDraftChange("estimateDate", e.target.value)} />
@@ -21331,7 +21508,7 @@ function App() {
               </select>
             </Field>
             <Field label="Approval threshold">
-              <input type="number" min="0" step="0.01" value={proposalDraft.approvalThreshold} onChange={(e) => handleProposalDraftChange("approvalThreshold", toNumber(e.target.value))} />
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={proposalDraft.approvalThreshold} onChange={(e) => handleProposalDraftChange("approvalThreshold", toNumber(e.target.value))} />
             </Field>
             <Field label="Approval review level">
               <input type="text" value={proposalDraft.approvalReviewLevel} onChange={(e) => handleProposalDraftChange("approvalReviewLevel", e.target.value)} />
@@ -21753,7 +21930,7 @@ function App() {
                 <div className="formGrid">
                   <Field label="How many existing roof layers?">
                     <input
-                      type="number"
+                      type="number" onWheel={handleNumberInputWheel}
                       min="1"
                       step="1"
                       value={inputs.tearOffLayers}
@@ -21882,7 +22059,7 @@ function App() {
                       </Field>
                       <Field label="Linear feet">
                         <input
-                          type="number"
+                          type="number" onWheel={handleNumberInputWheel}
                           min="0"
                           step="1"
                           value={row.linearFeet}
@@ -21938,7 +22115,7 @@ function App() {
               <div className="formGrid">
                 <Field label="Coping linear feet">
                   <input
-                    type="number"
+                    type="number" onWheel={handleNumberInputWheel}
                     min="0"
                     step="1"
                     value={inputs.copingLinearFeet}
@@ -21960,7 +22137,7 @@ function App() {
             {inputs.terminationMethod === "cladDripEdge" ? (
               <Field label="Drip edge linear feet">
                 <input
-                  type="number"
+                  type="number" onWheel={handleNumberInputWheel}
                   min="0"
                   step="1"
                   value={inputs.dripEdgeLinearFeet}
@@ -21972,7 +22149,7 @@ function App() {
             {inputs.terminationMethod === "termBar" ? (
               <Field label="Term bar linear feet">
                 <input
-                  type="number"
+                  type="number" onWheel={handleNumberInputWheel}
                   min="0"
                   step="1"
                   value={inputs.termBarLinearFeet}
@@ -21984,7 +22161,7 @@ function App() {
             {inputs.terminationMethod === "existingMetal" ? (
               <Field label="Strip-in / detail allowance">
                 <input
-                  type="number"
+                  type="number" onWheel={handleNumberInputWheel}
                   min="0"
                   step="0.01"
                   value={inputs.stripInDetailAllowanceCost}
@@ -22004,7 +22181,7 @@ function App() {
                 </Field>
                 <Field label="Manual cost">
                   <input
-                    type="number"
+                    type="number" onWheel={handleNumberInputWheel}
                     min="0"
                     step="0.01"
                     value={inputs.manualTerminationCost}
@@ -22021,7 +22198,7 @@ function App() {
         <div className="formGrid">
           <Field label="Total roof field SQs (no parapet wall measurements)">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={inputs.fieldSquares}
@@ -22030,7 +22207,7 @@ function App() {
           </Field>
           <Field label="Total perimeter linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={inputs.roofPerimeterLf}
@@ -22039,7 +22216,7 @@ function App() {
           </Field>
           <Field label="Total parapet wall linear feet">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={inputs.parapetLinearFeet}
@@ -22048,7 +22225,7 @@ function App() {
           </Field>
           <Field label="Total parapet wall average height">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={inputs.parapetWallHeight}
@@ -22077,14 +22254,14 @@ function App() {
       <Section title="Material calculators" subtitle="These quantities are calculated from the scope and detail inputs.">
         <div className="formGrid">
           <Field label="Roof jacks">
-            <input type="number" min="0" step="1" value={inputs.roofJacks} onChange={(e) => setField("roofJacks", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.roofJacks} onChange={(e) => setField("roofJacks", e.target.value)} />
           </Field>
           <Field label="Vents / T-tops">
-            <input type="number" min="0" step="1" value={inputs.ventsTtops} onChange={(e) => setField("ventsTtops", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.ventsTtops} onChange={(e) => setField("ventsTtops", e.target.value)} />
           </Field>
           <Field label="Large penetrations around 2 ft">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={inputs.largePenetrations2ft}
@@ -22093,7 +22270,7 @@ function App() {
           </Field>
           <Field label="Very large penetrations around 4 ft">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={inputs.veryLargePenetrations4ft}
@@ -22101,16 +22278,16 @@ function App() {
             />
           </Field>
           <Field label="Drains">
-            <input type="number" min="0" step="1" value={inputs.detailDrains} onChange={(e) => setField("detailDrains", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.detailDrains} onChange={(e) => setField("detailDrains", e.target.value)} />
           </Field>
           <Field label="Scuppers">
-            <input type="number" min="0" step="1" value={inputs.detailScuppers} onChange={(e) => setField("detailScuppers", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.detailScuppers} onChange={(e) => setField("detailScuppers", e.target.value)} />
           </Field>
           <Field label="Pitch pockets">
-            <input type="number" min="0" step="1" value={inputs.detailPitchPockets} onChange={(e) => setField("detailPitchPockets", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.detailPitchPockets} onChange={(e) => setField("detailPitchPockets", e.target.value)} />
           </Field>
           <Field label="A/C detail units">
-            <input type="number" min="0" step="1" value={inputs.detailAcUnits} onChange={(e) => setField("detailAcUnits", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.detailAcUnits} onChange={(e) => setField("detailAcUnits", e.target.value)} />
           </Field>
           <Field label="A/C detail type">
             <select value={inputs.acDetailType} onChange={(e) => setField("acDetailType", e.target.value)}>
@@ -22123,7 +22300,7 @@ function App() {
           </Field>
           <Field label="Misc irregular details">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={inputs.miscIrregularDetails}
@@ -22131,17 +22308,17 @@ function App() {
             />
           </Field>
           <Field label="Pitch pockets">
-            <input type="number" min="0" step="1" value={inputs.pitchPockets} onChange={(e) => setField("pitchPockets", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.pitchPockets} onChange={(e) => setField("pitchPockets", e.target.value)} />
           </Field>
           <Field label="T-joint patches">
-            <input type="number" min="0" step="1" value={inputs.tJointPatches} onChange={(e) => setField("tJointPatches", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.tJointPatches} onChange={(e) => setField("tJointPatches", e.target.value)} />
           </Field>
           <Field label="Vent boots">
-            <input type="number" min="0" step="1" value={inputs.ventBoots} onChange={(e) => setField("ventBoots", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.ventBoots} onChange={(e) => setField("ventBoots", e.target.value)} />
           </Field>
           <Field label="Manual pitch pocket total cost">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.01"
               value={inputs.manualPitchPocketTotalCost}
@@ -22150,7 +22327,7 @@ function App() {
           </Field>
           <Field label="Manual detail membrane rolls override">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={inputs.manualDetailMembraneRolls}
@@ -22177,20 +22354,20 @@ function App() {
       <Section title="A/C handling" subtitle="Count the units before you calculate the roof labor.">
         <div className="formGrid">
           <Field label="Total A/C units on roof">
-            <input type="number" min="0" step="1" value={inputs.totalAcUnits} onChange={(e) => setField("totalAcUnits", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.totalAcUnits} onChange={(e) => setField("totalAcUnits", e.target.value)} />
           </Field>
           <Field label="Units jacked / raised in place">
-            <input type="number" min="0" step="1" value={inputs.jackedUnits} onChange={(e) => setField("jackedUnits", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.jackedUnits} onChange={(e) => setField("jackedUnits", e.target.value)} />
           </Field>
           <Field label="Units worked around">
-            <input type="number" min="0" step="1" value={inputs.workedAroundUnits} onChange={(e) => setField("workedAroundUnits", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.workedAroundUnits} onChange={(e) => setField("workedAroundUnits", e.target.value)} />
           </Field>
           <Field label="Units craned / lifted off roof">
-            <input type="number" min="0" step="1" value={inputs.cranedUnits} onChange={(e) => setField("cranedUnits", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.cranedUnits} onChange={(e) => setField("cranedUnits", e.target.value)} />
           </Field>
           <Field label="Units requiring disconnect / reconnect">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="1"
               value={inputs.acDisconnectReconnectUnits}
@@ -22207,7 +22384,7 @@ function App() {
             </select>
           </Field>
           <Field label="Total crane hours onsite">
-            <input type="number" min="0" step="0.1" value={inputs.totalCraneHours} onChange={(e) => setField("totalCraneHours", e.target.value)} />
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.totalCraneHours} onChange={(e) => setField("totalCraneHours", e.target.value)} />
           </Field>
         </div>
 
@@ -22259,7 +22436,7 @@ function App() {
               </Field>
               <Field label="Labor rate per SQ">
                 <input
-                  type="number"
+                  type="number" onWheel={handleNumberInputWheel}
                   min="0"
                   step="0.01"
                   value={inputs.subcontractorLaborRatePerSq}
@@ -22316,7 +22493,7 @@ function App() {
                               <td>
                                 <input
                                   className="tableInput"
-                                  type="number"
+                                  type="number" onWheel={handleNumberInputWheel}
                                   min="0"
                                   step="1"
                                   value={item.quantity}
@@ -22326,7 +22503,7 @@ function App() {
                               <td>
                                 <input
                                   className="tableInput"
-                                  type="number"
+                                  type="number" onWheel={handleNumberInputWheel}
                                   min="0"
                                   step="0.01"
                                   value={item.unitPrice}
@@ -22348,16 +22525,16 @@ function App() {
           {inputs.laborType === "inHouse" ? (
             <div className="formGrid" style={{ marginTop: 12 }}>
               <Field label="Number of workers">
-                <input type="number" min="0" step="1" value={inputs.laborWorkers} onChange={(e) => setField("laborWorkers", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.laborWorkers} onChange={(e) => setField("laborWorkers", e.target.value)} />
               </Field>
               <Field label="Hourly rate">
-                <input type="number" min="0" step="0.01" value={inputs.laborHourlyRate} onChange={(e) => setField("laborHourlyRate", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={inputs.laborHourlyRate} onChange={(e) => setField("laborHourlyRate", e.target.value)} />
               </Field>
               <Field label="Estimated hours per worker">
-                <input type="number" min="0" step="0.1" value={inputs.laborHoursPerWorker} onChange={(e) => setField("laborHoursPerWorker", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.laborHoursPerWorker} onChange={(e) => setField("laborHoursPerWorker", e.target.value)} />
               </Field>
               <Field label="Payroll burden percentage">
-                <input type="number" min="0" step="0.1" value={inputs.payrollBurdenPercent} onChange={(e) => setField("payrollBurdenPercent", e.target.value)} />
+                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.payrollBurdenPercent} onChange={(e) => setField("payrollBurdenPercent", e.target.value)} />
               </Field>
             </div>
           ) : null}
@@ -22412,7 +22589,7 @@ function App() {
         <div className="formGrid">
           <Field label="Overhead / operating rate">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.1"
               value={inputs.overheadPercent ?? 17.5}
@@ -22421,7 +22598,7 @@ function App() {
           </Field>
           <Field label="Scope adders">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.01"
               value={inputs.scopeAdders || 0}
@@ -22430,7 +22607,7 @@ function App() {
           </Field>
           <Field label="Misc cost">
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.01"
               value={inputs.miscCost || 0}
@@ -22475,7 +22652,7 @@ function App() {
               Custom Bid Amount
             </label>
             <input
-              type="number"
+              type="number" onWheel={handleNumberInputWheel}
               min="0"
               step="0.01"
               value={inputs.sprayFoamCustomBidAmount}
@@ -22593,7 +22770,7 @@ function App() {
           {priceFields.map(([key, label]) => (
             <Field key={key} label={label}>
               <input
-                type="number"
+                type="number" onWheel={handleNumberInputWheel}
                 min="0"
                 step="0.01"
                 value={prices[key]}
@@ -22630,13 +22807,13 @@ function App() {
                         <input type="text" value={mat.name} onChange={(e) => updateCustomMaterial(idx, "name", e.target.value)} />
                       </td>
                       <td>
-                        <input type="number" min="0" step="1" value={mat.quantity} onChange={(e) => updateCustomMaterial(idx, "quantity", e.target.value)} />
+                        <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={mat.quantity} onChange={(e) => updateCustomMaterial(idx, "quantity", e.target.value)} />
                       </td>
                       <td>
                         <input type="text" value={mat.unit} onChange={(e) => updateCustomMaterial(idx, "unit", e.target.value)} />
                       </td>
                       <td>
-                        <input type="number" min="0" step="0.01" value={mat.unitPrice} onChange={(e) => updateCustomMaterial(idx, "unitPrice", e.target.value)} />
+                        <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={mat.unitPrice} onChange={(e) => updateCustomMaterial(idx, "unitPrice", e.target.value)} />
                       </td>
                       <td>{money((toNumber(mat.quantity, 0) * toNumber(mat.unitPrice, 0)) || 0)}</td>
                       <td>
