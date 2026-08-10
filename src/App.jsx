@@ -5,6 +5,14 @@ import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist/build/pdf.mjs";
 import pdfWorkerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import {
+  GOOGLE_MAPS_API_KEY,
+  GOOGLE_MAPS_LIBRARIES,
+  buildTravelLookupMessage,
+  fetchPlacePredictions,
+  routeGoogleDirections,
+  routeGoogleDirectionsDirect,
+} from "./googleMapsTravelService.js";
 
 GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
@@ -22,8 +30,10 @@ const FIELD_OPERATION_EMPLOYEES_KEY = (userKey) => `crt_roofing_field_operation_
 const FIELD_OPERATION_COMPANY_VEHICLES_KEY = (userKey) => `crt_roofing_field_operation_company_vehicles_v1:${userKey}`;
 const FIELD_DAILY_LOG_HIGH_MILEAGE_THRESHOLD = 300;
 const ADMIN_PRICING_KEY = "crt_roofing_admin_pricing_v1";
+const ADMIN_TRAVEL_SETTINGS_KEY = "crt_roofing_admin_travel_settings_v1";
 const COMPLETED_JOBS_KEY = (userKey) => `crt_roofing_completed_jobs_v1:${userKey}`;
 const PROPOSALS_KEY = (userKey) => `crt_roofing_proposals_v1:${userKey}`;
+const PROPOSALS_KEY_PREFIX = "crt_roofing_proposals_v1:";
 const PROPOSAL_TEMPLATE_KEY = (userKey) => `crt_roofing_proposal_template_v1:${userKey}`;
 const CFO_LIQUID_CASH_KEY = (userKey) => `crt_roofing_cfo_liquid_cash_v1:${userKey}`;
 const CFO_RECEIVABLES_KEY = (userKey) => `crt_roofing_cfo_receivables_v1:${userKey}`;
@@ -95,8 +105,45 @@ const TRAVEL_VEHICLE_OPTIONS = [
   { value: "tacomaSales", label: "Tacoma Sales", mpg: 19 },
   { value: "ford2015FoamTruck", label: "Ford 2015 Foam Truck", mpg: 12 },
 ];
-const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 
+const EMPLOYEE_DIRECTORY_BY_EMAIL = {
+  "ivan@crtroofing.com": {
+    displayName: "Ivan",
+    title: "Sales / Project Management",
+    canViewAllProposals: false,
+    canAccessCfoDashboard: false,
+  },
+  "chris@crtroofing.com": {
+    displayName: "Chris",
+    title: "Sales / Project Management",
+    canViewAllProposals: false,
+    canAccessCfoDashboard: false,
+  },
+  "daniela@crtroofing.com": {
+    displayName: "Daniela",
+    title: "Estimator / Project Assistant",
+    canViewAllProposals: true,
+    canAccessCfoDashboard: false,
+  },
+  "natalia@crtroofing.com": {
+    displayName: "Natalia",
+    title: "Office Manager / Administration",
+    canViewAllProposals: true,
+    canAccessCfoDashboard: true,
+  },
+  "jorgejr@crtroofing.com": {
+    displayName: "Jorge Jr",
+    title: "CFO",
+    canViewAllProposals: true,
+    canAccessCfoDashboard: true,
+  },
+  "jorge@crtroofing.com": {
+    displayName: "Jorge",
+    title: "CFO",
+    canViewAllProposals: true,
+    canAccessCfoDashboard: true,
+  },
+};
 const DEFAULT_MATERIAL_PRICES = {
   rigidInsulationSheetCost: 31.95,
   starterRollCost: 360,
@@ -375,6 +422,13 @@ const DEFAULT_ADMIN_PRICING = {
   taxPercent: 0,
   overheadPercent: 17.5,
   profitPercent: 30,
+};
+
+const DEFAULT_TRAVEL_ADMIN_SETTINGS = {
+  companyHqAddress: "18551 Orange Street, Bloomington, CA 92316",
+  travelDriverHourlyRate: 27,
+  fuelCostPerGallon: 6.25,
+  vehicleMpgByKey: Object.fromEntries(TRAVEL_VEHICLE_OPTIONS.map((option) => [option.value, option.mpg])),
 };
 
 const DEFAULT_SPF_RATES = {
@@ -1322,6 +1376,24 @@ function normalizeAdminPricing(values = {}) {
   );
 }
 
+function normalizeTravelAdminSettings(values = {}) {
+  const source = values && typeof values === "object" ? values : {};
+  const companyHqAddress = String(source.companyHqAddress || DEFAULT_TRAVEL_ADMIN_SETTINGS.companyHqAddress).trim() || DEFAULT_TRAVEL_ADMIN_SETTINGS.companyHqAddress;
+  const travelDriverHourlyRate = Math.max(0, toNumber(source.travelDriverHourlyRate, DEFAULT_TRAVEL_ADMIN_SETTINGS.travelDriverHourlyRate));
+  const fuelCostPerGallon = Math.max(0, toNumber(source.fuelCostPerGallon, DEFAULT_TRAVEL_ADMIN_SETTINGS.fuelCostPerGallon));
+  const vehicleSource = source.vehicleMpgByKey && typeof source.vehicleMpgByKey === "object" ? source.vehicleMpgByKey : {};
+  const vehicleMpgByKey = Object.fromEntries(
+    TRAVEL_VEHICLE_OPTIONS.map((option) => [option.value, Math.max(0.1, toNumber(vehicleSource[option.value], option.mpg))]),
+  );
+
+  return {
+    companyHqAddress,
+    travelDriverHourlyRate,
+    fuelCostPerGallon,
+    vehicleMpgByKey,
+  };
+}
+
 function createBlankSubcontractorAddOnItem() {
   return { description: "", quantity: 0, unitPrice: 0 };
 }
@@ -1744,13 +1816,6 @@ function createBlankTerminationRow() {
   };
 }
 
-const defaultUserState = {
-  key: "",
-  displayName: "",
-  secret: "",
-  nextEstimateNumber: 1,
-};
-
 const css = String.raw`
 :root{
   color-scheme: dark;
@@ -2031,6 +2096,33 @@ h1{
   grid-template-columns:repeat(3,minmax(0,1fr));
   gap:12px;
 }
+.workflowGroups{
+  display:grid;
+  gap:14px;
+}
+.workflowGroupCard{
+  display:grid;
+  gap:14px;
+  padding:18px;
+  border-radius:20px;
+  border:1px solid rgba(18,166,245,.18);
+  background:linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.02));
+}
+.workflowGroupHeader h3{
+  margin:0;
+  color:var(--brand2);
+  font-size:1.05rem;
+}
+.workflowGroupHeader p{
+  margin:4px 0 0;
+  color:#a7c7d6;
+  line-height:1.45;
+}
+.workflowGroupGrid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:12px;
+}
 .templateCard{
   text-align:left;
   padding:16px;
@@ -2046,6 +2138,9 @@ h1{
 .templateCard strong{font-size:1.05rem; display:block}
 .templateCard p{margin:0; color:#a7c7d6}
 .templateCard:hover{border-color:rgba(18,166,245,.45); transform:translateY(-1px)}
+@media (max-width: 960px){
+  .workflowGroupGrid{grid-template-columns:1fr;}
+}
 .loginShell{
   min-height:100vh; display:grid; place-items:center; padding:24px 12px;
 }
@@ -2312,6 +2407,50 @@ function writeJson(key, value) {
   }
 }
 
+function loadVisibleProposalsForUser(authUser) {
+  if (!authUser?.key) return [];
+
+  const ownProposals = readJson(PROPOSALS_KEY(authUser.key), []);
+  if (!authUser.canViewAllProposals || typeof window === "undefined") {
+    return ownProposals.map(normalizeProposalRecord);
+  }
+
+  const mergedByKey = new Map();
+  const addProposal = (proposal) => {
+    const normalized = normalizeProposalRecord(proposal);
+    const uniqueKey =
+      String(normalized.id || "").trim() ||
+      String(normalized.proposalNumber || "").trim() ||
+      String(normalized.sourceEstimateId || "").trim() ||
+      String(normalized.sourceEstimateCode || "").trim() ||
+      JSON.stringify([normalized.customerName || "", normalized.updatedAt || "", normalized.createdAt || ""]);
+    mergedByKey.set(uniqueKey, normalized);
+  };
+
+  const addCollection = (collection) => {
+    if (!Array.isArray(collection)) return;
+    collection.forEach(addProposal);
+  };
+
+  addCollection(ownProposals);
+
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const storageKey = window.localStorage.key(index);
+      if (!storageKey || !storageKey.startsWith(PROPOSALS_KEY_PREFIX)) continue;
+      addCollection(readJson(storageKey, []));
+    }
+  } catch {
+    // ignore localStorage enumeration errors
+  }
+
+  return Array.from(mergedByKey.values()).sort((a, b) => {
+    const left = new Date(a.updatedAt || a.createdAt || 0).getTime();
+    const right = new Date(b.updatedAt || b.createdAt || 0).getTime();
+    return right - left;
+  });
+}
+
 function createBlankCfoLiquidCashEntry() {
   return {
     id: createFieldDailyLogId(),
@@ -2440,8 +2579,13 @@ function mapEstimateRow(row) {
   if (!row) return null;
   const estimateData = row.estimate_data || {};
   return {
+    dbId: row.id,
     id: row.local_estimate_id || row.id,
-    estimateNumber: row.estimate_number,
+    ownerId: row.owner_id || "",
+    ownerDisplayName: row.owner_display_name || "",
+    ownerEmail: row.owner_email || "",
+    estimateNumber: row.company_estimate_number || row.estimate_number,
+    companyEstimateNumber: row.company_estimate_number || row.estimate_number,
     estimateCode: row.estimate_code,
     estimateType: row.estimate_type,
     name: row.name,
@@ -2475,6 +2619,41 @@ function mapCompletedJobRow(row) {
     actualLaborHours: row.actual_labor_hours,
     actualLaborCost: row.actual_labor_cost,
     actualCost: row.actual_cost,
+  };
+}
+
+function normalizeAppRole(value) {
+  return String(value || "").trim().toLowerCase() === "admin" ? "admin" : "salesperson";
+}
+
+function normalizeEmployeeEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+function getEmployeeDirectoryEntry(email) {
+  return EMPLOYEE_DIRECTORY_BY_EMAIL[normalizeEmployeeEmail(email)] || null;
+}
+
+function deriveBootstrapRoleFromEmail(email) {
+  return String(email || "").trim().toLowerCase() === "natalia@crtroofing.com" ? "admin" : "salesperson";
+}
+
+function mapAuthUserFromSession(user, profile = null) {
+  if (!user?.id) return null;
+  const email = String(user.email || "");
+  const directoryEntry = getEmployeeDirectoryEntry(email);
+  const fullName = String(profile?.full_name || profile?.display_name || user.user_metadata?.full_name || user.user_metadata?.name || "").trim();
+  const fallbackName = String(email || "User").trim();
+  const role = normalizeAppRole(profile?.role || user.app_metadata?.role || user.user_metadata?.role);
+  return {
+    key: String(user.id),
+    displayName: directoryEntry?.displayName || fullName || fallbackName,
+    email,
+    title: directoryEntry?.title || (role === "admin" ? "Administration" : "Sales"),
+    canViewAllProposals: Boolean(directoryEntry?.canViewAllProposals),
+    canAccessCfoDashboard: Boolean(directoryEntry?.canAccessCfoDashboard),
+    role,
+    source: "supabase",
   };
 }
 
@@ -2888,8 +3067,74 @@ async function fetchSavedEstimatesFromSupabase(userKey) {
   return supabase
     .from("estimates")
     .select("*")
-    .eq("user_key", userKey)
+    .eq("owner_id", userKey)
     .order("saved_at", { ascending: false });
+}
+
+async function fetchSavedEstimatesForRole(userKey, isAdmin) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  let query = supabase
+    .from("estimates")
+    .select("*")
+    .order("saved_at", { ascending: false });
+  if (!isAdmin) {
+    query = query.eq("owner_id", userKey);
+  }
+  return query;
+}
+
+async function fetchAuthUserProfile(userId) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !userId) return { data: null, error: null };
+  const { data, error } = await supabase
+    .from("user_profiles")
+    .select("id, full_name, email, role")
+    .eq("id", userId)
+    .maybeSingle();
+  return { data, error };
+}
+
+async function ensureAuthUserProfile(user, profile = null) {
+  if (!user?.id) return { data: profile, error: null };
+  if (profile) return { data: profile, error: null };
+  const email = String(user.email || "").trim();
+  if (!email) return { data: null, error: null };
+  const role = deriveBootstrapRoleFromEmail(email);
+  const fullName = String(user.user_metadata?.full_name || user.user_metadata?.name || email).trim();
+  const { data, error } = await supabase
+    .from("user_profiles")
+    .upsert(
+      {
+        id: user.id,
+        email,
+        full_name: fullName,
+        role,
+      },
+      { onConflict: "id" },
+    )
+    .select("id, full_name, email, role")
+    .maybeSingle();
+  return { data, error };
+}
+
+async function fetchCompanyUserProfiles() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const { data, error } = await supabase
+    .from("user_profiles")
+    .select("id, full_name, email, role")
+    .order("full_name", { ascending: true });
+  return { data: Array.isArray(data) ? data : [], error };
+}
+
+async function reserveNextEstimateNumberFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { value: null, error: null };
+  const { data, error } = await supabase.rpc("next_company_estimate_number");
+  return { value: Number(data) || null, error };
+}
+
+async function peekNextEstimateNumberFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { value: null, error: null };
+  const { data, error } = await supabase.rpc("peek_company_estimate_number");
+  return { value: Number(data) || null, error };
 }
 
 async function fetchCompletedJobsFromSupabase(userKey) {
@@ -3838,10 +4083,13 @@ function parseSupabaseMissingColumnError(error) {
 
 async function insertOrUpdateEstimate(dbRow, userKey) {
   if (!dbRow.local_estimate_id) return { data: null, error: new Error("Missing local_estimate_id") };
+  if (dbRow.id) {
+    return supabase.from("estimates").update(dbRow).eq("id", dbRow.id).select("*");
+  }
   const { data: existing, error: queryError } = await supabase
     .from("estimates")
     .select("id")
-    .eq("user_key", userKey)
+    .eq("owner_id", dbRow.owner_id || userKey)
     .eq("local_estimate_id", dbRow.local_estimate_id)
     .limit(1);
   if (queryError) return { data: null, error: queryError };
@@ -3875,10 +4123,16 @@ async function upsertRowWithMissingColumnFallback(table, row, onConflict) {
 async function upsertEstimateToSupabase(savedEstimate, inputs, prices, summary, calculation, userKey) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: new Error("Supabase not configured") };
   const totalSquares = calculation?.scope?.totalSquares ?? calculation?.totalSquares ?? 0;
+  const ownerId = String(savedEstimate.ownerId || userKey || "");
   const dbRow = {
-    user_key: userKey,
+    id: savedEstimate.dbId || undefined,
+    user_key: ownerId,
+    owner_id: ownerId,
+    owner_display_name: String(savedEstimate.ownerDisplayName || ""),
+    owner_email: String(savedEstimate.ownerEmail || ""),
     local_estimate_id: savedEstimate.id,
     estimate_number: savedEstimate.estimateNumber,
+    company_estimate_number: savedEstimate.estimateNumber,
     estimate_code: savedEstimate.estimateCode,
     estimate_type: savedEstimate.estimateType,
     name: savedEstimate.name,
@@ -3901,7 +4155,20 @@ async function upsertEstimateToSupabase(savedEstimate, inputs, prices, summary, 
 
 async function deleteEstimateFromSupabase(estimateId, userKey) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { error: null };
-  return supabase.from("estimates").delete().eq("user_key", userKey).eq("local_estimate_id", estimateId);
+  if (estimateId && typeof estimateId === "object" && estimateId.dbId) {
+    return supabase.from("estimates").delete().eq("id", estimateId.dbId);
+  }
+  return supabase.from("estimates").delete().eq("owner_id", userKey).eq("local_estimate_id", estimateId);
+}
+
+async function reassignEstimateOwnerInSupabase(estimateDbId, newOwnerId) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: new Error("Supabase not configured") };
+  if (!estimateDbId || !newOwnerId) return { data: null, error: new Error("Missing estimate ID or new owner ID") };
+  return supabase
+    .from("estimates")
+    .update({ owner_id: newOwnerId, user_key: newOwnerId, updated_at: new Date().toISOString() })
+    .eq("id", estimateDbId)
+    .select("*");
 }
 
 async function fetchCompletedJobMetricsFromSupabase(userKey) {
@@ -5011,11 +5278,12 @@ function normalizeDraftInputs(inputs = {}) {
   };
 }
 
-function calculateTravelAndOvertime(inputs = {}) {
+function calculateTravelAndOvertime(inputs = {}, travelConfig = DEFAULT_TRAVEL_ADMIN_SETTINGS) {
   const safeInputs = inputs || {};
+  const safeTravelConfig = normalizeTravelAdminSettings(travelConfig);
   const oneWayMiles = Math.max(0, toNumber(safeInputs.oneWayMiles, 0));
   const averageDrivingSpeedMph = Math.max(0.1, toNumber(safeInputs.averageDrivingSpeedMph, 60));
-  const travelDriverHourlyRate = Math.max(0, toNumber(safeInputs.travelDriverHourlyRate, 27));
+  const travelDriverHourlyRate = Math.max(0, toNumber(safeTravelConfig.travelDriverHourlyRate, toNumber(safeInputs.travelDriverHourlyRate, 27)));
   const workHoursPerDay = Math.max(0, toNumber(safeInputs.workHoursPerDay, 8));
   const numberOfJobDays = Math.max(0, Math.round(toNumber(safeInputs.numberOfJobDays, 0)));
   const numberOfDrivers = Math.max(0, Math.round(toNumber(safeInputs.numberOfDrivers, 0)));
@@ -5024,25 +5292,26 @@ function calculateTravelAndOvertime(inputs = {}) {
     toNumber(safeInputs.oneWayDriveTimeHours, toNumber(safeInputs.oneWayDriveTime, toNumber(safeInputs.estimatedDriveTimeMinutes, 0) / 60)),
   );
   const travelDistanceSource = safeInputs.travelDistanceSource === "google" ? "google" : "manual";
-  const companyHqAddress = String(safeInputs.companyHqAddress || "");
+  const companyHqAddress = String(safeTravelConfig.companyHqAddress || safeInputs.companyHqAddress || "");
   const jobSiteAddress = String(safeInputs.jobSiteAddress || "");
   const jobAddress = String(safeInputs.jobAddress || "");
   const travelVehicles = normalizeTravelVehicles(safeInputs.travelVehicles || safeInputs.travelVehicle);
   const travelVehicleBreakdown = travelVehicles.map((vehicleKey) => {
     const vehicle = TRAVEL_VEHICLE_OPTIONS.find((option) => option.value === vehicleKey) || TRAVEL_VEHICLE_OPTIONS[0];
-    const fuelGallonsNeeded = (oneWayMiles * 2 * numberOfJobDays) / Math.max(0.1, vehicle.mpg);
-    const fuelCost = fuelGallonsNeeded * FUEL_COST_PER_GALLON;
+    const configuredMpg = Math.max(0.1, toNumber(safeTravelConfig.vehicleMpgByKey?.[vehicle.value], vehicle.mpg));
+    const fuelGallonsNeeded = (oneWayMiles * 2 * numberOfJobDays) / configuredMpg;
+    const fuelCost = fuelGallonsNeeded * safeTravelConfig.fuelCostPerGallon;
     return {
       value: vehicle.value,
       label: vehicle.label,
-      mpg: vehicle.mpg,
+      mpg: configuredMpg,
       fuelGallonsNeeded,
-      fuelCostPerGallon: FUEL_COST_PER_GALLON,
+      fuelCostPerGallon: safeTravelConfig.fuelCostPerGallon,
       fuelCost,
     };
   });
   const fuelGallonsNeeded = travelVehicleBreakdown.reduce((sum, item) => sum + item.fuelGallonsNeeded, 0);
-  const fuelCostPerGallon = FUEL_COST_PER_GALLON;
+  const fuelCostPerGallon = safeTravelConfig.fuelCostPerGallon;
   const fuelCost = travelVehicleBreakdown.reduce((sum, item) => sum + item.fuelCost, 0);
 
   const oneWayDriveTime =
@@ -5050,9 +5319,12 @@ function calculateTravelAndOvertime(inputs = {}) {
       ? oneWayDriveTimeHours
       : oneWayMiles / averageDrivingSpeedMph;
   const roundTripDriveTime = oneWayDriveTime * 2;
-  const overtimeHoursPerDay = Math.max(0, roundTripDriveTime);
+  const roundTripMiles = oneWayMiles * 2;
+  const regularDriveHoursPerDay = Math.min(roundTripDriveTime, workHoursPerDay);
+  const overtimeHoursPerDay = Math.max(0, roundTripDriveTime - workHoursPerDay);
+  const regularPayPerDay = regularDriveHoursPerDay * travelDriverHourlyRate * numberOfDrivers;
   const overtimePayPerDay = overtimeHoursPerDay * travelDriverHourlyRate * 1.5 * numberOfDrivers;
-  const totalDriverTravelCost = overtimePayPerDay * numberOfJobDays;
+  const totalDriverTravelCost = (regularPayPerDay + overtimePayPerDay) * numberOfJobDays;
 
   return {
     companyHqAddress,
@@ -5076,6 +5348,9 @@ function calculateTravelAndOvertime(inputs = {}) {
     fuelCost,
     oneWayDriveTime,
     roundTripDriveTime,
+    roundTripMiles,
+    regularDriveHoursPerDay,
+    regularPayPerDay,
     overtimeHoursPerDay,
     overtimePayPerDay,
     totalDriverTravelCost,
@@ -6567,13 +6842,13 @@ function buildMissingScopeChecklist(inputs, prices, calculation) {
   return checklist;
 }
 
-function calculateTpoEstimate(inputs, prices) {
+function calculateTpoEstimate(inputs, prices, travelConfig = DEFAULT_TRAVEL_ADMIN_SETTINGS) {
   const scope = calculateScope(inputs);
   const termination = calculateTermination(inputs, prices);
   const pitchPocket = calculatePitchPocket(inputs, prices);
   const detailMembrane = calculateDetailMembrane(inputs, prices, pitchPocket.pitchPocketDetailMembraneSqft);
   const acHandling = calculateAcHandling(inputs);
-  const travelAndOvertime = calculateTravelAndOvertime(inputs);
+  const travelAndOvertime = calculateTravelAndOvertime(inputs, travelConfig);
   const labor = calculateLabor(inputs);
   const lodgingNeeded =
     inputs.lodgingNeeded === "Yes" ||
@@ -6657,7 +6932,7 @@ function calculateTpoEstimate(inputs, prices) {
   };
 }
 
-function calculateSprayFoamEstimate(inputs) {
+function calculateSprayFoamEstimate(inputs, travelConfig = DEFAULT_TRAVEL_ADMIN_SETTINGS) {
   const sprayFoamEstimateType = String(inputs.sprayFoamEstimateType || "roof");
   const isWallFoamEstimate = sprayFoamEstimateType === "wall";
   const foamSetYieldAtOneInch = isWallFoamEstimate ? DEFAULT_SPF_RATES.wallFoamYieldAtOneInch : 26;
@@ -6747,7 +7022,7 @@ function calculateSprayFoamEstimate(inputs) {
       })
     : [];
   const subcontractorCost = subcontractorItems.reduce((sum, item) => sum + item.totalCost, 0);
-  const travelAndOvertime = calculateTravelAndOvertime(inputs);
+  const travelAndOvertime = calculateTravelAndOvertime(inputs, travelConfig);
   const lodgingName = String(inputs.sprayFoamLodgingName || "");
   const nightlyLodgingCost = Math.max(0, toNumber(inputs.sprayFoamNightlyLodgingCost, 0));
   const lodgingNights = Math.max(0, Math.round(toNumber(inputs.sprayFoamLodgingNights, 0)));
@@ -8172,6 +8447,73 @@ function calculateTileEstimate(inputs, travelAndOvertime = calculateTravelAndOve
   };
 }
 
+function AddressAutocompleteInput({ value, onChange, isLoaded, loadError, placeholder, hint }) {
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestionError, setSuggestionError] = useState("");
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+
+  useEffect(() => {
+    if (!isLoaded || loadError || !value || String(value).trim().length < 3) {
+      setSuggestions([]);
+      setSuggestionError("");
+      setIsLoadingSuggestions(false);
+      return;
+    }
+
+    let active = true;
+    setIsLoadingSuggestions(true);
+
+    fetchPlacePredictions(String(value).trim())
+      .then((items) => {
+        if (!active) return;
+        setSuggestions(items);
+        setSuggestionError("");
+      })
+      .catch((error) => {
+        if (!active) return;
+        setSuggestions([]);
+        setSuggestionError(error instanceof Error ? error.message : "Unable to load address suggestions.");
+      })
+      .finally(() => {
+        if (!active) return;
+        setIsLoadingSuggestions(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [value, isLoaded, loadError]);
+
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      <input
+        type="text"
+        placeholder={placeholder || "Type an address"}
+        value={value || ""}
+        onChange={(e) => onChange?.(e.target.value)}
+      />
+      {hint ? <em>{hint}</em> : null}
+      {isLoadingSuggestions ? <em>Loading suggestions...</em> : null}
+      {suggestionError ? <em>{suggestionError}</em> : null}
+      {suggestions.length ? (
+        <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
+          {suggestions.slice(0, 5).map((suggestion) => (
+            <button
+              key={suggestion}
+              type="button"
+              className="secondaryButton"
+              style={{ textAlign: "left" }}
+              onClick={() => onChange?.(suggestion)}
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TravelCalculator({
   inputs = {},
   calculation = calculateTravelAndOvertime(inputs),
@@ -8180,11 +8522,9 @@ function TravelCalculator({
   isLookingUpDistance,
   travelLookupMessage,
   googleDebug,
-  onCompanyHqAddressChange,
   onJobSiteAddressChange,
   onOneWayMilesChange,
   onAverageDrivingSpeedChange,
-  onDriverHourlyRateChange,
   onWorkHoursPerDayChange,
   onNumberOfJobDaysChange,
   onNumberOfDriversChange,
@@ -8192,16 +8532,13 @@ function TravelCalculator({
   onAddVehicleSelection,
   onRemoveVehicleSelection,
   onCalculateDistance,
-  onTestGoogleGeocoder,
-  onTestDirections,
   showLodging = false,
   onLodgingNeededChange,
   onLodgingNameChange,
   onNightlyLodgingCostChange,
   onLodgingNightsChange,
-  showGoogleDebug = true,
+  showGoogleDebug = false,
   oneWayMilesLabel = "One-way miles",
-  companyHqHint,
   subtitle = "Use Google Maps when available, with manual fallback always editable.",
 }) {
   const safeInputs = inputs || {};
@@ -8214,15 +8551,23 @@ function TravelCalculator({
     safeInputs.sprayFoamLodgingNeeded === true ||
     calculation.lodgingNeeded;
   const selectedVehicles = normalizeTravelVehicles(safeInputs.travelVehicles || safeInputs.travelVehicle);
+  const travelDetails = calculation.travelAndOvertime || {};
 
   return (
     <Section title="Travel & Overtime Cost" subtitle={subtitle}>
+      <p className="emptyState" style={{ marginTop: 0, marginBottom: 12 }}>
+        Company HQ, driver rate, fuel cost, and truck MPG are managed in Admin Pricing &gt; Travel Defaults.
+      </p>
       <div className="formGrid">
-        <Field label="Company HQ address" hint={companyHqHint}>
-          <input type="text" value={safeInputs.companyHqAddress || ""} onChange={(e) => onCompanyHqAddressChange?.(e.target.value)} />
-        </Field>
         <Field label="Job site address">
-          <input type="text" value={safeInputs.jobSiteAddress || ""} onChange={(e) => onJobSiteAddressChange?.(e.target.value)} />
+          <AddressAutocompleteInput
+            value={safeInputs.jobSiteAddress || ""}
+            onChange={onJobSiteAddressChange}
+            isLoaded={isLoaded}
+            loadError={loadError}
+            placeholder="Job site address"
+            hint="Enter the finish location or select one of the suggestions."
+          />
         </Field>
         {showLodging ? (
           <>
@@ -8253,33 +8598,8 @@ function TravelCalculator({
           <button type="button" className="secondaryButton" onClick={onCalculateDistance} disabled={!isLoaded || !!loadError || isLookingUpDistance}>
             {isLookingUpDistance ? "Calculating..." : "Calculate Distance"}
           </button>
-          <button type="button" className="secondaryButton" onClick={onTestGoogleGeocoder} disabled={!isLoaded || !!loadError || isLookingUpDistance}>
-            Test Google Geocoder
-          </button>
-          <button type="button" className="secondaryButton" onClick={onTestDirections} disabled={!isLoaded || !!loadError || isLookingUpDistance}>
-            Test Directions
-          </button>
           {travelLookupMessage ? <em>{travelLookupMessage}</em> : null}
         </div>
-        <Field label={oneWayMilesLabel}>
-          <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={safeInputs.oneWayMiles || 0} onChange={(e) => onOneWayMilesChange?.(e.target.value)} />
-        </Field>
-        <Field label="Average driving speed">
-          <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={safeInputs.averageDrivingSpeedMph || 0} onChange={(e) => onAverageDrivingSpeedChange?.(e.target.value)} />
-        </Field>
-        <Field label="Driver hourly rate">
-          <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={safeInputs.travelDriverHourlyRate || 0} onChange={(e) => onDriverHourlyRateChange?.(e.target.value)} />
-          <em>Typical range $22-$32/hr</em>
-        </Field>
-        <Field label="Work hours per day">
-          <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={safeInputs.workHoursPerDay || 0} onChange={(e) => onWorkHoursPerDayChange?.(e.target.value)} />
-        </Field>
-        <Field label="Number of job days">
-          <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={safeInputs.numberOfJobDays || 0} onChange={(e) => onNumberOfJobDaysChange?.(e.target.value)} />
-        </Field>
-        <Field label="Number of drivers">
-          <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={safeInputs.numberOfDrivers || 0} onChange={(e) => onNumberOfDriversChange?.(e.target.value)} />
-        </Field>
         <div className="field" style={{ gridColumn: "1 / -1" }}>
           <label>Trucks on jobsite</label>
           <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
@@ -8310,50 +8630,81 @@ function TravelCalculator({
       </div>
 
       <div className="detailList" style={{ marginTop: 14 }}>
-        <DetailRow label="HQ address" value={calculation.travelAndOvertime.companyHqAddress || "Not entered"} />
-        <DetailRow label="Job site address" value={calculation.travelAndOvertime.jobSiteAddress || "Not entered"} />
-        <DetailRow label="Source" value={calculation.travelAndOvertime.travelDistanceSource === "google" ? "Google Maps" : "Manual"} />
-        <DetailRow label="Trucks on jobsite" value={calculation.travelAndOvertime.travelVehicleLabel || "Not selected"} />
-        <DetailRow label="One-way miles" value={num(calculation.travelAndOvertime.oneWayMiles, 1)} />
-        <DetailRow label="Average speed" value={`${num(calculation.travelAndOvertime.averageDrivingSpeedMph, 1)} mph`} />
-        <DetailRow label="One-way drive time" value={formatHoursMinutes(calculation.travelAndOvertime.oneWayDriveTimeHours)} />
-        <DetailRow label="Round trip drive time" value={formatHoursMinutes(calculation.travelAndOvertime.roundTripDriveTime)} />
-        <DetailRow label="Driver hourly rate" value={money2(calculation.travelAndOvertime.travelDriverHourlyRate)} />
-        {calculation.travelAndOvertime.travelVehicleBreakdown?.length ? (
-          <DetailRow
-            label="Fuel by truck"
-            value={calculation.travelAndOvertime.travelVehicleBreakdown
-              .map((item) => `${item.label}: ${num(item.fuelGallonsNeeded, 2)} gal`)
-              .join(" | ")}
-          />
-        ) : null}
-        <DetailRow label="Fuel gallons needed" value={num(calculation.travelAndOvertime.fuelGallonsNeeded, 2)} />
-        <DetailRow label="Fuel cost per gallon" value={money2(calculation.travelAndOvertime.fuelCostPerGallon)} />
-        <DetailRow label="Fuel cost" value={money2(calculation.travelAndOvertime.fuelCost)} />
-        <DetailRow label="Overtime hours per day" value={`${num(calculation.travelAndOvertime.overtimeHoursPerDay, 2)} hrs`} />
-        <DetailRow label="Overtime pay per day" value={money(calculation.travelAndOvertime.overtimePayPerDay)} />
-        <DetailRow label="Total driver travel cost" value={money(calculation.travelAndOvertime.totalDriverTravelCost)} />
-        <DetailRow label="Total travel cost" value={money(calculation.travelAndOvertime.totalTravelCost)} />
+        <DetailRow label="Job-site address" value={travelDetails.jobSiteAddress || "Not entered"} />
+        <DetailRow label="Trucks going to the job" value={travelDetails.travelVehicleLabel || "Not selected"} />
+        <DetailRow label="Round-trip distance" value={`${num(travelDetails.roundTripMiles, 1)} miles`} />
+        <DetailRow label="Round-trip drive time" value={formatHoursMinutes(travelDetails.roundTripDriveTime)} />
+        <DetailRow label="Driver travel cost" value={money2(travelDetails.totalDriverTravelCost)} />
+        <DetailRow label="Fuel cost" value={money2(travelDetails.fuelCost)} />
+        <DetailRow label="Total travel cost" value={money2(travelDetails.totalTravelCost)} />
+      </div>
+
+      <details style={{ marginTop: 14 }}>
+        <summary style={{ cursor: "pointer", fontWeight: 700 }}>Travel calculation details</summary>
+        <div className="formGrid" style={{ marginTop: 12 }}>
+          <Field label={oneWayMilesLabel}>
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={safeInputs.oneWayMiles || 0} onChange={(e) => onOneWayMilesChange?.(e.target.value)} />
+          </Field>
+          <Field label="Average speed">
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={safeInputs.averageDrivingSpeedMph || 0} onChange={(e) => onAverageDrivingSpeedChange?.(e.target.value)} />
+          </Field>
+          <Field label="Work hours per day">
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={safeInputs.workHoursPerDay || 0} onChange={(e) => onWorkHoursPerDayChange?.(e.target.value)} />
+          </Field>
+          <Field label="Number of job days">
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={safeInputs.numberOfJobDays || 0} onChange={(e) => onNumberOfJobDaysChange?.(e.target.value)} />
+          </Field>
+          <Field label="Number of drivers">
+            <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={safeInputs.numberOfDrivers || 0} onChange={(e) => onNumberOfDriversChange?.(e.target.value)} />
+          </Field>
+        </div>
+        <div className="detailList" style={{ marginTop: 14 }}>
+          <DetailRow label="HQ address" value={travelDetails.companyHqAddress || "Not entered"} />
+          <DetailRow label="One-way miles" value={num(travelDetails.oneWayMiles, 1)} />
+          <DetailRow label="Average speed" value={`${num(travelDetails.averageDrivingSpeedMph, 1)} mph`} />
+          <DetailRow label="One-way drive time" value={formatHoursMinutes(travelDetails.oneWayDriveTimeHours)} />
+          <DetailRow label="Driver hourly rate" value={money2(travelDetails.travelDriverHourlyRate)} />
+          {travelDetails.travelVehicleBreakdown?.length ? (
+            <DetailRow
+              label="Fuel by truck"
+              value={travelDetails.travelVehicleBreakdown
+                .map((item) => `${item.label}: ${num(item.fuelGallonsNeeded, 2)} gal`)
+                .join(" | ")}
+            />
+          ) : null}
+          <DetailRow label="Fuel gallons needed" value={num(travelDetails.fuelGallonsNeeded, 2)} />
+          <DetailRow label="Overtime hours per day" value={`${num(travelDetails.overtimeHoursPerDay, 2)} hrs`} />
+          <DetailRow label="Overtime pay per day" value={money2(travelDetails.overtimePayPerDay)} />
+        </div>
+      </details>
+
+      {showGoogleDebug ? (
+        <details style={{ marginTop: 14 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700 }}>Developer travel diagnostics</summary>
+          <div className="detailList" style={{ marginTop: 10 }}>
+            <DetailRow label="Google API key loaded?" value={googleDebug?.apiKeyFound ? "Yes" : "No"} />
+            <DetailRow label="Google Maps script loaded?" value={googleDebug?.mapsJsLoaded ? "Yes" : "No"} />
+            <DetailRow label="DirectionsService available?" value={googleDebug?.directionsServiceAvailable ? "Yes" : "No"} />
+            <DetailRow label="Last Google callback status" value={googleDebug?.lastGoogleStatus || "Unknown"} />
+            <DetailRow label="Last element status" value={googleDebug?.lastElementStatus || "Unknown"} />
+            <DetailRow label="Last Google error/status" value={googleDebug?.lastError || "None"} />
+          </div>
+        </details>
+      ) : null}
+
+      <div className="detailList" style={{ marginTop: 14 }}>
         {showLodging && lodgingNeeded ? (
           <>
-            <DetailRow label="Lodging type / name" value={calculation.lodgingName || "N/A"} />
+            <DetailRow
+              label="Lodging type / name"
+              value={calculation.lodgingName || "N/A"}
+            />
             <DetailRow label="Nightly lodging cost" value={money2(calculation.nightlyLodgingCost)} />
             <DetailRow label="Lodging nights" value={num(calculation.lodgingNights, 0)} />
             <DetailRow label="Lodging total" value={money2(calculation.lodgingTotal)} />
           </>
         ) : null}
       </div>
-
-      {showGoogleDebug ? (
-        <div className="detailList" style={{ marginTop: 14 }}>
-          <DetailRow label="Google API key loaded?" value={googleDebug?.apiKeyFound ? "Yes" : "No"} />
-          <DetailRow label="Google Maps script loaded?" value={googleDebug?.mapsJsLoaded ? "Yes" : "No"} />
-          <DetailRow label="DirectionsService available?" value={googleDebug?.directionsServiceAvailable ? "Yes" : "No"} />
-          <DetailRow label="Last Google callback status" value={googleDebug?.lastGoogleStatus || "Unknown"} />
-          <DetailRow label="Last element status" value={googleDebug?.lastElementStatus || "Unknown"} />
-          <DetailRow label="Last Google error/status" value={googleDebug?.lastError || "None"} />
-        </div>
-  ) : null}
     </Section>
   );
 }
@@ -8423,14 +8774,18 @@ function OverheadCalculator({
 }
 
 function App() {
-  const [authUser, setAuthUser] = useState(() => {
-    const stored = readJson(AUTH_KEY, null);
-    return stored && stored.key ? stored : null;
-  });
-  const [users, setUsers] = useState(() => readJson(USERS_KEY, {}));
-  const [loginName, setLoginName] = useState("");
-  const [loginSecret, setLoginSecret] = useState("");
+  const [authUser, setAuthUser] = useState(null);
+  const [authRole, setAuthRole] = useState("salesperson");
+  const [authLoading, setAuthLoading] = useState(true);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [loginNotice, setLoginNotice] = useState("");
+  const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(false);
+  const [recoveryPassword, setRecoveryPassword] = useState("");
+  const [recoveryPasswordConfirmation, setRecoveryPasswordConfirmation] = useState("");
+  const [companyUserProfiles, setCompanyUserProfiles] = useState([]);
+  const [estimateOwnerAssignments, setEstimateOwnerAssignments] = useState({});
   const [sessionMessage, setSessionMessage] = useState("");
   const [sessionMessageType, setSessionMessageType] = useState("");
   const [travelLookupMessage, setTravelLookupMessage] = useState("");
@@ -8439,6 +8794,65 @@ function App() {
   const [quickMeasureStatus, setQuickMeasureStatus] = useState("");
   const [quickMeasureIsProcessing, setQuickMeasureIsProcessing] = useState(false);
   const quickMeasureFileInputRef = useRef(null);
+  const isAdminUser = authRole === "admin";
+  const canAccessCfoDashboard = Boolean(authUser?.canAccessCfoDashboard);
+
+  useEffect(() => {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      setAuthLoading(false);
+      setLoginError("Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.");
+      return;
+    }
+
+    let active = true;
+
+    const applySession = async (session) => {
+      if (!active) return;
+      if (!session?.user) {
+        setAuthUser(null);
+        setAuthRole("salesperson");
+        setAuthLoading(false);
+        return;
+      }
+      let { data: profile } = await fetchAuthUserProfile(session.user.id);
+      if (!profile) {
+        const ensured = await ensureAuthUserProfile(session.user, profile);
+        if (!active) return;
+        if (ensured?.data) {
+          profile = ensured.data;
+        } else {
+          const refreshed = await fetchAuthUserProfile(session.user.id);
+          if (!active) return;
+          profile = refreshed.data;
+        }
+      }
+      if (!active) return;
+      const mapped = mapAuthUserFromSession(session.user, profile);
+      setAuthUser(mapped);
+      setAuthRole(mapped?.role || "salesperson");
+      setAuthLoading(false);
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      applySession(data?.session || null);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setPasswordRecoveryMode(true);
+        setLoginError("");
+        setLoginNotice("Enter a new password for your employee account.");
+      }
+      applySession(session);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
   useEffect(() => {
     const onFocusIn = (e) => {
       try {
@@ -8490,7 +8904,7 @@ function App() {
     };
   }, []);
   const [googleDebug, setGoogleDebug] = useState({
-    apiKeyFound: Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY),
+    apiKeyFound: Boolean(GOOGLE_MAPS_API_KEY),
     mapsJsLoaded: false,
     directionsServiceAvailable: false,
     lastGoogleStatus: "Not run",
@@ -8504,8 +8918,11 @@ function App() {
   const [estimateName, setEstimateName] = useState(() => "");
 
   const [savedEstimates, setSavedEstimates] = useState([]);
+  const [editingEstimate, setEditingEstimate] = useState(null);
   const [dashboardSavedEstimatesOpen, setDashboardSavedEstimatesOpen] = useState(false);
   const [dashboardSavedEstimateSearch, setDashboardSavedEstimateSearch] = useState("");
+  const [templatesSavedEstimatesOpen, setTemplatesSavedEstimatesOpen] = useState(false);
+  const [templatesSavedEstimateSearch, setTemplatesSavedEstimateSearch] = useState("");
   const [dashboardApprovedJobsCollapsed, setDashboardApprovedJobsCollapsed] = useState(false);
   const [completedJobs, setCompletedJobs] = useState([]);
   const [completedJobMetrics, setCompletedJobMetrics] = useState([]);
@@ -8583,6 +9000,9 @@ function App() {
   const [fieldOperationsDeviceId, setFieldOperationsDeviceId] = useState(() => readJson(FIELD_DAILY_LOG_DEVICE_KEY, "") || createFieldDailyLogId());
   const [activeTemplate, setActiveTemplate] = useState("dashboard");
   const [adminPricing, setAdminPricing] = useState(() => normalizeAdminPricing(readJson(ADMIN_PRICING_KEY, DEFAULT_ADMIN_PRICING)));
+  const [adminTravelSettings, setAdminTravelSettings] = useState(() =>
+    normalizeTravelAdminSettings(readJson(ADMIN_TRAVEL_SETTINGS_KEY, DEFAULT_TRAVEL_ADMIN_SETTINGS)),
+  );
   const [inspectionTemplateChooserOpen, setInspectionTemplateChooserOpen] = useState(false);
   const [proposals, setProposals] = useState([]);
   const [proposalSelectedId, setProposalSelectedId] = useState("");
@@ -8765,22 +9185,19 @@ function App() {
     writeJson(CRM_FOLLOWUPS_KEY(authUser.key), crmFollowups);
   }, [authUser?.key, crmFollowups]);
 
-  const [nextEstimateNumber, setNextEstimateNumber] = useState(() => {
-    if (!authUser?.key) return 1;
-    const userRecord = users[authUser.key];
-    const saved = readJson(SAVED_KEY(authUser.key), []);
-    const highestSaved = saved.reduce((max, est) => Math.max(max, Number(est.estimateNumber || 0)), 0);
-    return Math.max(1, Number(userRecord?.nextEstimateNumber || 1), highestSaved + 1);
-  });
+  const [nextEstimateNumber, setNextEstimateNumber] = useState(1);
 
   const { isLoaded, loadError } = useLoadScript({
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
+    googleMapsApiKey: GOOGLE_MAPS_API_KEY,
+    libraries: GOOGLE_MAPS_LIBRARIES,
   });
 
-  const tpoCalculation = useMemo(() => calculateTpoEstimate(inputs, prices), [inputs, prices]);
-  const sprayFoamCalculation = useMemo(() => calculateSprayFoamEstimate(inputs), [inputs]);
-  const shingleCalculation = useMemo(() => calculateShingleEstimate(inputs, calculateTravelAndOvertime(inputs)), [inputs]);
-  const tileCalculation = useMemo(() => calculateTileEstimate(inputs, calculateTravelAndOvertime(inputs)), [inputs]);
+  const travelPolicy = useMemo(() => normalizeTravelAdminSettings(adminTravelSettings), [adminTravelSettings]);
+  const sharedTravelAndOvertime = useMemo(() => calculateTravelAndOvertime(inputs, travelPolicy), [inputs, travelPolicy]);
+  const tpoCalculation = useMemo(() => calculateTpoEstimate(inputs, prices, travelPolicy), [inputs, prices, travelPolicy]);
+  const sprayFoamCalculation = useMemo(() => calculateSprayFoamEstimate(inputs, travelPolicy), [inputs, travelPolicy]);
+  const shingleCalculation = useMemo(() => calculateShingleEstimate(inputs, sharedTravelAndOvertime), [inputs, sharedTravelAndOvertime]);
+  const tileCalculation = useMemo(() => calculateTileEstimate(inputs, sharedTravelAndOvertime), [inputs, sharedTravelAndOvertime]);
   const calculation = activeTemplate === "sprayFoam"
     ? sprayFoamCalculation
     : activeTemplate === "shingle"
@@ -8814,6 +9231,24 @@ function App() {
       return haystack.includes(query);
     });
   }, [activeSavedEstimates, dashboardSavedEstimateSearch]);
+  const filteredTemplatesSavedEstimates = useMemo(() => {
+    const query = templatesSavedEstimateSearch.trim().toLowerCase();
+    if (!query) return activeSavedEstimates;
+    return activeSavedEstimates.filter((estimate) => {
+      const haystack = [
+        estimate.name,
+        estimate.estimateCode,
+        estimate.estimateType,
+        estimate.inputs?.jobName,
+        estimate.inputs?.customerName,
+        estimate.inputs?.jobAddress,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [activeSavedEstimates, templatesSavedEstimateSearch]);
   const fieldDailyLogSelectedLog = useMemo(
     () => fieldDailyLogs.find((log) => log.id === fieldDailyLogSelectedId) || null,
     [fieldDailyLogs, fieldDailyLogSelectedId],
@@ -9084,22 +9519,12 @@ function App() {
 
   useEffect(() => {
     if (!authUser?.key) return;
-    writeJson(AUTH_KEY, authUser);
-  }, [authUser]);
-
-  useEffect(() => {
-    if (!authUser?.key) return;
     writeJson(DRAFT_KEY(authUser.key), {
       inputs,
       prices,
       estimateName: currentEstimateName,
     });
   }, [authUser, inputs, prices, currentEstimateName]);
-
-  useEffect(() => {
-    if (!authUser?.key) return;
-    writeJson(USERS_KEY, users);
-  }, [users, authUser]);
 
   useEffect(() => {
     if (!authUser?.key) return;
@@ -9166,7 +9591,7 @@ function App() {
     return () => {
       active = false;
     };
-  }, [authUser?.key, users]);
+  }, [authUser?.key]);
 
   useEffect(() => {
     if (!authUser?.key) {
@@ -9224,21 +9649,40 @@ function App() {
   }, [authUser, fieldOperationCompanyVehicles]);
 
   useEffect(() => {
-    if (!authUser?.key) return;
+    if (!authUser?.key) {
+      setCompanyUserProfiles([]);
+      return;
+    }
     let active = true;
 
     const loadRemoteEstimateData = async () => {
-      const { data: savedData, error: savedError } = await fetchSavedEstimatesFromSupabase(authUser.key);
+      const [{ data: savedData, error: savedError }, { data: nextEstimateValue }] = await Promise.all([
+        fetchSavedEstimatesForRole(authUser.key, isAdminUser),
+        peekNextEstimateNumberFromSupabase(),
+      ]);
       if (!active) return;
       if (!savedError && Array.isArray(savedData)) {
         const estimates = savedData.map(mapEstimateRow).filter(Boolean);
         setSavedEstimates(estimates);
         const highest = Math.max(0, ...estimates.map((estimate) => Number(estimate.estimateNumber) || 0));
-        setNextEstimateNumber(Math.max(1, highest + 1));
+        setNextEstimateNumber(Math.max(1, Number(nextEstimateValue) || highest + 1));
       } else {
         const fallback = readJson(SAVED_KEY(authUser.key), []);
         setSavedEstimates(fallback);
         console.warn("Supabase estimates load failed:", savedError?.message || savedError);
+      }
+
+      if (isAdminUser) {
+        const { data: profiles, error: profilesError } = await fetchCompanyUserProfiles();
+        if (!active) return;
+        if (!profilesError && Array.isArray(profiles)) {
+          setCompanyUserProfiles(profiles);
+        } else {
+          setCompanyUserProfiles([]);
+          if (profilesError) console.warn("Supabase user profile load failed:", profilesError?.message || profilesError);
+        }
+      } else {
+        setCompanyUserProfiles([]);
       }
 
       const { data: metricsData, error: metricsError } = await fetchCompletedJobMetricsFromSupabase(authUser.key);
@@ -9255,11 +9699,15 @@ function App() {
     return () => {
       active = false;
     };
-  }, [authUser?.key]);
+  }, [authUser?.key, isAdminUser]);
 
   useEffect(() => {
     writeJson(ADMIN_PRICING_KEY, adminPricing);
   }, [adminPricing]);
+
+  useEffect(() => {
+    writeJson(ADMIN_TRAVEL_SETTINGS_KEY, adminTravelSettings);
+  }, [adminTravelSettings]);
 
   useEffect(() => {
     if (!authUser?.key) {
@@ -9273,11 +9721,11 @@ function App() {
 
     setFieldNotes(normalizeFieldNotes(readJson(FIELD_NOTES_DRAFT_KEY(authUser.key), DEFAULT_FIELD_NOTES)));
     setSavedInspections(readJson(INSPECTIONS_KEY(authUser.key), []));
-    setProposals(readJson(PROPOSALS_KEY(authUser.key), []).map(normalizeProposalRecord));
+    setProposals(loadVisibleProposalsForUser(authUser));
     const savedTemplate = normalizeProposalTemplate(readJson(PROPOSAL_TEMPLATE_KEY(authUser.key), DEFAULT_PROPOSAL_TEMPLATE));
     setProposalTemplate(savedTemplate);
     setProposalTemplateDraft(savedTemplate);
-  }, [authUser?.key]);
+  }, [authUser?.key, authUser?.canViewAllProposals]);
 
   useEffect(() => {
     if (!authUser?.key) return;
@@ -9322,7 +9770,8 @@ function App() {
   }, [fieldNotes.jobAddress]);
 
   useEffect(() => {
-    const defaultHq = "18551 Orange Street, Bloomington, CA 92316";
+    const defaultHq = String(adminTravelSettings.companyHqAddress || "").trim();
+    if (!defaultHq) return;
     setInputs((current) => {
       const currentHq = String(current.companyHqAddress || "").trim();
       if (!currentHq || currentHq === "Fontana, CA" || currentHq === "CRT Roofing office in Fontana, CA") {
@@ -9333,11 +9782,11 @@ function App() {
       }
       return current;
     });
-  }, []);
+  }, [adminTravelSettings.companyHqAddress]);
 
   useEffect(() => {
     if (!isLoaded) return;
-    const apiKeyFound = Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY);
+    const apiKeyFound = Boolean(GOOGLE_MAPS_API_KEY);
     const mapsJsLoaded = !!window.google?.maps;
     const directionsServiceAvailable = !!window.google?.maps?.DirectionsService;
     console.log("Google loaded:", !!window.google);
@@ -10233,19 +10682,6 @@ function App() {
     setSessionMessage(templateKey === "shingle" ? "QuickMeasure data applied to Shingle Estimate." : `QuickMeasure applied to ${templateKey}.`);
   };
 
-  const handleGoogleTimeout = (label) => {
-    setIsLookingUpDistance(false);
-    setTravelLookupMessage(
-      `${label}: Google callback did not return. Check billing, browser blocker, API restrictions, or Google Cloud billing activation.`,
-    );
-    setGoogleDebug((current) => ({
-      ...current,
-      lastGoogleStatus: "TIMEOUT",
-      lastElementStatus: "TIMEOUT",
-      lastError: "Google callback did not return",
-    }));
-  };
-
   const handleSelectZeroOnFocus = (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement)) return;
@@ -10267,234 +10703,9 @@ function App() {
     );
   };
 
-  const geocodeGoogleAddress = (address) =>
-    new Promise((resolve, reject) => {
-      if (!window.google?.maps?.Geocoder) {
-        reject(new Error("Google Maps API unavailable for Geocoder."));
-        return;
-      }
-
-      const geocoder = new window.google.maps.Geocoder();
-      let finished = false;
-      const timeoutId = window.setTimeout(() => {
-        if (finished) return;
-        finished = true;
-        reject(new Error("Google Geocoder callback did not return."));
-      }, 10000);
-
-      geocoder.geocode({ address }, (results, status) => {
-        console.log("Geocode status", status, address);
-        console.log("Geocode results", results);
-        if (timeoutId) clearTimeout(timeoutId);
-        if (finished) return;
-        finished = true;
-
-        const location = results?.[0]?.geometry?.location || null;
-        if (status === "OK" && location) {
-          resolve({
-            status,
-            location,
-            formattedAddress: results?.[0]?.formatted_address || address,
-          });
-          return;
-        }
-
-        reject(new Error(`Geocoder status: ${status}`));
-      });
-    });
-
-  const routeGoogleDirections = async (originAddress, destinationAddress, timeoutLabel = "Google Directions") => {
-    if (!window.google?.maps?.DirectionsService) {
-      throw new Error("Google Maps API unavailable for DirectionsService.");
-    }
-
-    const [{ location: originLocation, formattedAddress: resolvedOrigin }, { location: destinationLocation, formattedAddress: resolvedDestination }] =
-      await Promise.all([geocodeGoogleAddress(originAddress), geocodeGoogleAddress(destinationAddress)]);
-
-    const directionsService = new window.google.maps.DirectionsService();
-    return new Promise((resolve, reject) => {
-      let finished = false;
-      const timeoutId = window.setTimeout(() => {
-        if (finished) return;
-        finished = true;
-        reject(new Error(`${timeoutLabel}: Google callback did not return. Check billing, browser blocker, API restrictions, or Google Cloud billing activation.`));
-      }, 15000);
-
-      directionsService.route(
-        {
-          origin: originLocation,
-          destination: destinationLocation,
-          travelMode: window.google.maps.TravelMode.DRIVING,
-        },
-        (response, status) => {
-          console.log("Directions status", status);
-          console.log("Directions response", response);
-          if (timeoutId) clearTimeout(timeoutId);
-          if (finished) return;
-          finished = true;
-
-          if (status === window.google.maps.DirectionsStatus.OK && response?.routes?.[0]?.legs?.[0]) {
-            resolve({
-              status,
-              response,
-              originAddress: resolvedOrigin,
-              destinationAddress: resolvedDestination,
-            });
-            return;
-          }
-
-          reject(new Error(`Google Directions failed: ${status}`));
-        },
-      );
-    });
-  };
-
-  const routeGoogleDirectionsDirect = async (originAddress, destinationAddress, timeoutLabel = "Google Directions") => {
-    if (!window.google?.maps?.DirectionsService) {
-      throw new Error("Google Maps API unavailable for DirectionsService.");
-    }
-
-    const directionsService = new window.google.maps.DirectionsService();
-    return new Promise((resolve, reject) => {
-      let finished = false;
-      const timeoutId = window.setTimeout(() => {
-        if (finished) return;
-        finished = true;
-        reject(new Error(`${timeoutLabel}: Google callback did not return. Check billing, browser blocker, API restrictions, or Google Cloud billing activation.`));
-      }, 15000);
-
-      directionsService.route(
-        {
-          origin: originAddress,
-          destination: destinationAddress,
-          travelMode: window.google.maps.TravelMode.DRIVING,
-        },
-        (response, status) => {
-          console.log("Directions status", status);
-          console.log("Directions response", response);
-          if (timeoutId) clearTimeout(timeoutId);
-          if (finished) return;
-          finished = true;
-
-          if (status === window.google.maps.DirectionsStatus.OK && response?.routes?.[0]?.legs?.[0]) {
-            resolve({
-              status,
-              response,
-              originAddress,
-              destinationAddress,
-            });
-            return;
-          }
-
-          reject(new Error(`Google Directions failed: ${status}`));
-        },
-      );
-    });
-  };
-
-  const handleTestGoogleGeocoder = async () => {
-    const safeInputs = inputs || {};
-    if (!window.google?.maps?.Geocoder) {
-      setTravelLookupMessage("Google Maps API unavailable for Geocoder.");
-      return;
-    }
-
-    const hqAddress = String(safeInputs.companyHqAddress || "").trim();
-    if (!hqAddress) {
-      setTravelLookupMessage("Enter the HQ address first.");
-      return;
-    }
-
-    setIsLookingUpDistance(true);
-    setTravelLookupMessage("Testing Google Geocoder...");
-    setGoogleDebug((current) => ({
-      ...current,
-      apiKeyFound: Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY),
-      mapsJsLoaded: !!window.google?.maps,
-      directionsServiceAvailable: !!window.google?.maps?.DirectionsService,
-      lastGoogleStatus: "Running",
-      lastElementStatus: "Running",
-      lastError: "Running",
-    }));
-
-    let completed = false;
-    let timeoutId = window.setTimeout(() => {
-      if (completed) return;
-      completed = true;
-      handleGoogleTimeout("Geocoder");
-    }, 10000);
-
-    try {
-      const geocoder = new window.google.maps.Geocoder();
-      geocoder.geocode({ address: hqAddress }, (results, status) => {
-        console.log("Geocoder status", status);
-        console.log("Geocoder results", results);
-        if (timeoutId) clearTimeout(timeoutId);
-        setIsLookingUpDistance(false);
-        if (completed) return;
-        completed = true;
-
-        setGoogleDebug((current) => ({
-          ...current,
-          lastGoogleStatus: status || "UNKNOWN",
-          lastElementStatus: results?.[0]?.geometry?.location ? "OK" : "UNKNOWN",
-          lastError: status || "UNKNOWN",
-        }));
-
-        setTravelLookupMessage(`Geocoder status: ${status}`);
-      });
-    } catch (error) {
-      if (timeoutId) clearTimeout(timeoutId);
-      setIsLookingUpDistance(false);
-      setTravelLookupMessage(error instanceof Error ? `Geocoder failed: ${error.message}` : "Geocoder failed.");
-    }
-  };
-
-  const handleTestDirections = async () => {
-    const safeInputs = inputs || {};
-    const companyHqAddress = String(safeInputs.companyHqAddress || "").trim();
-    const jobSiteAddress = String(safeInputs.jobSiteAddress || "").trim();
-
-    if (!companyHqAddress || !jobSiteAddress) {
-      setTravelLookupMessage("Enter both the HQ address and the job site address.");
-      return;
-    }
-
-    if (!window.google?.maps?.DirectionsService) {
-      setTravelLookupMessage("Google Maps API unavailable for DirectionsService.");
-      return;
-    }
-
-    setIsLookingUpDistance(true);
-    setTravelLookupMessage("Testing Directions...");
-    setGoogleDebug((current) => ({
-      ...current,
-      apiKeyFound: Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY),
-      mapsJsLoaded: !!window.google?.maps,
-      directionsServiceAvailable: !!window.google?.maps?.DirectionsService,
-      lastGoogleStatus: "Running",
-      lastElementStatus: "Running",
-      lastError: "Running",
-    }));
-
-    try {
-      const { status, response } = await routeGoogleDirections(companyHqAddress, jobSiteAddress, "Directions");
-      setGoogleDebug((current) => ({
-        ...current,
-        lastGoogleStatus: status || "UNKNOWN",
-        lastElementStatus: response?.routes?.[0]?.legs?.[0] ? "OK" : "UNKNOWN",
-        lastError: status || "UNKNOWN",
-      }));
-      setTravelLookupMessage(`Directions status: ${status}`);
-    } catch (error) {
-      setIsLookingUpDistance(false);
-      setTravelLookupMessage(error instanceof Error ? `Directions failed: ${error.message}` : "Directions failed.");
-    }
-  };
-
   const handleCalculateDistance = async () => {
     const safeInputs = inputs || {};
-    const companyHqAddress = String(safeInputs.companyHqAddress || "").trim();
+    const companyHqAddress = String(travelPolicy.companyHqAddress || safeInputs.companyHqAddress || "").trim();
     const jobSiteAddress = String(safeInputs.jobSiteAddress || "").trim();
 
     if (!isLoaded) {
@@ -10529,7 +10740,7 @@ function App() {
 
     setGoogleDebug((current) => ({
       ...current,
-      apiKeyFound: Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY),
+      apiKeyFound: Boolean(GOOGLE_MAPS_API_KEY),
       mapsJsLoaded: !!window.google?.maps,
       directionsServiceAvailable: !!window.google?.maps?.DirectionsService,
       lastGoogleStatus: "Running",
@@ -10564,6 +10775,7 @@ function App() {
 
       setInputs((current) => ({
         ...current,
+        jobSiteAddress: response.destinationAddress || current.jobSiteAddress,
         oneWayMiles: round(oneWayMiles, 2),
         oneWayDriveTime: round(oneWayDriveTime, 2),
         oneWayDriveTimeHours: round(oneWayDriveTime, 2),
@@ -10574,12 +10786,14 @@ function App() {
       setTravelLookupMessage(`Google Maps loaded: ${leg.distance.text}, ${leg.duration.text}`);
     } catch (error) {
       setIsLookingUpDistance(false);
-      const message = error instanceof Error ? error.message : "Unable to calculate distance.";
-      setTravelLookupMessage(
-        message.includes("callback did not return")
-          ? "Google Maps did not return a route in time. Please try manual miles input."
-          : `Google Maps lookup failed: ${message}`,
-      );
+      setTravelLookupMessage(buildTravelLookupMessage({
+        apiKeyFound: Boolean(GOOGLE_MAPS_API_KEY),
+        isLoaded,
+        loadError,
+        error,
+        originAddress: companyHqAddress,
+        destinationAddress: jobSiteAddress,
+      }));
       setInputs((current) => ({
         ...current,
         travelDistanceSource: "manual",
@@ -10622,6 +10836,27 @@ function App() {
       ...current,
       [key]: toNumber(value, current[key]),
     }));
+  };
+
+  const setAdminTravelField = (key, value) => {
+    setAdminTravelSettings((current) =>
+      normalizeTravelAdminSettings({
+        ...current,
+        [key]: key === "companyHqAddress" ? String(value || "") : toNumber(value, current[key]),
+      }),
+    );
+  };
+
+  const setAdminTravelVehicleMpg = (vehicleKey, value) => {
+    setAdminTravelSettings((current) =>
+      normalizeTravelAdminSettings({
+        ...current,
+        vehicleMpgByKey: {
+          ...(current.vehicleMpgByKey || {}),
+          [vehicleKey]: toNumber(value, current.vehicleMpgByKey?.[vehicleKey]),
+        },
+      }),
+    );
   };
 
   const setSubcontractorAddOnItem = (index, key, value) => {
@@ -10776,57 +11011,87 @@ function App() {
     [fieldDailyLogDraft.fuelReceipts],
   );
 
-  const handleLogin = (event) => {
+  const handleLogin = async (event) => {
     event.preventDefault();
+    setLoginNotice("");
 
-    const username = String(loginName || "").trim();
-    const secret = String(loginSecret || "").trim();
-    const key = normalizeUsername(username);
+    const email = String(loginEmail || "").trim();
+    const password = String(loginPassword || "").trim();
 
-    if (!key || !secret) {
-      setLoginError("Enter both a username and access code.");
+    if (!email || !password) {
+      setLoginError("Enter both email and password.");
       return;
     }
 
-    const existing = users[key];
-    if (existing && existing.secret !== secret) {
-      setLoginError("That access code does not match the saved user.");
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      setLoginError(error.message || "Unable to sign in.");
       return;
     }
 
-    const nextUser = existing || {
-      ...defaultUserState,
-      key,
-      displayName: username,
-      secret,
-      nextEstimateNumber: 1,
-    };
-
-    const updatedUsers = {
-      ...users,
-      [key]: {
-        ...nextUser,
-        displayName: username,
-        secret,
-      },
-    };
-
-    setUsers(updatedUsers);
-    setAuthUser({ key, displayName: username, source: "local" });
-    setActiveTemplate("dashboard");
-    setLoginName("");
-    setLoginSecret("");
+    setLoginEmail("");
+    setLoginPassword("");
     setLoginError("");
-    setSessionMessage(`Signed in as ${username}.`);
+    setSessionMessage("Signed in.");
   };
 
-  const handleLogout = () => {
-    removeKey(AUTH_KEY);
+  const handleForgotPassword = async () => {
+    const email = String(loginEmail || "").trim();
+    setLoginError("");
+    setLoginNotice("");
+
+    if (!email) {
+      setLoginError("Enter your email address first, then select Forgot password.");
+      return;
+    }
+
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    if (error) {
+      setLoginError(error.message || "Unable to send the password reset email.");
+      return;
+    }
+
+    setLoginNotice("Password reset email sent. Check your inbox and follow the link.");
+  };
+
+  const handlePasswordRecovery = async (event) => {
+    event.preventDefault();
+    setLoginError("");
+    setLoginNotice("");
+
+    if (recoveryPassword.length < 8) {
+      setLoginError("Your new password must be at least 8 characters.");
+      return;
+    }
+    if (recoveryPassword !== recoveryPasswordConfirmation) {
+      setLoginError("The new passwords do not match.");
+      return;
+    }
+
+    const { error } = await supabase.auth.updateUser({ password: recoveryPassword });
+    if (error) {
+      setLoginError(error.message || "Unable to update your password.");
+      return;
+    }
+
+    setRecoveryPassword("");
+    setRecoveryPasswordConfirmation("");
+    setPasswordRecoveryMode(false);
+    setSessionMessageType("success");
+    setSessionMessage("Password updated. Welcome to the Employee Portal.");
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setAuthUser(null);
+    setAuthRole("salesperson");
     setInputs(DEFAULT_INPUTS);
     setPrices({ ...DEFAULT_MATERIAL_PRICES });
     setEstimateName("");
     setSavedEstimates([]);
+    setEditingEstimate(null);
     setFieldNotes(DEFAULT_FIELD_NOTES);
     setSavedInspections([]);
     setFieldDailyLogDraft(createBlankFieldDailyLog(""));
@@ -10904,6 +11169,7 @@ function App() {
     setQuickMeasureReport(null);
     setQuickMeasureStatus("");
     setQuickMeasureIsProcessing(false);
+    setCompanyUserProfiles([]);
     setNextEstimateNumber(1);
     setActiveTemplate("dashboard");
     setInspectionTemplateChooserOpen(false);
@@ -11623,6 +11889,7 @@ function App() {
   };
 
   const handleClearEstimate = () => {
+    setEditingEstimate(null);
     setInputs(DEFAULT_INPUTS);
     setPrices({ ...DEFAULT_MATERIAL_PRICES });
     setEstimateName("");
@@ -11644,8 +11911,16 @@ function App() {
     setSessionMessageType("");
     setSessionMessage("Saving estimate...");
 
-    const estimateNumber = nextEstimateNumber;
-    const estimateCodeValue = estimateCode(estimateNumber);
+    let reservedEstimateNumber = null;
+    if (!editingEstimate?.estimateNumber) {
+      const { value, error: reserveNumberError } = await reserveNextEstimateNumberFromSupabase();
+      reservedEstimateNumber = value;
+      if (reserveNumberError) {
+        console.warn("Estimate number reservation failed:", reserveNumberError.message || reserveNumberError);
+      }
+    }
+    const estimateNumber = editingEstimate?.estimateNumber || Math.max(1, Number(reservedEstimateNumber) || Number(nextEstimateNumber) || 1);
+    const estimateCodeValue = editingEstimate?.estimateCode || estimateCode(estimateNumber);
     const status = String(inputs.estimateStatus || "draft").toLowerCase();
     const savedQuickMeasureReport = quickMeasureReport
       ? {
@@ -11665,7 +11940,11 @@ function App() {
     };
 
     const savedEstimate = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      id: editingEstimate?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      dbId: editingEstimate?.dbId || "",
+      ownerId: editingEstimate?.ownerId || authUser.key,
+      ownerDisplayName: editingEstimate?.ownerDisplayName || authUser.displayName || "",
+      ownerEmail: editingEstimate?.ownerEmail || authUser.email || "",
       estimateNumber,
       estimateCode: estimateCodeValue,
       estimateType: estimateTypeForTemplate(activeTemplate),
@@ -11728,8 +12007,10 @@ function App() {
 
       const savedRow = Array.isArray(data) ? mapEstimateRow(data[0]) : mapEstimateRow(data?.[0]);
       const persistedEstimate = savedRow ?? savedEstimate;
-      const nextSaved = [persistedEstimate, ...activeSavedEstimates.filter((item) => item.id !== persistedEstimate.id)];
+      const persistedId = persistedEstimate.dbId || persistedEstimate.id;
+      const nextSaved = [persistedEstimate, ...activeSavedEstimates.filter((item) => (item.dbId || item.id) !== persistedId)];
       setSavedEstimates(nextSaved);
+      setEditingEstimate(persistedEstimate);
       writeJson(SAVED_KEY(authUser.key), nextSaved);
 
       if (error) {
@@ -11757,20 +12038,10 @@ function App() {
         }
       }
 
-      const updatedUsers = {
-        ...users,
-        [authUser.key]: {
-          ...(users[authUser.key] || {
-            key: authUser.key,
-            displayName: authUser.displayName,
-            secret: "",
-            nextEstimateNumber: 1,
-          }),
-          nextEstimateNumber: estimateNumber + 1,
-        },
-      };
-      setUsers(updatedUsers);
-      setNextEstimateNumber(estimateNumber + 1);
+      if (!editingEstimate?.estimateNumber) {
+        const { value: peekNext } = await peekNextEstimateNumberFromSupabase();
+        setNextEstimateNumber(Math.max(estimateNumber + 1, Number(peekNext) || 0));
+      }
     } catch (error) {
       console.error("handleSaveEstimate failed:", error);
       setSessionMessage(`Save failed: ${error?.message || String(error)}`);
@@ -11779,6 +12050,7 @@ function App() {
 
   const handleLoadEstimate = (estimate) => {
     if (!authUser?.key || !estimate) return;
+    setEditingEstimate(estimate);
     setInputs(normalizeDraftInputs(estimate.inputs || DEFAULT_INPUTS));
     setPrices(estimate.prices || prices);
     setEstimateName(estimate.name || "");
@@ -11817,6 +12089,30 @@ function App() {
         travelDistanceSource: "manual",
       }));
     }
+  };
+
+  const requestPhotoAccessAndOpenPicker = ({ accept = "image/*", multiple = true, onChange }) => {
+    if (typeof window === "undefined" || typeof window.confirm !== "function") return;
+    const shouldAllow = window.confirm("Would you like to allow CRT Roofing Employee Portal access your photos?");
+    if (!shouldAllow) return;
+
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.multiple = multiple;
+    input.style.display = "none";
+    input.addEventListener(
+      "change",
+      (event) => {
+        if (typeof onChange === "function") {
+          onChange(event);
+        }
+        input.remove();
+      },
+      { once: true },
+    );
+    document.body.appendChild(input);
+    input.click();
   };
 
   const handleFieldNotesPhotosChange = async (event) => {
@@ -11897,18 +12193,63 @@ function App() {
     setSessionMessage(`Created ${templateKey} estimate from inspection.`);
   };
 
-  const handleDeleteEstimate = async (estimateId) => {
+  const handleDeleteEstimate = async (estimateOrId) => {
     if (!authUser?.key) return;
-    const next = activeSavedEstimates.filter((item) => item.id !== estimateId);
+    const estimateId = typeof estimateOrId === "object" ? estimateOrId.id : estimateOrId;
+    const dbId = typeof estimateOrId === "object" ? estimateOrId.dbId : "";
+    const next = activeSavedEstimates.filter((item) => item.id !== estimateId && item.dbId !== dbId);
     setSavedEstimates(next);
+    setEditingEstimate((current) => (current && (current.id === estimateId || current.dbId === dbId) ? null : current));
     setCompletedJobs((current) => current.filter((job) => job.estimateId !== estimateId));
 
-    const { error } = await deleteEstimateFromSupabase(estimateId, authUser.key);
+    const { error } = await deleteEstimateFromSupabase(
+      typeof estimateOrId === "object" ? estimateOrId : { id: estimateId },
+      authUser.key,
+    );
     if (error) {
       console.warn("Supabase delete failed:", error.message || error);
     }
 
     setSessionMessage("Saved estimate deleted.");
+  };
+
+  const handleEstimateOwnerSelection = (estimateId, ownerId) => {
+    setEstimateOwnerAssignments((current) => ({
+      ...current,
+      [estimateId]: ownerId,
+    }));
+  };
+
+  const handleReassignEstimateOwner = async (estimate) => {
+    if (!authUser?.key || !isAdminUser || !estimate?.dbId) return;
+    const selectedOwnerId = estimateOwnerAssignments[estimate.id] || estimate.ownerId;
+    if (!selectedOwnerId || selectedOwnerId === estimate.ownerId) return;
+
+    const selectedOwnerProfile = companyUserProfiles.find((profile) => profile.id === selectedOwnerId) || null;
+    const { error } = await reassignEstimateOwnerInSupabase(estimate.dbId, selectedOwnerId);
+    if (error) {
+      setSessionMessageType("error");
+      setSessionMessage(`Owner reassignment failed: ${error.message || String(error)}`);
+      return;
+    }
+
+    setSavedEstimates((current) =>
+      current
+        .map((item) =>
+          item.dbId === estimate.dbId
+            ? {
+                ...item,
+                ownerId: selectedOwnerId,
+                ownerDisplayName: String(selectedOwnerProfile?.full_name || selectedOwnerProfile?.email || ""),
+                ownerEmail: String(selectedOwnerProfile?.email || ""),
+              }
+            : item,
+        )
+        .filter((item) => isAdminUser || item.ownerId === authUser.key),
+    );
+
+    setSessionMessageType("success");
+    setSessionMessage("Estimate owner reassigned.");
   };
 
   const handleCompleteJob = (estimate) => {
@@ -13228,9 +13569,13 @@ function App() {
       </Section>
     ) : null;
 
-  const renderTemplateScreen = (title) => (
-    <div className="appShell">
-      <style>{css}</style>
+  const renderEstimatorShellHeader = ({
+    title,
+    intro,
+    showClear = true,
+    showQuickMeasure = true,
+  }) => (
+    <>
       <header className="hero">
         <div>
           <div className="brandRow">
@@ -13238,29 +13583,38 @@ function App() {
               <img src={LOGO_SRC} alt="CRT Roofing logo" />
             </div>
             <div>
-              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <p className="eyebrow">CRT Roofing Employee Portal</p>
               <h1>{title}</h1>
-              <p className="intro">Coming Soon</p>
+              <p className="intro">{intro}</p>
             </div>
           </div>
         </div>
 
         <div className="heroCard">
-          <span>Signed in</span>
+          <span>Welcome</span>
           <strong>{authUser.displayName}</strong>
-          <p>Local mode only</p>
+          <p>{authUser.title || (isAdminUser ? "Administration" : "Sales")}</p>
         </div>
       </header>
 
       <div className="actionRow" style={{ marginBottom: 16 }}>
-        <button type="button" className="dangerButton" onClick={handleClearEstimate}>
-          Clear estimate
-        </button>
+        {showClear ? (
+          <button type="button" className="dangerButton" onClick={handleClearEstimate}>
+            Clear estimate
+          </button>
+        ) : null}
         <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
           Back to dashboard
         </button>
-        {renderQuickMeasureUploadControl()}
+        {showQuickMeasure ? renderQuickMeasureUploadControl() : null}
       </div>
+    </>
+  );
+
+  const renderTemplateScreen = (title) => (
+    <div className="appShell">
+      <style>{css}</style>
+      {renderEstimatorShellHeader({ title, intro: "Coming Soon" })}
 
       {renderQuickMeasureReviewPanel()}
 
@@ -13273,36 +13627,7 @@ function App() {
   const renderMaintenanceScreen = () => (
     <div className="appShell">
       <style>{css}</style>
-      <header className="hero">
-        <div>
-          <div className="brandRow">
-            <div className="brandMark">
-              <img src={LOGO_SRC} alt="CRT Roofing logo" />
-            </div>
-            <div>
-              <p className="eyebrow">CRT Roofing Estimating Platform</p>
-              <h1>Maintenance Estimate</h1>
-              <p className="intro">Coming Soon</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="heroCard">
-          <span>Signed in</span>
-          <strong>{authUser.displayName}</strong>
-          <p>Local mode only</p>
-        </div>
-      </header>
-
-      <div className="actionRow" style={{ marginBottom: 16 }}>
-        <button type="button" className="dangerButton" onClick={handleClearEstimate}>
-          Clear estimate
-        </button>
-        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
-          Back to dashboard
-        </button>
-        {renderQuickMeasureUploadControl()}
-      </div>
+      {renderEstimatorShellHeader({ title: "Maintenance Estimate", intro: "Coming Soon" })}
 
       {renderQuickMeasureReviewPanel()}
 
@@ -13359,36 +13684,10 @@ function App() {
   const renderSprayFoamScreen = () => (
     <div className="appShell" onFocusCapture={handleSelectZeroOnFocus}>
       <style>{css}</style>
-      <header className="hero">
-        <div>
-          <div className="brandRow">
-            <div className="brandMark">
-              <img src={LOGO_SRC} alt="CRT Roofing logo" />
-            </div>
-            <div>
-              <p className="eyebrow">CRT Roofing Estimating Platform</p>
-              <h1>Spray Foam Estimate</h1>
-              <p className="intro">Squares-based spray foam template with material, labor, travel, and markup totals.</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="heroCard">
-          <span>Signed in</span>
-          <strong>{authUser.displayName}</strong>
-          <p>Local mode only</p>
-        </div>
-      </header>
-
-      <div className="actionRow" style={{ marginBottom: 16 }}>
-        <button type="button" className="dangerButton" onClick={handleClearEstimate}>
-          Clear estimate
-        </button>
-        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
-          Back to dashboard
-        </button>
-        {renderQuickMeasureUploadControl()}
-      </div>
+      {renderEstimatorShellHeader({
+        title: "Spray Foam Estimate",
+        intro: "Squares-based spray foam template with material, labor, travel, and markup totals.",
+      })}
 
       {renderQuickMeasureReviewPanel()}
 
@@ -13437,7 +13736,7 @@ function App() {
         </div>
       </Section>
 
-      <Section title="Job info" subtitle="Capture the core spray foam project details.">
+      <Section title="Job Information" subtitle="Capture the core spray foam project details.">
         <div className="formGrid">
           <Field label="Job name">
             <input type="text" value={inputs.jobName} onChange={(e) => setField("jobName", e.target.value)} />
@@ -14228,18 +14527,6 @@ function App() {
         </div>
       </Section>
 
-      <div style={{ margin: "8px 0 0", color: "var(--text-muted)", fontSize: "0.85rem", fontWeight: 700, letterSpacing: "0.04em" }}>
-        TILE OVERHEAD SECTION RENDERING HERE
-      </div>
-      <OverheadCalculator
-        inputs={inputs}
-        calculation={calculation}
-        onOverheadPercentChange={(value) => setField("overheadPercent", value)}
-        onScopeAddersChange={(value) => setField("scopeAdders", value)}
-        onMiscCostChange={(value) => setField("miscCost", value)}
-        subtitle="Apply an overhead percentage before markup is calculated."
-      />
-
       <TravelCalculator
         inputs={inputs}
         calculation={calculation}
@@ -14248,10 +14535,9 @@ function App() {
         isLookingUpDistance={isLookingUpDistance}
         travelLookupMessage={travelLookupMessage}
         googleDebug={googleDebug}
+        showGoogleDebug={Boolean(typeof import.meta !== "undefined" && import.meta.env?.DEV)}
         showLodging
-        companyHqHint="Default: 18551 Orange Street, Bloomington, CA 92316"
         oneWayMilesLabel="Miles to location"
-        onCompanyHqAddressChange={(value) => setTravelField("companyHqAddress", value)}
         onJobSiteAddressChange={(value) => {
           setTravelField("jobSiteAddress", value);
           setField("jobAddress", value);
@@ -14262,7 +14548,6 @@ function App() {
           setField("sprayFoamMilesToLocation", value);
         }}
         onAverageDrivingSpeedChange={(value) => setTravelField("averageDrivingSpeedMph", value)}
-        onDriverHourlyRateChange={(value) => setField("travelDriverHourlyRate", value)}
         onWorkHoursPerDayChange={(value) => setField("workHoursPerDay", value)}
         onNumberOfJobDaysChange={(value) => {
           setField("numberOfJobDays", value);
@@ -14273,12 +14558,19 @@ function App() {
         onAddVehicleSelection={addTravelVehicleSelection}
         onRemoveVehicleSelection={removeTravelVehicleSelection}
         onCalculateDistance={handleCalculateDistance}
-        onTestGoogleGeocoder={handleTestGoogleGeocoder}
-        onTestDirections={handleTestDirections}
         onLodgingNeededChange={(value) => setField("sprayFoamLodgingNeeded", value)}
         onLodgingNameChange={(value) => setField("sprayFoamLodgingName", value)}
         onNightlyLodgingCostChange={(value) => setField("sprayFoamNightlyLodgingCost", value)}
         onLodgingNightsChange={(value) => setField("sprayFoamLodgingNights", value)}
+      />
+
+      <OverheadCalculator
+        inputs={inputs}
+        calculation={calculation}
+        onOverheadPercentChange={(value) => setField("overheadPercent", value)}
+        onScopeAddersChange={(value) => setField("scopeAdders", value)}
+        onMiscCostChange={(value) => setField("miscCost", value)}
+        subtitle="Apply an overhead percentage before markup is calculated."
       />
 
       <Section title="Totals" subtitle="Job cost, markup table, and pricing per square.">
@@ -14361,38 +14653,14 @@ function App() {
   const renderShingleScreen = () => (
     <div className="appShell" onFocusCapture={handleSelectZeroOnFocus}>
       <style>{css}</style>
-      <header className="hero">
-        <div>
-          <div className="brandRow">
-            <div className="brandMark">
-              <img src={LOGO_SRC} alt="CRT Roofing logo" />
-            </div>
-            <div>
-              <p className="eyebrow">CRT Roofing Estimating Platform</p>
-              <h1>Shingle Estimate</h1>
-              <p className="intro">Shingle template with measurements, material takeoff, labor, travel, and markup totals.</p>
-            </div>
-          </div>
-        </div>
+      {renderEstimatorShellHeader({
+        title: "Shingle Estimate",
+        intro: "Shingle template with measurements, material takeoff, labor, travel, and markup totals.",
+      })}
 
-        <div className="heroCard">
-          <span>Signed in</span>
-          <strong>{authUser.displayName}</strong>
-          <p>Local mode only</p>
-        </div>
-      </header>
+      {renderQuickMeasureReviewPanel()}
 
-      <div className="actionRow" style={{ marginBottom: 16 }}>
-        <button type="button" className="dangerButton" onClick={handleClearEstimate}>
-          Clear estimate
-        </button>
-        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
-          Back to dashboard
-        </button>
-        {renderQuickMeasureUploadControl()}
-      </div>
-
-      <Section title="Job Info" subtitle="Capture the project details for this shingle estimate.">
+      <Section title="Job Information" subtitle="Capture the project details for this shingle estimate.">
         <div className="formGrid">
           <Field label="Job name">
             <input
@@ -14882,15 +15150,6 @@ function App() {
         )}
       </Section>
 
-      <OverheadCalculator
-        inputs={inputs}
-        calculation={calculation}
-        onOverheadPercentChange={(value) => setField("overheadPercent", value)}
-        onScopeAddersChange={(value) => setField("scopeAdders", value)}
-        onMiscCostChange={(value) => setField("miscCost", value)}
-        subtitle="Apply overhead before markup is calculated."
-      />
-
       <TravelCalculator
         inputs={inputs}
         calculation={calculation}
@@ -14899,13 +15158,11 @@ function App() {
         isLookingUpDistance={isLookingUpDistance}
         travelLookupMessage={travelLookupMessage}
         googleDebug={googleDebug}
-        companyHqHint="Default: CRT Roofing office in Bloomington, CA"
+        showGoogleDebug={Boolean(typeof import.meta !== "undefined" && import.meta.env?.DEV)}
         oneWayMilesLabel="One-way miles"
-        onCompanyHqAddressChange={(value) => setTravelField("companyHqAddress", value)}
         onJobSiteAddressChange={(value) => setTravelField("jobSiteAddress", value)}
         onOneWayMilesChange={(value) => setTravelField("oneWayMiles", value)}
         onAverageDrivingSpeedChange={(value) => setTravelField("averageDrivingSpeedMph", value)}
-        onDriverHourlyRateChange={(value) => setTravelField("travelDriverHourlyRate", value)}
         onWorkHoursPerDayChange={(value) => setTravelField("workHoursPerDay", value)}
         onNumberOfJobDaysChange={(value) => setTravelField("numberOfJobDays", value)}
         onNumberOfDriversChange={(value) => setTravelField("numberOfDrivers", value)}
@@ -14913,8 +15170,15 @@ function App() {
         onAddVehicleSelection={addTravelVehicleSelection}
         onRemoveVehicleSelection={removeTravelVehicleSelection}
         onCalculateDistance={handleCalculateDistance}
-        onTestGoogleGeocoder={handleTestGoogleGeocoder}
-        onTestDirections={handleTestDirections}
+      />
+
+      <OverheadCalculator
+        inputs={inputs}
+        calculation={calculation}
+        onOverheadPercentChange={(value) => setField("overheadPercent", value)}
+        onScopeAddersChange={(value) => setField("scopeAdders", value)}
+        onMiscCostChange={(value) => setField("miscCost", value)}
+        subtitle="Apply overhead before markup is calculated."
       />
 
       <Section title="Totals / Markup" subtitle="Job cost, markup table, and bid selection.">
@@ -15017,7 +15281,7 @@ function App() {
               <img src={LOGO_SRC} alt="CRT Roofing logo" />
             </div>
             <div>
-              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <p className="eyebrow">CRT Roofing Employee Portal</p>
               <h1>Field Notes / Roof Inspection</h1>
               <p className="intro">Capture the inspection details before you build an estimate.</p>
             </div>
@@ -15027,7 +15291,7 @@ function App() {
         <div className="heroCard">
           <span>Signed in</span>
           <strong>{authUser.displayName}</strong>
-          <p>Local mode only</p>
+          <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
         </div>
       </header>
 
@@ -15139,7 +15403,19 @@ function App() {
 
         <div className="formGrid" style={{ marginTop: 12 }}>
           <Field label="Photos upload">
-            <input type="file" accept="image/*" multiple onChange={handleFieldNotesPhotosChange} />
+            <button
+              type="button"
+              className="secondaryButton"
+              onClick={() =>
+                requestPhotoAccessAndOpenPicker({
+                  accept: "image/*",
+                  multiple: true,
+                  onChange: handleFieldNotesPhotosChange,
+                })
+              }
+            >
+              Upload photos from device
+            </button>
             <em>{fieldNotes.photos.length ? `${fieldNotes.photos.length} photo(s) attached.` : "Attach inspection photos for the record."}</em>
           </Field>
           <Field label="Internal notes">
@@ -15270,7 +15546,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>Local mode only</p>
+            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
           </div>
         </header>
 
@@ -15278,9 +15554,11 @@ function App() {
           <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
             Back to dashboard
           </button>
-          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
-            Open Admin Pricing
-          </button>
+          {isAdminUser ? (
+            <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
+              Open Admin Pricing
+            </button>
+          ) : null}
         </div>
 
         <Section title="Employee Management" subtitle="Add, edit, and activate employees used in Field Operations, Office, Sales, and Management.">
@@ -16061,7 +16339,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>Local mode only</p>
+            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
           </div>
         </header>
 
@@ -16612,7 +16890,7 @@ function App() {
               <img src={LOGO_SRC} alt="CRT Roofing logo" />
             </div>
             <div>
-              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <p className="eyebrow">CRT Roofing Employee Portal</p>
               <h1>Admin Pricing &amp; Defaults</h1>
               <p className="intro">Local settings only for now.</p>
             </div>
@@ -16622,7 +16900,7 @@ function App() {
         <div className="heroCard">
           <span>Signed in</span>
           <strong>{authUser.displayName}</strong>
-          <p>Local mode only</p>
+          <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
         </div>
       </header>
 
@@ -16661,6 +16939,52 @@ function App() {
           ))}
         </div>
       </Section>
+
+      <Section title="Travel Defaults" subtitle="Company-controlled travel settings used by all estimator templates.">
+        <div className="formGrid">
+          <Field label="Company HQ address">
+            <input
+              type="text"
+              value={adminTravelSettings.companyHqAddress}
+              onChange={(e) => setAdminTravelField("companyHqAddress", e.target.value)}
+            />
+          </Field>
+          <Field label="Driver hourly rate">
+            <input
+              type="number"
+              onWheel={handleNumberInputWheel}
+              min="0"
+              step="0.01"
+              value={adminTravelSettings.travelDriverHourlyRate}
+              onChange={(e) => setAdminTravelField("travelDriverHourlyRate", e.target.value)}
+            />
+          </Field>
+          <Field label="Fuel cost per gallon">
+            <input
+              type="number"
+              onWheel={handleNumberInputWheel}
+              min="0"
+              step="0.01"
+              value={adminTravelSettings.fuelCostPerGallon}
+              onChange={(e) => setAdminTravelField("fuelCostPerGallon", e.target.value)}
+            />
+          </Field>
+        </div>
+        <div className="formGrid" style={{ marginTop: 10 }}>
+          {TRAVEL_VEHICLE_OPTIONS.map((vehicle) => (
+            <Field key={vehicle.value} label={`${vehicle.label} MPG`}>
+              <input
+                type="number"
+                onWheel={handleNumberInputWheel}
+                min="0.1"
+                step="0.1"
+                value={adminTravelSettings.vehicleMpgByKey?.[vehicle.value] ?? vehicle.mpg}
+                onChange={(e) => setAdminTravelVehicleMpg(vehicle.value, e.target.value)}
+              />
+            </Field>
+          ))}
+        </div>
+      </Section>
     </div>
   );
 
@@ -16674,7 +16998,7 @@ function App() {
               <img src={LOGO_SRC} alt="CRT Roofing logo" />
             </div>
             <div>
-              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <p className="eyebrow">CRT Roofing Employee Portal</p>
               <h1>Estimate Templates</h1>
               <p className="intro">Choose the estimate template you want to build.</p>
             </div>
@@ -16684,7 +17008,7 @@ function App() {
         <div className="heroCard">
           <span>Signed in</span>
           <strong>{authUser.displayName}</strong>
-          <p>Local mode only</p>
+          <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
         </div>
       </header>
 
@@ -16708,31 +17032,54 @@ function App() {
               <p>{card.comingSoon ? "Coming Soon" : "Open template"}</p>
             </button>
           ))}
-        </div>
-        <div className="actionRow" style={{ marginTop: 16 }}>
-          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
-            Admin Pricing
+          <button
+            type="button"
+            className="templateCard"
+            onClick={() => setTemplatesSavedEstimatesOpen((current) => !current)}
+          >
+            <span className="eyebrow">Browse</span>
+            <strong>Saved estimates</strong>
+            <p>{activeSavedEstimates.length ? `${activeSavedEstimates.length} saved` : "No saved estimates yet"}</p>
           </button>
         </div>
+        {isAdminUser ? (
+          <div className="actionRow" style={{ marginTop: 16 }}>
+            <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
+              Admin Pricing
+            </button>
+          </div>
+        ) : null}
       </Section>
 
-      <Section title="Saved estimates" subtitle="Recent estimates in this browser.">
-        <div className="savedList">
-          {activeSavedEstimates.length ? (
-            activeSavedEstimates.map((estimate) => (
-              <div className="savedCard" key={estimate.id}>
-                <div>
-                  <span className="eyebrow">{estimate.estimateCode || estimateCode(estimate.estimateNumber || 1)}</span>
-                  <strong>{estimate.name || "Untitled estimate"}</strong>
-                  <p>
-                    {estimate.estimateType ? `${estimate.estimateType} | ` : ""}
-                    {estimate.inputs?.jobName ? `${estimate.inputs.jobName} | ` : ""}
-                    {estimate.inputs?.customerName ? `${estimate.inputs.customerName} | ` : ""}
-                    {num(estimate.summary?.totalSquares ?? estimate.inputs?.totalSquares ?? 0, 0)} SQ |{" "}
-                    {money(estimate.summary?.selectedBidAmount ?? 0)} bid |{" "}
-                    {num(estimate.summary?.selectedMarkupPercent ?? 0, 0)}% markup
-                  </p>
-                </div>
+      {templatesSavedEstimatesOpen ? (
+        <Section title="Saved estimates" subtitle="Review estimates you already saved.">
+          <div style={{ display: "grid", gap: 10, maxWidth: 480 }}>
+            <input
+              type="search"
+              placeholder="Search saved estimates"
+              value={templatesSavedEstimateSearch}
+              onChange={(e) => setTemplatesSavedEstimateSearch(e.target.value)}
+            />
+          </div>
+          <div className="savedList">
+            {filteredTemplatesSavedEstimates.length ? (
+              filteredTemplatesSavedEstimates.map((estimate) => (
+                <div className="savedCard" key={estimate.id}>
+                  <div>
+                    <span className="eyebrow">{estimate.estimateCode || estimateCode(estimate.estimateNumber || 1)}</span>
+                    <strong>{estimate.name || "Untitled estimate"}</strong>
+                    <p>
+                      {estimate.estimateType ? `${estimate.estimateType} | ` : ""}
+                      {estimate.inputs?.jobName ? `${estimate.inputs.jobName} | ` : ""}
+                      {estimate.inputs?.customerName ? `${estimate.inputs.customerName} | ` : ""}
+                      {num(estimate.summary?.totalSquares ?? estimate.inputs?.totalSquares ?? 0, 0)} SQ |{" "}
+                      {money(estimate.summary?.selectedBidAmount ?? 0)} bid |{" "}
+                      {num(estimate.summary?.selectedMarkupPercent ?? 0, 0)}% markup
+                    </p>
+                    {isAdminUser ? (
+                      <p>Owner: {estimate.ownerDisplayName || estimate.ownerEmail || estimate.ownerId || "Unassigned"}</p>
+                    ) : null}
+                  </div>
 
                   <div className="savedActions">
                     <button type="button" className="secondaryButton" onClick={() => handleConvertEstimateToProposal(estimate)}>
@@ -16741,31 +17088,54 @@ function App() {
                     <button type="button" className="secondaryButton" onClick={() => handleLoadEstimate(estimate)}>
                       Load
                     </button>
-                  <button type="button" className="secondaryButton" onClick={() => handleApproveJob(estimate)}>
-                    Approve Job
-                  </button>
-                  <button type="button" className="secondaryButton" onClick={() => handleCompleteJob(estimate)}>
-                    Complete Job
-                  </button>
-                  <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate.id)}>
-                    Delete
-                  </button>
+                    <button type="button" className="secondaryButton" onClick={() => handleApproveJob(estimate)}>
+                      Approve Job
+                    </button>
+                    <button type="button" className="secondaryButton" onClick={() => handleCompleteJob(estimate)}>
+                      Complete Job
+                    </button>
+                    {isAdminUser ? (
+                      <>
+                        <select
+                          value={estimateOwnerAssignments[estimate.id] || estimate.ownerId || ""}
+                          onChange={(e) => handleEstimateOwnerSelection(estimate.id, e.target.value)}
+                        >
+                          <option value="">Select owner</option>
+                          {companyUserProfiles.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                              {(profile.full_name || profile.email || profile.id)} ({normalizeAppRole(profile.role)})
+                            </option>
+                          ))}
+                        </select>
+                        <button type="button" className="secondaryButton" onClick={() => handleReassignEstimateOwner(estimate)}>
+                          Reassign
+                        </button>
+                      </>
+                    ) : null}
+                    <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate)}>
+                      Delete
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))
-          ) : (
-            <p className="emptyState">No saved estimates yet.</p>
-          )}
-        </div>
-      </Section>
+              ))
+            ) : (
+              <p className="emptyState">
+                {templatesSavedEstimateSearch.trim() ? "No saved estimates match your search." : "No saved estimates yet."}
+              </p>
+            )}
+          </div>
+        </Section>
+      ) : null}
 
-      <Section title="Admin" subtitle="Pricing and default settings.">
-        <div className="actionRow">
-          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
-            Admin Pricing
-          </button>
-        </div>
-      </Section>
+      {isAdminUser ? (
+        <Section title="Admin" subtitle="Pricing and default settings.">
+          <div className="actionRow">
+            <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
+              Admin Pricing
+            </button>
+          </div>
+        </Section>
+      ) : null}
     </div>
   );
 
@@ -16779,7 +17149,7 @@ function App() {
               <img src={LOGO_SRC} alt="CRT Roofing logo" />
             </div>
             <div>
-              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <p className="eyebrow">CRT Roofing Employee Portal</p>
               <h1>Approved Jobs / Upcoming Projects</h1>
               <p className="intro">Manage approved jobs, upcoming projects, and the information the field still needs.</p>
             </div>
@@ -16835,7 +17205,7 @@ function App() {
                 <img src={LOGO_SRC} alt="CRT Roofing logo" />
               </div>
               <div>
-                <p className="eyebrow">CRT Roofing Estimating Platform</p>
+                <p className="eyebrow">CRT Roofing Employee Portal</p>
                 <h1>Approved Job: {approvedJobData.estimateCode}</h1>
                 <p className="intro">Track daily progress and job status without modifying the original estimate.</p>
               </div>
@@ -17052,7 +17422,7 @@ function App() {
                   <img src={LOGO_SRC} alt="CRT Roofing logo" />
                 </div>
                 <div>
-                  <p className="eyebrow">CRT Roofing Estimating Platform</p>
+                  <p className="eyebrow">CRT Roofing Employee Portal</p>
                   <h1>Completed Job Metrics</h1>
                   <p className="intro">Track actual vs estimated costs and performance.</p>
                   <p className="intro">Metrics can be edited manually if daily progress was not fully tracked.</p>
@@ -17115,7 +17485,7 @@ function App() {
                 <img src={LOGO_SRC} alt="CRT Roofing logo" />
               </div>
               <div>
-                <p className="eyebrow">CRT Roofing Estimating Platform</p>
+                <p className="eyebrow">CRT Roofing Employee Portal</p>
                 <h1>Complete Job: {metricsFormData.estimateCode}</h1>
                 <p className="intro">Track actual vs estimated costs and performance.</p>
                   <p className="intro">Metrics can be edited manually if daily progress was not fully tracked.</p>
@@ -17323,7 +17693,7 @@ function App() {
                 <img src={LOGO_SRC} alt="CRT Roofing logo" />
               </div>
               <div>
-                <p className="eyebrow">CRT Roofing Estimating Platform</p>
+                <p className="eyebrow">CRT Roofing Employee Portal</p>
                 <h1>Past Job Insights</h1>
                 <p className="intro">Performance analytics from completed jobs.</p>
               </div>
@@ -17451,35 +17821,12 @@ function App() {
     return (
     <div className="appShell" onFocusCapture={handleSelectZeroOnFocus}>
       <style>{css}</style>
-      <header className="hero">
-        <div>
-          <div className="brandRow">
-            <div className="brandMark">
-              <img src={LOGO_SRC} alt="CRT Roofing logo" />
-            </div>
-            <div>
-              <p className="eyebrow">CRT Roofing Estimating Platform</p>
-              <h1>Tile Estimate</h1>
-              <p className="intro">Tile estimate built in the same layout and workflow as the Shingle screen.</p>
-            </div>
-          </div>
-        </div>
+      {renderEstimatorShellHeader({
+        title: "Tile Estimate",
+        intro: "Tile estimate built in the same layout and workflow as the Shingle screen.",
+      })}
 
-        <div className="heroCard">
-          <span>Signed in</span>
-          <strong>{authUser.displayName}</strong>
-          <p>Local mode only</p>
-        </div>
-      </header>
-
-      <div className="actionRow" style={{ marginBottom: 16 }}>
-        <button type="button" className="dangerButton" onClick={handleClearEstimate}>
-          Clear estimate
-        </button>
-        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
-          Back to dashboard
-        </button>
-      </div>
+      {renderQuickMeasureReviewPanel()}
 
       <Section title="Job Information" subtitle="Start with the customer and project basics.">
         <div className="formGrid">
@@ -18227,15 +18574,6 @@ function App() {
         )}
       </Section>
 
-      <OverheadCalculator
-        inputs={inputs}
-        calculation={calculation}
-        onOverheadPercentChange={(value) => setField("overheadPercent", value)}
-        onScopeAddersChange={(value) => setField("scopeAdders", value)}
-        onMiscCostChange={(value) => setField("miscCost", value)}
-        subtitle="Apply overhead before markup is calculated."
-      />
-
       <TravelCalculator
         inputs={inputs}
         calculation={calculation}
@@ -18244,13 +18582,11 @@ function App() {
         isLookingUpDistance={isLookingUpDistance}
         travelLookupMessage={travelLookupMessage}
         googleDebug={googleDebug}
-        companyHqHint="Default: 18551 Orange Street, Bloomington, CA 92316"
+        showGoogleDebug={Boolean(typeof import.meta !== "undefined" && import.meta.env?.DEV)}
         oneWayMilesLabel="Miles to location"
-        onCompanyHqAddressChange={(value) => setTravelField("companyHqAddress", value)}
         onJobSiteAddressChange={(value) => setTravelField("jobSiteAddress", value)}
         onOneWayMilesChange={(value) => setTravelField("oneWayMiles", value)}
         onAverageDrivingSpeedChange={(value) => setTravelField("averageDrivingSpeedMph", value)}
-        onDriverHourlyRateChange={(value) => setTravelField("travelDriverHourlyRate", value)}
         onWorkHoursPerDayChange={(value) => setTravelField("workHoursPerDay", value)}
         onNumberOfJobDaysChange={(value) => setTravelField("numberOfJobDays", value)}
         onNumberOfDriversChange={(value) => setTravelField("numberOfDrivers", value)}
@@ -18258,8 +18594,15 @@ function App() {
         onAddVehicleSelection={addTravelVehicleSelection}
         onRemoveVehicleSelection={removeTravelVehicleSelection}
         onCalculateDistance={handleCalculateDistance}
-        onTestGoogleGeocoder={handleTestGoogleGeocoder}
-        onTestDirections={handleTestDirections}
+      />
+
+      <OverheadCalculator
+        inputs={inputs}
+        calculation={calculation}
+        onOverheadPercentChange={(value) => setField("overheadPercent", value)}
+        onScopeAddersChange={(value) => setField("scopeAdders", value)}
+        onMiscCostChange={(value) => setField("miscCost", value)}
+        subtitle="Apply overhead before markup is calculated."
       />
 
       <Section title="Totals / Markup" subtitle="Job cost, markup table, and bid selection.">
@@ -18350,6 +18693,22 @@ function App() {
   }
 
   function renderDashboard() {
+    const dashboardWelcomeName = (() => {
+      const rawName = String(authUser?.displayName || "").trim();
+      if (!rawName || rawName.includes("@")) {
+        return "Employee";
+      }
+      return rawName;
+    })();
+
+    const dashboardRoleLabel = (() => {
+      const title = String(authUser?.title || "").trim();
+      if (title) {
+        return title === "Sales" ? "Salesperson" : title;
+      }
+      return isAdminUser ? "Administration" : "Salesperson";
+    })();
+
     return (
     <div className="appShell">
       <style>{css}</style>
@@ -18360,17 +18719,22 @@ function App() {
               <img src={LOGO_SRC} alt="CRT Roofing logo" />
             </div>
             <div>
-              <p className="eyebrow">CRT Roofing Estimating Platform</p>
+              <p className="eyebrow">CRT Roofing Employee Portal</p>
               <h1>Dashboard</h1>
               <p className="intro">Choose how you want to start your work.</p>
             </div>
           </div>
         </div>
 
-        <div className="heroCard">
-          <span>Signed in</span>
-          <strong>{authUser.displayName}</strong>
-          <p>Local mode only</p>
+        <div className="heroCard" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "grid", gap: 6 }}>
+            <strong>Welcome back</strong>
+            <p style={{ margin: 0, color: "#fff", fontSize: "1.05rem", fontWeight: 700 }}>{dashboardWelcomeName}</p>
+            <p>{`${dashboardRoleLabel} · ${authUser.email || "No email available"}`}</p>
+          </div>
+          <button type="button" className="secondaryButton" onClick={handleLogout}>
+            Sign out
+          </button>
         </div>
       </header>
 
@@ -18381,60 +18745,79 @@ function App() {
       {renderQuickMeasureReviewPanel()}
 
       <Section title="Workflows" subtitle="Pick a starting point.">
-        <div className="templateGrid">
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("fieldNotes")}>
-            <span className="eyebrow">Inspection</span>
-            <strong>Field Notes / Roof Inspection</strong>
-            <p>Capture the roof details before bidding.</p>
-          </button>
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("fieldOperations")}>
-            <span className="eyebrow">Operations</span>
-            <strong>Field Operations</strong>
-            <p>Daily job logs and office review for field crews.</p>
-          </button>
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("administration")}>
-            <span className="eyebrow">Admin</span>
-            <strong>Administration</strong>
-            <p>Manage employees and company setup.</p>
-          </button>
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("cfoDashboard")}>
-            <span className="eyebrow">Finance</span>
-            <strong>CFO Dashboard</strong>
-            <p>Executive financial overview for CRT Roofing.</p>
-          </button>
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalBuilder")}>
-            <span className="eyebrow">Sales</span>
-            <strong>Proposal Builder</strong>
-            <p>Turn saved estimates into customer-ready proposals.</p>
-          </button>
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("estimateTemplates")}>
-            <span className="eyebrow">Templates</span>
-            <strong>Estimate Templates</strong>
-            <p>Open TPO and future estimate templates.</p>
-          </button>
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("jobMetrics")}>
-            <span className="eyebrow">Tracking</span>
-            <strong>Completed Job Metrics</strong>
-            <p>Track actual vs estimated costs and results.</p>
-          </button>
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("approvedJobs")}>
-            <span className="eyebrow">Jobs</span>
-            <strong>Approved Jobs</strong>
-            <p>Manage job status, daily logs, and progress tracking.</p>
-          </button>
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("activeJobs")}>
-            <span className="eyebrow">Projects</span>
-            <strong>Active Jobs</strong>
-            <p>
-              <span className={`dashboardStatusDot ${activeJobsSummary.activeCount ? "active" : ""}`} aria-hidden="true" />
-              {activeJobsSummary.activeCount ? `${activeJobsSummary.activeCount} active projects` : "No active projects"}
-            </p>
-          </button>
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("pastJobInsights")}>
-            <span className="eyebrow">Analytics</span>
-            <strong>Past Job Insights</strong>
-            <p>View performance analytics from completed jobs.</p>
-          </button>
+        <div className="workflowGroups">
+          <div className="workflowGroupCard">
+            <div className="workflowGroupHeader">
+              <h3>Field & project workflows</h3>
+              <p>Inspection, operations, proposals, templates, and job history in one place.</p>
+            </div>
+            <div className="workflowGroupGrid">
+              <button type="button" className="templateCard" onClick={() => setActiveTemplate("fieldNotes")}>
+                <span className="eyebrow">Inspection</span>
+                <strong>Field Notes / Roof Inspection</strong>
+                <p>Capture the roof details before bidding.</p>
+              </button>
+              <button type="button" className="templateCard" onClick={() => setActiveTemplate("fieldOperations")}>
+                <span className="eyebrow">Operations</span>
+                <strong>Field Operations</strong>
+                <p>Daily job logs and office review for field crews.</p>
+              </button>
+              <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalBuilder")}>
+                <span className="eyebrow">Sales</span>
+                <strong>Proposal Builder</strong>
+                <p>Turn saved estimates into customer-ready proposals.</p>
+              </button>
+              <button type="button" className="templateCard" onClick={() => setActiveTemplate("estimateTemplates")}>
+                <span className="eyebrow">Templates</span>
+                <strong>Estimate Templates</strong>
+                <p>Open TPO and future estimate templates.</p>
+              </button>
+              <button type="button" className="templateCard" onClick={() => setActiveTemplate("jobMetrics")}>
+                <span className="eyebrow">Tracking</span>
+                <strong>Completed Job Metrics</strong>
+                <p>Track actual vs estimated costs and results.</p>
+              </button>
+              <button type="button" className="templateCard" onClick={() => setActiveTemplate("approvedJobs")}>
+                <span className="eyebrow">Jobs</span>
+                <strong>Approved Jobs</strong>
+                <p>Manage job status, daily logs, and progress tracking.</p>
+              </button>
+              <button type="button" className="templateCard" onClick={() => setActiveTemplate("pastJobInsights")}>
+                <span className="eyebrow">Analytics</span>
+                <strong>Past Job Insights</strong>
+                <p>View performance analytics from completed jobs.</p>
+              </button>
+            </div>
+          </div>
+
+          <div className="workflowGroupCard">
+            <div className="workflowGroupHeader">
+              <h3>Administration & finance</h3>
+              <p>Office setup and the executive financial overview in one spot.</p>
+            </div>
+            <div className="workflowGroupGrid">
+              <button type="button" className="templateCard" onClick={() => setActiveTemplate("administration")}>
+                <span className="eyebrow">Admin</span>
+                <strong>Administration</strong>
+                <p>Manage employees and company setup.</p>
+              </button>
+              {canAccessCfoDashboard ? (
+                <button type="button" className="templateCard" onClick={() => setActiveTemplate("cfoDashboard")}>
+                  <span className="eyebrow">Finance</span>
+                  <strong>CFO Dashboard</strong>
+                  <p>Executive financial overview for CRT Roofing.</p>
+                </button>
+              ) : null}
+              <button type="button" className="templateCard" onClick={() => setActiveTemplate("activeJobs")}>
+                <span className="eyebrow">Projects</span>
+                <strong>Active Jobs</strong>
+                <p>
+                  <span className={`dashboardStatusDot ${activeJobsSummary.activeCount ? "active" : ""}`} aria-hidden="true" />
+                  {activeJobsSummary.activeCount ? `${activeJobsSummary.activeCount} active projects` : "No active projects"}
+                </p>
+              </button>
+            </div>
+          </div>
         </div>
       </Section>
 
@@ -18564,6 +18947,9 @@ function App() {
                         {money(estimate.summary?.selectedBidAmount ?? 0)} bid |{" "}
                         {num(estimate.summary?.selectedMarkupPercent ?? 0, 0)}% markup
                       </p>
+                      {isAdminUser ? (
+                        <p>Owner: {estimate.ownerDisplayName || estimate.ownerEmail || estimate.ownerId || "Unassigned"}</p>
+                      ) : null}
                     </div>
 
                   <div className="savedActions">
@@ -18576,7 +18962,25 @@ function App() {
                       <button type="button" className="secondaryButton" onClick={() => handleApproveJob(estimate)}>
                         Approve Job
                       </button>
-                      <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate.id)}>
+                      {isAdminUser ? (
+                        <>
+                          <select
+                            value={estimateOwnerAssignments[estimate.id] || estimate.ownerId || ""}
+                            onChange={(e) => handleEstimateOwnerSelection(estimate.id, e.target.value)}
+                          >
+                            <option value="">Select owner</option>
+                            {companyUserProfiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>
+                                {(profile.full_name || profile.email || profile.id)} ({normalizeAppRole(profile.role)})
+                              </option>
+                            ))}
+                          </select>
+                          <button type="button" className="secondaryButton" onClick={() => handleReassignEstimateOwner(estimate)}>
+                            Reassign
+                          </button>
+                        </>
+                      ) : null}
+                      <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate)}>
                         Delete
                       </button>
                     </div>
@@ -18818,7 +19222,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>Local mode only</p>
+            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
           </div>
         </header>
 
@@ -19072,7 +19476,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>Local mode only</p>
+            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
           </div>
         </header>
 
@@ -19348,7 +19752,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>Local mode only</p>
+            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
           </div>
         </header>
 
@@ -19543,7 +19947,19 @@ function App() {
                             <input type="datetime-local" value={row.receiptDateTime} onChange={(e) => handleFieldDailyLogFuelReceiptRowChange(row.id, "receiptDateTime", e.target.value)} />
                           </Field>
                           <Field label="Gas receipt photo upload">
-                            <input type="file" accept="image/*" onChange={(e) => handleFieldDailyLogFuelReceiptPhotoUpload(row.id, e)} />
+                            <button
+                              type="button"
+                              className="secondaryButton"
+                              onClick={() =>
+                                requestPhotoAccessAndOpenPicker({
+                                  accept: "image/*",
+                                  multiple: false,
+                                  onChange: (event) => handleFieldDailyLogFuelReceiptPhotoUpload(row.id, event),
+                                })
+                              }
+                            >
+                              Upload receipt photo
+                            </button>
                           </Field>
                           <Field label="Receipt photo">
                             {row.receiptPhotoUrl ? (
@@ -19708,12 +20124,19 @@ function App() {
                 {photoGroups.map((group) => (
                   <div className="photoUploadCard" key={group.value}>
                     <Field label={group.label}>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        onChange={(e) => handleFieldDailyLogPhotoUpload(group.value, e)}
-                      />
+                      <button
+                        type="button"
+                        className="secondaryButton"
+                        onClick={() =>
+                          requestPhotoAccessAndOpenPicker({
+                            accept: "image/*",
+                            multiple: true,
+                            onChange: (event) => handleFieldDailyLogPhotoUpload(group.value, event),
+                          })
+                        }
+                      >
+                        Upload photos from device
+                      </button>
                     </Field>
                     <div className="photoPreviewGrid">
                       {group.photos.length ? (
@@ -21022,7 +21445,7 @@ function App() {
                 <img src={LOGO_SRC} alt="CRT Roofing logo" />
               </div>
               <div>
-                <p className="eyebrow">CRT Roofing Estimating Platform</p>
+                <p className="eyebrow">CRT Roofing Employee Portal</p>
                 <h1>CFO Dashboard</h1>
                 <p className="intro">Executive financial overview for CRT Roofing.</p>
               </div>
@@ -21032,7 +21455,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>Local mode only</p>
+            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
           </div>
         </header>
 
@@ -21315,7 +21738,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>Local mode only</p>
+            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
           </div>
         </header>
 
@@ -21712,6 +22135,65 @@ function App() {
     );
   }
 
+  if (authLoading) {
+    return (
+      <div className="loginShell">
+        <style>{css}</style>
+        <section className="panel loginPanel">
+          <p className="intro" style={{ margin: 0 }}>Authenticating session...</p>
+        </section>
+      </div>
+    );
+  }
+
+  if (passwordRecoveryMode) {
+    return (
+      <div className="loginShell">
+        <style>{css}</style>
+        <section className="panel loginPanel">
+          <div className="brandRow">
+            <div className="brandMark">
+              <img src={LOGO_SRC} alt="CRT Roofing logo" />
+            </div>
+            <div>
+              <p className="eyebrow">CRT Roofing Employee Portal</p>
+              <h1>Create a new password</h1>
+              <p className="intro">Choose a new password for your employee account.</p>
+            </div>
+          </div>
+
+          <form className="loginForm" onSubmit={handlePasswordRecovery}>
+            <div className="formGrid">
+              <Field label="New password">
+                <input
+                  type="password"
+                  value={recoveryPassword}
+                  onChange={(e) => setRecoveryPassword(e.target.value)}
+                  autoComplete="new-password"
+                  placeholder="At least 8 characters"
+                />
+              </Field>
+              <Field label="Confirm new password">
+                <input
+                  type="password"
+                  value={recoveryPasswordConfirmation}
+                  onChange={(e) => setRecoveryPasswordConfirmation(e.target.value)}
+                  autoComplete="new-password"
+                  placeholder="Enter the new password again"
+                />
+              </Field>
+            </div>
+            <div className="actionRow">
+              <button className="loginButton" type="submit">Update password</button>
+            </div>
+            {loginError ? <p className="statusMessage dangerMessage">{loginError}</p> : null}
+            {loginNotice ? <p className="statusMessage">{loginNotice}</p> : null}
+          </form>
+        </section>
+      </div>
+    );
+  }
+
   if (!authUser?.key) {
     return (
       <div className="loginShell">
@@ -21723,41 +22205,45 @@ function App() {
             </div>
             <div>
               <p className="eyebrow">CRT Roofing</p>
-              <h1>Sign in to continue</h1>
-              <p className="intro">This local mode keeps estimates, drafts, and saved bids on this computer only.</p>
+              <h1>Employee Portal</h1>
+              <p className="intro">Sign in with your assigned company account.</p>
             </div>
           </div>
 
           <form className="loginForm" onSubmit={handleLogin}>
             <div className="formGrid">
-              <Field label="Username">
+              <Field label="Email">
                 <input
-                  type="text"
-                  value={loginName}
-                  onChange={(e) => setLoginName(e.target.value)}
-                  autoComplete="username"
-                  placeholder="Enter username"
+                  type="email"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  autoComplete="email"
+                  placeholder="you@company.com"
                 />
               </Field>
 
-              <Field label="Access code">
+              <Field label="Password">
                 <input
                   type="password"
-                  value={loginSecret}
-                  onChange={(e) => setLoginSecret(e.target.value)}
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
                   autoComplete="current-password"
-                  placeholder="Create or enter code"
+                  placeholder="Enter password"
                 />
               </Field>
             </div>
 
             <div className="actionRow">
               <button className="loginButton" type="submit">
-                Enter estimator
+                Enter
+              </button>
+              <button className="secondaryButton" type="button" onClick={handleForgotPassword}>
+                Forgot password
               </button>
             </div>
 
             {loginError ? <p className="statusMessage dangerMessage">{loginError}</p> : null}
+            {loginNotice ? <p className="statusMessage">{loginNotice}</p> : null}
           </form>
         </section>
       </div>
@@ -21765,6 +22251,14 @@ function App() {
   }
 
   if (activeTemplate === "dashboard") {
+    return renderDashboard();
+  }
+
+  if (!isAdminUser && (activeTemplate === "adminPricing" || activeTemplate === "administration")) {
+    return renderDashboard();
+  }
+
+  if (!canAccessCfoDashboard && activeTemplate === "cfoDashboard") {
     return renderDashboard();
   }
 
@@ -21792,61 +22286,35 @@ function App() {
     <div className="appShell">
       <style>{css}</style>
 
-      <div className="actionRow" style={{ marginBottom: 16 }}>
-        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
-          Back to dashboard
-        </button>
-        {renderQuickMeasureUploadControl()}
-      </div>
+      {renderEstimatorShellHeader({
+        title: "TPO Estimate",
+        intro: "Build the estimate in the same order the job is scoped, priced, and bid.",
+      })}
 
       {renderQuickMeasureReviewPanel()}
 
-      <header className="hero">
-        <div>
-          <div className="brandRow">
-            <div className="brandMark">
-              <img src={LOGO_SRC} alt="CRT Roofing logo" />
-            </div>
-            <div>
-              <p className="eyebrow">CRT Roofing TPO Estimator</p>
-              <h1>TPO estimate</h1>
-              <p className="intro">
-                Build the estimate in the same order the job is scoped, priced, and bid.
-                Local save/load/delete is enabled right now.
-              </p>
-            </div>
+      <Section title="Estimate Snapshot" subtitle="Track bid status while you complete scope and pricing.">
+        <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
+          <div className="summaryCard">
+            <span>Next estimate</span>
+            <strong>{estimateCode(nextEstimateNumber)}</strong>
+            <p>Assigned on save</p>
           </div>
-
-          <div className="heroLine">
-            <div className="heroCard">
-              <span>Signed in</span>
-              <strong>{authUser.displayName}</strong>
-              <p>Local mode only</p>
-            </div>
-
-            <div className="heroCard">
-              <span>Next estimate</span>
-              <strong>{estimateCode(nextEstimateNumber)}</strong>
-              <p>Assigned on save</p>
-            </div>
-
-            <div className="heroCard">
-              <span>Total squares</span>
-              <strong>{num(calculation.scope.totalSquares, 0)}</strong>
-              <p>Used for all per-square math</p>
-            </div>
+          <div className="summaryCard">
+            <span>Total squares</span>
+            <strong>{num(calculation.scope.totalSquares, 0)}</strong>
+            <p>Used for per-square calculations</p>
+          </div>
+          <div className="summaryCard">
+            <span>Current bid</span>
+            <strong>{money(calculation.selectedBidAmount)}</strong>
+            <p>{num(calculation.selectedMarkupPercent, 0)}% markup</p>
+            <div className={`statusPill ${isEstimateComplete ? "" : "bad"}`}>{estimateStatusLabel}</div>
           </div>
         </div>
+      </Section>
 
-        <div className="heroCard">
-          <span>Current bid</span>
-          <strong>{money(calculation.selectedBidAmount)}</strong>
-          <p>{num(calculation.selectedMarkupPercent, 0)}% markup</p>
-          <div className={`statusPill ${isEstimateComplete ? "" : "bad"}`}>{estimateStatusLabel}</div>
-        </div>
-      </header>
-
-      <Section title="Job Info" subtitle="Start here so the job record stays aligned with travel and saved estimates.">
+      <Section title="Job Information" subtitle="Start here so the job record stays aligned with travel and saved estimates.">
         <div className="formGrid">
           <Field label="Job name">
             <input
@@ -22567,6 +23035,31 @@ function App() {
         </div>
       </Section>
 
+      <TravelCalculator
+        inputs={inputs}
+        calculation={calculation}
+        isLoaded={isLoaded}
+        loadError={loadError}
+        isLookingUpDistance={isLookingUpDistance}
+        travelLookupMessage={travelLookupMessage}
+        googleDebug={googleDebug}
+        showGoogleDebug={Boolean(typeof import.meta !== "undefined" && import.meta.env?.DEV)}
+        oneWayMilesLabel="Miles to location"
+        onJobSiteAddressChange={(value) => {
+          setTravelField("jobSiteAddress", value);
+          setField("jobAddress", value);
+        }}
+        onOneWayMilesChange={(value) => setTravelField("oneWayMiles", value)}
+        onAverageDrivingSpeedChange={(value) => setTravelField("averageDrivingSpeedMph", value)}
+        onWorkHoursPerDayChange={(value) => setTravelField("workHoursPerDay", value)}
+        onNumberOfJobDaysChange={(value) => setTravelField("numberOfJobDays", value)}
+        onNumberOfDriversChange={(value) => setTravelField("numberOfDrivers", value)}
+        onVehicleSelection={setTravelVehicleSelection}
+        onAddVehicleSelection={addTravelVehicleSelection}
+        onRemoveVehicleSelection={removeTravelVehicleSelection}
+        onCalculateDistance={handleCalculateDistance}
+      />
+
       <Section title="Overhead" subtitle="Apply overhead before markup is calculated.">
         <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", marginTop: 0 }}>
           <div className="summaryCard">
@@ -22618,12 +23111,6 @@ function App() {
       </Section>
 
       <SafeTileSection>
-        <Section title="Travel / Overtime" subtitle="Tile travel will be restored after the overhead placement is confirmed.">
-          <p style={{ color: "var(--text-muted)", margin: 0 }}>
-            Travel controls are temporarily hidden while we confirm the Tile overhead section renders in the live browser.
-          </p>
-        </Section>
-
         <Section title="Bid options" subtitle="These are markup percentages, not gross margin percentages.">
           <div className="bidGrid">
             {calculation.bidOptions.options.map((option) => (
@@ -22711,6 +23198,9 @@ function App() {
                       {money(estimate.summary?.selectedBidAmount ?? 0)} bid |{" "}
                       {num(estimate.summary?.selectedMarkupPercent ?? 0, 0)}% markup
                     </p>
+                    {isAdminUser ? (
+                      <p>Owner: {estimate.ownerDisplayName || estimate.ownerEmail || estimate.ownerId || "Unassigned"}</p>
+                    ) : null}
                   </div>
 
                   <div className="savedActions">
@@ -22726,7 +23216,25 @@ function App() {
                     <button type="button" className="secondaryButton" onClick={() => handleCompleteJob(estimate)}>
                       Complete Job
                     </button>
-                    <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate.id)}>
+                    {isAdminUser ? (
+                      <>
+                        <select
+                          value={estimateOwnerAssignments[estimate.id] || estimate.ownerId || ""}
+                          onChange={(e) => handleEstimateOwnerSelection(estimate.id, e.target.value)}
+                        >
+                          <option value="">Select owner</option>
+                          {companyUserProfiles.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                              {(profile.full_name || profile.email || profile.id)} ({normalizeAppRole(profile.role)})
+                            </option>
+                          ))}
+                        </select>
+                        <button type="button" className="secondaryButton" onClick={() => handleReassignEstimateOwner(estimate)}>
+                          Reassign
+                        </button>
+                      </>
+                    ) : null}
+                    <button type="button" className="dangerButton" onClick={() => handleDeleteEstimate(estimate)}>
                       Delete
                     </button>
                   </div>

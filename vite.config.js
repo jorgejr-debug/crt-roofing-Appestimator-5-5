@@ -16,6 +16,9 @@ function cacheBustIndexHtml() {
 export default defineConfig({
   base: './',
   plugins: [react(), cacheBustIndexHtml()],
+  server: {
+    host: 'localhost',
+  },
   cacheDir: '/private/tmp/crt-roofing-vite-cache',
   build: {
     rollupOptions: {

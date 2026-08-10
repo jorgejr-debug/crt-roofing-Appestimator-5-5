@@ -561,3 +561,226 @@ CREATE POLICY active_job_activity_log_office_view
 -- Rollback note:
 -- These additions are append-only for forward migration. If the module is ever removed,
 -- create a separate explicit rollback script rather than dropping tables here.
+
+-- Employee auth, estimate ownership, and company-wide numbering
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+  id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  email text UNIQUE,
+  full_name text,
+  role text NOT NULL DEFAULT 'salesperson',
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION bootstrap_employee_role(p_email text)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT CASE
+    WHEN lower(coalesce(p_email, '')) = 'natalia@crtroofing.com' THEN 'admin'
+    ELSE 'salesperson'
+  END;
+$$;
+
+CREATE OR REPLACE FUNCTION is_company_admin()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM user_profiles
+    WHERE id = auth.uid()
+      AND role = 'admin'
+  );
+$$;
+
+ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS user_profiles_self_select ON user_profiles;
+DROP POLICY IF EXISTS user_profiles_self_insert ON user_profiles;
+DROP POLICY IF EXISTS user_profiles_self_update ON user_profiles;
+DROP POLICY IF EXISTS user_profiles_admin_manage ON user_profiles;
+
+CREATE POLICY user_profiles_self_select
+  ON user_profiles
+  FOR SELECT
+  USING (
+    auth.uid() = id
+    OR is_company_admin()
+  );
+
+CREATE POLICY user_profiles_self_insert
+  ON user_profiles
+  FOR INSERT
+  WITH CHECK (
+    auth.uid() = id
+    AND role = bootstrap_employee_role(email)
+  );
+
+CREATE POLICY user_profiles_self_update
+  ON user_profiles
+  FOR UPDATE
+  USING (
+    auth.uid() = id
+    OR is_company_admin()
+  )
+  WITH CHECK (
+    auth.uid() = id
+    OR is_company_admin()
+  );
+
+CREATE POLICY user_profiles_admin_manage
+  ON user_profiles
+  FOR ALL
+  USING (is_company_admin())
+  WITH CHECK (is_company_admin());
+
+CREATE OR REPLACE FUNCTION prevent_non_admin_profile_role_changes()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF auth.uid() <> NEW.id THEN
+      RAISE EXCEPTION 'Users can only create their own profile';
+    END IF;
+    IF NEW.role IS DISTINCT FROM bootstrap_employee_role(NEW.email) AND NOT is_company_admin() THEN
+      RAISE EXCEPTION 'Role does not match bootstrap rule';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF NOT is_company_admin() AND NEW.role IS DISTINCT FROM OLD.role THEN
+    RAISE EXCEPTION 'Only admins can change user roles';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_prevent_non_admin_profile_role_changes ON user_profiles;
+DROP TRIGGER IF EXISTS trg_prevent_non_admin_profile_role_insert ON user_profiles;
+CREATE TRIGGER trg_prevent_non_admin_profile_role_insert
+BEFORE INSERT ON user_profiles
+FOR EACH ROW
+EXECUTE FUNCTION prevent_non_admin_profile_role_changes();
+CREATE TRIGGER trg_prevent_non_admin_profile_role_changes
+BEFORE UPDATE ON user_profiles
+FOR EACH ROW
+EXECUTE FUNCTION prevent_non_admin_profile_role_changes();
+
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS owner_id uuid;
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS owner_display_name text;
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS owner_email text;
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS company_estimate_number bigint;
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS saved_at timestamptz DEFAULT now();
+
+-- Legacy rows may not have an auth owner yet; keep them readable to admins until reassigned.
+UPDATE estimates
+SET company_estimate_number = COALESCE(company_estimate_number, estimate_number)
+WHERE company_estimate_number IS NULL;
+
+CREATE SEQUENCE IF NOT EXISTS company_estimate_number_seq AS bigint START WITH 1 INCREMENT BY 1;
+DO $$
+DECLARE
+  max_company_number bigint;
+BEGIN
+  SELECT COALESCE(MAX(company_estimate_number), 0) INTO max_company_number FROM estimates;
+  PERFORM setval('company_estimate_number_seq', GREATEST(1, max_company_number), true);
+END $$;
+
+ALTER TABLE estimates
+  ALTER COLUMN company_estimate_number SET DEFAULT nextval('company_estimate_number_seq');
+
+UPDATE estimates
+SET company_estimate_number = nextval('company_estimate_number_seq')
+WHERE company_estimate_number IS NULL;
+
+ALTER TABLE estimates ALTER COLUMN company_estimate_number SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_estimates_company_estimate_number ON estimates(company_estimate_number);
+CREATE INDEX IF NOT EXISTS idx_estimates_owner_id ON estimates(owner_id);
+CREATE INDEX IF NOT EXISTS idx_estimates_owner_saved_at ON estimates(owner_id, saved_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_estimates_owner_local_id ON estimates(owner_id, local_estimate_id) WHERE local_estimate_id IS NOT NULL;
+
+ALTER TABLE estimates ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS estimates_select_own ON estimates;
+DROP POLICY IF EXISTS estimates_insert_own ON estimates;
+DROP POLICY IF EXISTS estimates_update_own ON estimates;
+DROP POLICY IF EXISTS estimates_delete_own ON estimates;
+DROP POLICY IF EXISTS estimates_admin_all ON estimates;
+
+CREATE POLICY estimates_select_own
+  ON estimates
+  FOR SELECT
+  USING (
+    owner_id = auth.uid()
+    OR is_company_admin()
+  );
+
+CREATE POLICY estimates_insert_own
+  ON estimates
+  FOR INSERT
+  WITH CHECK (
+    owner_id = auth.uid()
+    OR is_company_admin()
+  );
+
+CREATE POLICY estimates_update_own
+  ON estimates
+  FOR UPDATE
+  USING (
+    owner_id = auth.uid()
+    OR is_company_admin()
+  )
+  WITH CHECK (
+    owner_id = auth.uid()
+    OR is_company_admin()
+  );
+
+CREATE POLICY estimates_delete_own
+  ON estimates
+  FOR DELETE
+  USING (
+    owner_id = auth.uid()
+    OR is_company_admin()
+  );
+
+CREATE POLICY estimates_admin_all
+  ON estimates
+  FOR ALL
+  USING (is_company_admin())
+  WITH CHECK (is_company_admin());
+
+CREATE OR REPLACE FUNCTION next_company_estimate_number()
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  next_value bigint;
+BEGIN
+  next_value := nextval('company_estimate_number_seq');
+  RETURN next_value;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION peek_company_estimate_number()
+RETURNS bigint
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+AS $$
+  SELECT last_value + 1
+  FROM company_estimate_number_seq;
+$$;
+
+-- Safe migration plan:
+-- 1. Create auth users for all employees. Natalia@crtroofing.com is the bootstrap admin account.
+-- 2. Backfill user_profiles.id/email/full_name/role using bootstrap_employee_role(email).
+-- 3. Assign existing estimates.owner_id to the correct auth user id.
+-- 4. For any estimate whose owner is unknown, leave owner_id null until an admin reassigns it.
+-- 5. After backfill, only admin users should remain able to see unowned legacy rows.
