@@ -8781,6 +8781,8 @@ function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loginNotice, setLoginNotice] = useState("");
+  const [loginSubmitting, setLoginSubmitting] = useState(false);
+  const [resetSubmitting, setResetSubmitting] = useState(false);
   const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(false);
   const [recoveryPassword, setRecoveryPassword] = useState("");
   const [recoveryPasswordConfirmation, setRecoveryPasswordConfirmation] = useState("");
@@ -11011,11 +11013,37 @@ function App() {
     [fieldDailyLogDraft.fuelReceipts],
   );
 
+  const getFriendlyAuthError = (error, action = "login") => {
+    const message = String(error?.message || error || "").trim();
+    const normalized = message.toLowerCase();
+
+    if (normalized.includes("email not confirmed")) {
+      return "This employee account has not been activated yet. Contact the office to confirm it.";
+    }
+    if (normalized.includes("invalid login credentials")) {
+      return "The email or password is incorrect. Try again or use Forgot password.";
+    }
+    if (normalized.includes("rate limit")) {
+      return "The password email service is temporarily limited. Wait a few minutes and try again, or contact the office.";
+    }
+    if (normalized.includes("failed to fetch") || normalized.includes("network")) {
+      return "The portal could not reach the sign-in service. Check your internet connection and try again.";
+    }
+
+    return message ||
+      (action === "reset"
+        ? "Unable to send the password reset email."
+        : "Unable to sign in.");
+  };
+
   const handleLogin = async (event) => {
     event.preventDefault();
+    if (loginSubmitting || resetSubmitting) return;
+
+    setLoginError("");
     setLoginNotice("");
 
-    const email = String(loginEmail || "").trim();
+    const email = String(loginEmail || "").trim().toLowerCase();
     const password = String(loginPassword || "").trim();
 
     if (!email || !password) {
@@ -11023,20 +11051,29 @@ function App() {
       return;
     }
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setLoginError(error.message || "Unable to sign in.");
-      return;
-    }
+    setLoginSubmitting(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        setLoginError(getFriendlyAuthError(error, "login"));
+        return;
+      }
 
-    setLoginEmail("");
-    setLoginPassword("");
-    setLoginError("");
-    setSessionMessage("Signed in.");
+      setLoginEmail("");
+      setLoginPassword("");
+      setLoginError("");
+      setSessionMessage("Signed in.");
+    } catch (error) {
+      setLoginError(getFriendlyAuthError(error, "login"));
+    } finally {
+      setLoginSubmitting(false);
+    }
   };
 
   const handleForgotPassword = async () => {
-    const email = String(loginEmail || "").trim();
+    if (loginSubmitting || resetSubmitting) return;
+
+    const email = String(loginEmail || "").trim().toLowerCase();
     setLoginError("");
     setLoginNotice("");
 
@@ -11045,15 +11082,24 @@ function App() {
       return;
     }
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.origin,
-    });
-    if (error) {
-      setLoginError(error.message || "Unable to send the password reset email.");
-      return;
-    }
+    setResetSubmitting(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/`,
+      });
+      if (error) {
+        setLoginError(getFriendlyAuthError(error, "reset"));
+        return;
+      }
 
-    setLoginNotice("Password reset email sent. Check your inbox and follow the link.");
+      setLoginNotice(
+        `Password reset email sent to ${email}. Check the inbox and spam folder.`,
+      );
+    } catch (error) {
+      setLoginError(getFriendlyAuthError(error, "reset"));
+    } finally {
+      setResetSubmitting(false);
+    }
   };
 
   const handlePasswordRecovery = async (event) => {
@@ -22217,6 +22263,7 @@ function App() {
                   type="email"
                   value={loginEmail}
                   onChange={(e) => setLoginEmail(e.target.value)}
+                  disabled={loginSubmitting || resetSubmitting}
                   autoComplete="email"
                   placeholder="you@company.com"
                 />
@@ -22227,6 +22274,7 @@ function App() {
                   type="password"
                   value={loginPassword}
                   onChange={(e) => setLoginPassword(e.target.value)}
+                  disabled={loginSubmitting || resetSubmitting}
                   autoComplete="current-password"
                   placeholder="Enter password"
                 />
@@ -22234,11 +22282,16 @@ function App() {
             </div>
 
             <div className="actionRow">
-              <button className="loginButton" type="submit">
-                Enter
+              <button className="loginButton" type="submit" disabled={loginSubmitting || resetSubmitting}>
+                {loginSubmitting ? "Signing in…" : "Enter"}
               </button>
-              <button className="secondaryButton" type="button" onClick={handleForgotPassword}>
-                Forgot password
+              <button
+                className="secondaryButton"
+                type="button"
+                onClick={handleForgotPassword}
+                disabled={loginSubmitting || resetSubmitting}
+              >
+                {resetSubmitting ? "Sending…" : "Forgot password"}
               </button>
             </div>
 
