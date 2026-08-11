@@ -18,6 +18,7 @@ GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
 const AUTH_KEY = "crt_roofing_auth_v1";
 const USERS_KEY = "crt_roofing_users_v1";
+const PASSWORD_RESET_REDIRECT_URL = "https://crt-roofing-estimator.vercel.app/";
 const DRAFT_KEY = (userKey) => `crt_roofing_draft_v1:${userKey}`;
 const SAVED_KEY = (userKey) => `crt_roofing_saved_v1:${userKey}`;
 const FIELD_NOTES_DRAFT_KEY = (userKey) => `crt_roofing_field_notes_draft_v1:${userKey}`;
@@ -11085,10 +11086,10 @@ function App() {
     setResetSubmitting(true);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/`,
+        redirectTo: PASSWORD_RESET_REDIRECT_URL,
       });
       if (error) {
-        setLoginError(getFriendlyAuthError(error, "reset"));
+        setLoginError(error.message || "Unable to send the password reset email.");
         return;
       }
 
@@ -11096,7 +11097,7 @@ function App() {
         `Password reset email sent to ${email}. Check the inbox and spam folder.`,
       );
     } catch (error) {
-      setLoginError(getFriendlyAuthError(error, "reset"));
+      setLoginError(error?.message || "Unable to send the password reset email.");
     } finally {
       setResetSubmitting(false);
     }
