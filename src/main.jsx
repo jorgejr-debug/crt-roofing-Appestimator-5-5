@@ -2,6 +2,7 @@ import { Component, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
+import CustomerProposalSigning from './CustomerProposalSigning.jsx'
 
 class AppErrorBoundary extends Component {
   constructor(props) {
@@ -27,10 +28,16 @@ class AppErrorBoundary extends Component {
   }
 }
 
+const signingParams = new URLSearchParams(window.location.search)
+const proposalSigningToken = signingParams.get('proposal-signing-token')
+const changeOrderSigningToken = signingParams.get('change-order-signing-token')
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <AppErrorBoundary>
-      <App />
+      {proposalSigningToken || changeOrderSigningToken ? (
+        <CustomerProposalSigning token={proposalSigningToken || changeOrderSigningToken} kind={changeOrderSigningToken ? 'change-order' : 'proposal'} />
+      ) : <App />}
     </AppErrorBoundary>
   </StrictMode>,
 )

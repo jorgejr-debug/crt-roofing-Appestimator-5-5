@@ -18,7 +18,7 @@ export function buildTravelLookupMessage({ apiKeyFound, isLoaded, loadError, err
   }
 
   if (error) {
-    return "Google Maps could not calculate the route. Please try again or enter manual miles.";
+    return "Google Maps could not calculate the route. Enter manual one-way miles below and the travel cost will update immediately.";
   }
 
   const routeInfo = [];

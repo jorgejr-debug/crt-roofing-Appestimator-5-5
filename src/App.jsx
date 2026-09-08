@@ -1,10 +1,89 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import React from "react";
 import { useLoadScript } from "@react-google-maps/api";
 import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist/build/pdf.mjs";
 import pdfWorkerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import WorkHub from "./WorkHub.jsx";
+import DashboardTasks from "./DashboardTasks.jsx";
+import SubcontractorCompliance from "./SubcontractorCompliance.jsx";
+import InvoiceQueue from "./InvoiceQueue.jsx";
+import AccountAccessVault from "./AccountAccessVault.jsx";
+import {
+  canManageInvoiceQueue,
+  canSubmitJobForInvoice,
+  createInvoiceHandoffDraft,
+  validateInvoiceHandoffDraft,
+} from "./invoiceWorkflow.js";
+import {
+  CFO_LIQUID_CASH_CARD_KEY,
+  CFO_LIQUID_CASH_SOURCE_RECORD_UID,
+  flattenLiquidCashEntriesToSharedRecord,
+  hydrateLiquidCashEntriesFromSupabaseRows,
+} from "./cfoLiquidCashSync.js";
+import {
+  calculateReceivablePaymentTotals,
+  filterReceivablesByPaymentView,
+  getReceivablePaymentStatus,
+  normalizeReceivablePaymentStatus,
+} from "./receivablePaymentStatus.js";
+import {
+  calculateSupplierPaymentTotals,
+  filterSupplierPayablesByPaymentView,
+  getSupplierPaymentStatus,
+  normalizeSupplierPaymentStatus,
+} from "./supplierPaymentStatus.js";
+import { getRevealSecondsRemaining, stripLiquidCashRecords } from "./liquidCashReveal.js";
+import { prepareEstimateMutationRow } from "./estimatePersistence.js";
+import {
+  calculateInHouseLaborBurden,
+  calculateLoadedHourlyWage,
+  normalizeEstimateLaborEmployeeRows,
+  PAYROLL_TAX_RATE,
+  TOTAL_LABOR_BURDEN_RATE,
+  WORKERS_COMP_RATE,
+} from "./laborBurden.js";
+import { resolveEmployeeDisplayName } from "./employeeDirectory.js";
+import {
+  APPROVED_JOB_ATTACHMENT_BUCKET,
+  buildApprovedJobAttachmentPath,
+  createApprovedJobAttachmentRecord,
+  formatAttachmentSize,
+  validateApprovedJobAttachment,
+} from "./approvedJobAttachments.js";
+import {
+  calculateSprayFoamUsage,
+  normalizeSprayFoamThickness,
+  resolveSprayFoamTravelInputs,
+} from "./sprayFoamEstimateRules.js";
+import {
+  APPROVED_JOB_OPERATING_OVERHEAD_RATE,
+  calculateApprovedJobFinancialSummary,
+  calculateApprovedJobOperatingOverhead,
+  calculateDailyEmployeeLaborCost,
+  calculateSprayFoamMaterialUsage,
+  calculateSubcontractorCost,
+  getDailyProgressDayIds,
+  SPRAY_FOAM_GALLONS_PER_KIT,
+  SPRAY_FOAM_KIT_COST,
+  summarizeApprovedDailyProgress,
+  toggleCollapsedDailyProgressDay,
+} from "./approvedDailyProgress.js";
+import {
+  applyActiveJobEditDraft,
+  buildActiveJobEditDraft,
+  buildCfoApprovedJobSharedJob,
+  buildCfoApprovedJobsLedger,
+  buildSharedJobSourceId,
+  buildSharedJobUpsertRow,
+  canCreateApprovedJobs,
+  canManageSharedJobs,
+  canUpdateDailyJobCosts,
+  getActiveJobPreviewDetails,
+  moveApprovedJobToActive,
+  splitSharedJobsByWorkflow,
+} from "./sharedJobWorkflow.js";
 import {
   GOOGLE_MAPS_API_KEY,
   GOOGLE_MAPS_LIBRARIES,
@@ -37,11 +116,18 @@ const PROPOSALS_KEY = (userKey) => `crt_roofing_proposals_v1:${userKey}`;
 const PROPOSALS_KEY_PREFIX = "crt_roofing_proposals_v1:";
 const PROPOSAL_TEMPLATE_KEY = (userKey) => `crt_roofing_proposal_template_v1:${userKey}`;
 const CFO_LIQUID_CASH_KEY = (userKey) => `crt_roofing_cfo_liquid_cash_v1:${userKey}`;
-const CFO_RECEIVABLES_KEY = (userKey) => `crt_roofing_cfo_receivables_v1:${userKey}`;
-const CFO_MANUAL_ENTRIES_KEY = (userKey) => `crt_roofing_cfo_manual_entries_v1:${userKey}`;
+const CFO_SHARED_LIQUID_CASH_RECORD_UID = CFO_LIQUID_CASH_SOURCE_RECORD_UID;
+const CFO_SHARED_LIQUID_CASH_CARD_KEY = CFO_LIQUID_CASH_CARD_KEY;
 const CRM_LEADS_KEY = (userKey) => `crt_roofing_crm_leads_v1:${userKey}`;
 const CRM_CUSTOMERS_KEY = (userKey) => `crt_roofing_crm_customers_v1:${userKey}`;
 const CRM_FOLLOWUPS_KEY = (userKey) => `crt_roofing_crm_followups_v1:${userKey}`;
+const APPEARANCE_PREFERENCE_KEY = "crt_roofing_appearance_preference_v1";
+const SIDEBAR_COLLAPSED_KEY = "crt_roofing_sidebar_collapsed_v1";
+const COMPANY_ESTIMATOR_SETTINGS_TABLE = "company_estimator_settings";
+const COMPANY_FINANCIAL_RECORDS_TABLE = "company_financial_records";
+const COMPANY_ACTIVE_JOBS_TABLE = "active_jobs";
+const PROFILE_PHOTO_BUCKET = "profile-photos";
+const PROFILE_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 const CFO_MANUAL_CARD_KEYS = [
   "proposalsSent",
   "approvedJobs",
@@ -230,6 +316,7 @@ const ACTIVE_JOB_STATUS_OPTIONS = [
   "Scheduled",
   "Pre-construction",
   "Active",
+  "In Progress",
   "Punch list",
   "On hold",
   "Warranty",
@@ -409,7 +496,7 @@ const CRM_FILE_CATEGORY_OPTIONS = ["Estimate", "Photos", "Contract", "Invoice", 
 
 const ACTIVE_JOBS_KEY = (userKey) => `crt_roofing_active_jobs_v1:${userKey}`;
 
-const ACTIVE_JOB_ACTIVE_STATUSES = new Set(["scheduled", "pre-construction", "active", "punch list", "on hold", "warranty"]);
+const ACTIVE_JOB_ACTIVE_STATUSES = new Set(["scheduled", "pre-construction", "active", "punch list", "on hold", "warranty", "in progress"]);
 
 const DEFAULT_ADMIN_PRICING = {
   tpoRollPrice: 360,
@@ -1795,7 +1882,8 @@ const DEFAULT_INPUTS = {
   laborWorkers: 0,
   laborHourlyRate: 0,
   laborHoursPerWorker: 0,
-  payrollBurdenPercent: 0,
+  laborEmployeeRows: [],
+  payrollBurdenPercent: TOTAL_LABOR_BURDEN_RATE * 100,
 
   overheadOperatingRate: OVERHEAD_OPERATING_RATE,
   scopeAdders: 0,
@@ -1834,21 +1922,273 @@ const css = String.raw`
   --bad:#ff7084;
   --shadow:0 24px 70px rgba(0,0,0,.58);
   --radius:18px;
+  --page-bg:
+    radial-gradient(circle at top left, rgba(18,166,245,.16), transparent 26%),
+    radial-gradient(circle at top right, rgba(18,166,245,.08), transparent 24%),
+    linear-gradient(180deg,#000 0%, #050607 40%, #09111a 100%);
   font-family: Avenir, "Segoe UI", system-ui, sans-serif;
+}
+:root[data-appearance="light"]{
+  color-scheme: light;
+  --bg:#f8fbff;
+  --bg2:#eef5fc;
+  --panel:#ffffff;
+  --panel2:#f5f9ff;
+  --line:rgba(18,166,245,.22);
+  --line2:rgba(18,166,245,.52);
+  --ink:#112433;
+  --muted:#35556c;
+  --brand:#0a87d1;
+  --brand2:#0776bc;
+  --good:#028e61;
+  --bad:#cf3055;
+  --shadow:0 20px 48px rgba(5,42,70,.14);
+  --page-bg:
+    radial-gradient(circle at top left, rgba(18,166,245,.14), transparent 28%),
+    radial-gradient(circle at top right, rgba(18,166,245,.10), transparent 26%),
+    linear-gradient(180deg, #f7fbff 0%, #f1f8ff 50%, #eef6ff 100%);
 }
 *{box-sizing:border-box}
 body{
   margin:0;
   color:var(--ink);
-  background:
-    radial-gradient(circle at top left, rgba(18,166,245,.16), transparent 26%),
-    radial-gradient(circle at top right, rgba(18,166,245,.08), transparent 24%),
-    linear-gradient(180deg,#000 0%, #050607 40%, #09111a 100%);
+  background:var(--page-bg);
 }
 button,input,select,textarea{font:inherit}
 button{cursor:pointer}
 a{color:inherit}
 .appShell{width:min(1480px, calc(100% - 24px)); margin:0 auto; padding:20px 0 42px}
+.portalLayout{
+  min-height:100vh;
+  display:grid;
+  grid-template-columns:260px minmax(0,1fr);
+  transition:grid-template-columns .2s ease;
+}
+.portalLayout.sidebarCollapsed{grid-template-columns:minmax(0,1fr)}
+.portalSidebar{
+  position:sticky;
+  top:0;
+  height:100vh;
+  z-index:40;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+  padding:16px 12px;
+  overflow-y:auto;
+  border-right:1px solid var(--line);
+  background:linear-gradient(180deg, rgba(8,12,18,.99), rgba(5,9,14,.98));
+  box-shadow:14px 0 38px rgba(0,0,0,.2);
+}
+.portalSidebarBrand{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-height:54px;
+  padding:7px;
+  border-radius:14px;
+}
+.portalSidebarBrand img{
+  flex:0 0 42px;
+  width:42px;
+  height:42px;
+  padding:5px;
+  object-fit:contain;
+  border:1px solid var(--line2);
+  border-radius:11px;
+  background:rgba(18,166,245,.08);
+}
+.portalSidebarBrandText{min-width:0; display:grid; gap:2px}
+.portalSidebarBrandText strong{font-size:.93rem; white-space:nowrap}
+.portalSidebarBrandText span{color:var(--muted); font-size:.72rem; white-space:nowrap}
+.portalSidebarToggle{
+  min-height:38px;
+  border:1px solid var(--line);
+  border-radius:11px;
+  color:var(--muted);
+  background:rgba(18,166,245,.05);
+  font-weight:800;
+}
+.portalSidebarNav{display:grid; gap:5px}
+.portalSidebarSectionLabel{
+  margin:8px 9px 4px;
+  color:var(--muted);
+  font-size:.68rem;
+  font-weight:900;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  white-space:nowrap;
+}
+.portalSidebarButton{
+  width:100%;
+  min-height:44px;
+  display:flex;
+  align-items:center;
+  gap:11px;
+  padding:8px 11px;
+  border:1px solid transparent;
+  border-radius:12px;
+  color:var(--muted);
+  background:transparent;
+  text-align:left;
+  font-weight:800;
+  transition:background .15s ease, border-color .15s ease, color .15s ease;
+}
+.portalSidebarButton:hover{
+  color:var(--ink);
+  border-color:var(--line);
+  background:rgba(18,166,245,.07);
+}
+.portalSidebarButton.active{
+  color:var(--ink);
+  border-color:rgba(18,166,245,.38);
+  background:linear-gradient(180deg, rgba(18,166,245,.20), rgba(18,166,245,.09));
+  box-shadow:inset 3px 0 0 var(--brand);
+}
+.portalSidebarIcon{
+  flex:0 0 24px;
+  width:24px;
+  height:24px;
+  display:grid;
+  place-items:center;
+  border-radius:8px;
+  color:var(--brand2);
+  background:rgba(18,166,245,.09);
+  font-size:.78rem;
+  font-weight:900;
+}
+.portalSidebarLabel{white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.portalSidebarFooter{margin-top:auto; display:grid; gap:5px; padding-top:12px; border-top:1px solid var(--line)}
+.portalSidebarAccount{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:5px;
+  padding:6px 9px;
+  min-width:0;
+}
+.portalSidebarAvatar{
+  flex:0 0 32px;
+  width:32px;
+  height:32px;
+  display:grid;
+  place-items:center;
+  border-radius:50%;
+  color:#02111b;
+  background:linear-gradient(180deg, var(--brand2), var(--brand));
+  font-size:.78rem;
+  font-weight:900;
+  overflow:hidden;
+}
+.portalSidebarAvatar img{width:100%; height:100%; display:block; object-fit:cover}
+.portalSidebarAccountText{min-width:0; display:grid; gap:1px}
+.portalSidebarAccountText strong,.portalSidebarAccountText span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.portalSidebarAccountText strong{font-size:.82rem}
+.portalSidebarAccountText span{color:var(--muted); font-size:.7rem}
+.sidebarCollapsed .portalSidebar{
+  position:fixed;
+  left:0;
+  width:260px;
+  transform:translateX(-105%);
+  pointer-events:none;
+}
+.portalMain{min-width:0}
+.portalMain .appShell{width:min(1480px, calc(100% - 32px))}
+.portalDesktopLauncher{
+  position:fixed;
+  left:14px;
+  top:14px;
+  z-index:35;
+  display:none;
+  place-items:center;
+  width:46px;
+  height:46px;
+  padding:0;
+  border:1px solid var(--line2);
+  border-radius:12px;
+  color:var(--ink);
+  background:linear-gradient(180deg, var(--panel2), var(--panel));
+  box-shadow:0 10px 28px rgba(0,0,0,.22);
+  font-size:1.35rem;
+  line-height:1;
+  font-weight:900;
+}
+.portalDesktopLauncher:hover{border-color:var(--brand); color:var(--brand)}
+.sidebarCollapsed .portalDesktopLauncher{display:grid}
+.profilePhotoManager{
+  display:grid;
+  grid-template-columns:120px minmax(0,1fr);
+  gap:20px;
+  align-items:center;
+}
+.profilePhotoPreview{
+  width:112px;
+  height:112px;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  border-radius:50%;
+  border:2px solid var(--line2);
+  color:#02111b;
+  background:linear-gradient(180deg, var(--brand2), var(--brand));
+  box-shadow:0 14px 34px rgba(0,0,0,.2);
+  font-size:1.8rem;
+  font-weight:900;
+}
+.profilePhotoPreview img{width:100%; height:100%; display:block; object-fit:cover}
+.profilePhotoControls{display:grid; gap:10px}
+.profilePhotoControls p{color:var(--muted); margin:0; line-height:1.5}
+.profilePhotoInput{display:none}
+.portalMobileMenu,
+.portalSidebarBackdrop{display:none}
+:root[data-appearance="light"] .portalSidebar{
+  background:linear-gradient(180deg, rgba(255,255,255,.99), rgba(242,248,253,.98));
+  box-shadow:14px 0 38px rgba(5,42,70,.08);
+}
+@media (max-width: 900px){
+  .portalLayout,.portalLayout.sidebarCollapsed{display:block}
+  .portalSidebar{
+    position:fixed;
+    left:0;
+    transform:translateX(-105%);
+    width:min(300px, 86vw);
+    transition:transform .2s ease;
+  }
+  .portalLayout.sidebarMobileOpen .portalSidebar{transform:translateX(0); pointer-events:auto}
+  .portalLayout.sidebarCollapsed .portalSidebarBrandText,
+  .portalLayout.sidebarCollapsed .portalSidebarLabel,
+  .portalLayout.sidebarCollapsed .portalSidebarSectionLabel,
+  .portalLayout.sidebarCollapsed .portalSidebarAccountText{display:grid}
+  .portalLayout.sidebarCollapsed .portalSidebarBrand,
+  .portalLayout.sidebarCollapsed .portalSidebarAccount{justify-content:flex-start; padding-inline:7px}
+  .portalLayout.sidebarCollapsed .portalSidebarButton{justify-content:flex-start; padding-inline:11px}
+  .portalDesktopLauncher,.sidebarCollapsed .portalDesktopLauncher{display:none}
+  .portalMobileMenu{
+    position:fixed;
+    left:12px;
+    bottom:12px;
+    z-index:35;
+    display:grid;
+    place-items:center;
+    width:52px;
+    height:52px;
+    border:1px solid var(--line2);
+    border-radius:16px;
+    color:#02111b;
+    background:linear-gradient(180deg, var(--brand2), var(--brand));
+    box-shadow:0 14px 34px rgba(0,0,0,.3);
+    font-weight:900;
+  }
+  .portalSidebarBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:30;
+    display:block;
+    border:0;
+    background:rgba(2,8,14,.72);
+  }
+  .portalMain .appShell{width:min(100% - 24px, 1480px); padding-bottom:82px}
+  .profilePhotoManager{grid-template-columns:1fr; justify-items:start}
+}
 .hero{
   display:grid;
   grid-template-columns:minmax(0,1fr) 300px;
@@ -1904,6 +2244,13 @@ h1{
   background:linear-gradient(135deg, rgba(18,166,245,.10), transparent 28%);
 }
 .panel > *{position:relative; z-index:1}
+.approvedDailyProgressCard{padding:16px 18px}
+.approvedDailyProgressHeader{display:flex; align-items:center; justify-content:space-between; gap:18px}
+.approvedDailyProgressHeader h3{margin:2px 0 5px; font-size:1.18rem}
+.approvedDailyProgressEyebrow{color:var(--brand2); font-size:.72rem; font-weight:800; letter-spacing:.14em; text-transform:uppercase}
+.approvedDailyProgressSummary{color:var(--muted); font-size:.9rem; line-height:1.45}
+.approvedDailyProgressActions{display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:wrap}
+.approvedDailyProgressBody{padding-top:18px; margin-top:16px; border-top:1px solid var(--line)}
 .sectionHead,.panelHead{display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:16px}
 .sectionHead h2,.panelHead h2{color:#fff; font-weight:800}
 .sectionHead p,.panelHead p{color:#a6c8d8; line-height:1.5}
@@ -1986,12 +2333,18 @@ h1{
   color:#e9fbff;
 }
 .actionRow{display:flex; flex-wrap:wrap; gap:10px}
-.primaryButton,.secondaryButton,.dangerButton,.loginButton{
+.primaryButton,.secondaryButton,.successButton,.dangerButton,.loginButton{
   min-height:44px; padding:0 15px; border-radius:12px; border:1px solid var(--line2);
   color:#e9fbff; background:linear-gradient(180deg, rgba(18,166,245,.22), rgba(18,166,245,.10));
 }
 .primaryButton{font-weight:800}
 .secondaryButton{font-weight:700}
+.successButton{
+  border-color:rgba(79,255,145,.38);
+  background:linear-gradient(180deg, rgba(79,255,145,.24), rgba(79,255,145,.11));
+  color:#baffc9;
+  font-weight:800;
+}
 .dangerButton{
   border-color:rgba(255,112,132,.34);
   background:linear-gradient(180deg, rgba(255,112,132,.16), rgba(255,112,132,.08));
@@ -2018,6 +2371,32 @@ h1{
 .savedCard strong{display:block; margin-bottom:4px}
 .savedCard p{margin-bottom:0; color:#a7c7d6}
 .savedActions{display:flex; flex-wrap:wrap; gap:8px}
+.activeJobPreviewCard{gap:16px; padding:18px}
+.activeJobPreviewNumber{margin-top:2px; font-size:.86rem}
+.activeJobPreviewDetails{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+  gap:10px;
+  margin-top:14px;
+}
+.activeJobPreviewDetails > div{
+  min-width:0;
+  padding:12px;
+  border:1px solid rgba(18,166,245,.15);
+  border-radius:13px;
+  background:rgba(18,166,245,.045);
+}
+.activeJobPreviewDetails span{
+  display:block;
+  margin-bottom:5px;
+  color:var(--muted);
+  font-size:.72rem;
+  font-weight:800;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+.activeJobPreviewDetails strong{margin:0; overflow-wrap:anywhere; line-height:1.35}
+.activeJobPreviewSchedule{margin-top:12px; font-size:.88rem}
 .dashboardTabBar{
   display:flex;
   flex-wrap:wrap;
@@ -2139,8 +2518,17 @@ h1{
 .templateCard strong{font-size:1.05rem; display:block}
 .templateCard p{margin:0; color:#a7c7d6}
 .templateCard:hover{border-color:rgba(18,166,245,.45); transform:translateY(-1px)}
+.dashboardQuickActions{
+  display:grid;
+  grid-template-columns:minmax(280px,520px);
+}
+.collectLeadCard{
+  min-height:132px;
+  background:linear-gradient(135deg, rgba(18,166,245,.13), rgba(255,255,255,.025));
+}
 @media (max-width: 960px){
   .workflowGroupGrid{grid-template-columns:1fr;}
+  .dashboardQuickActions{grid-template-columns:1fr;}
 }
 .loginShell{
   min-height:100vh; display:grid; place-items:center; padding:24px 12px;
@@ -2331,6 +2719,9 @@ h1{
   gap:12px;
   margin-bottom:16px;
 }
+.activeJobEditForm{display:grid; gap:16px}
+.activeJobEditRemaining{margin:0}
+.estimateLaborCrew{display:grid; gap:14px}
 .activeJobOverlay{
   position:fixed;
   inset:0;
@@ -2378,6 +2769,133 @@ h1{
   padding:14px; border-radius:14px; border:1px solid rgba(82,224,255,.2);
   background:rgba(82,224,255,.06); color:#d7fbff; font-weight:700;
 }
+.appearanceControl{
+  display:grid;
+  gap:6px;
+  min-width:170px;
+}
+.appearanceControl label{
+  color:var(--muted);
+  font-size:.78rem;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  font-weight:800;
+}
+.appearanceControl select{
+  min-height:40px;
+  border-radius:10px;
+  border:1px solid rgba(18,166,245,.3);
+  color:var(--ink);
+  background:linear-gradient(180deg, var(--panel2), var(--panel));
+  padding:0 10px;
+}
+.appearanceControl.compact{
+  min-width:148px;
+}
+.appearanceControl.compact label{
+  font-size:.72rem;
+}
+:root[data-appearance="light"] .heroCard,
+:root[data-appearance="light"] .panel,
+:root[data-appearance="light"] .inputSection,
+:root[data-appearance="light"] .savedCard,
+:root[data-appearance="light"] .summaryCard,
+:root[data-appearance="light"] .workflowGroupCard,
+:root[data-appearance="light"] .templateCard,
+:root[data-appearance="light"] .crmKanbanColumn,
+:root[data-appearance="light"] .crmKanbanCard,
+:root[data-appearance="light"] .crmTimelineItem,
+:root[data-appearance="light"] .choiceCard,
+:root[data-appearance="light"] .bidCard,
+:root[data-appearance="light"] .detailRow,
+:root[data-appearance="light"] .cfoDetailPanel,
+:root[data-appearance="light"] .activeJobPanel{
+  background:linear-gradient(180deg, #ffffff, #f7fbff);
+  color:var(--ink);
+}
+:root[data-appearance="light"] .panel::before{
+  background:linear-gradient(135deg, rgba(18,166,245,.07), transparent 32%);
+}
+:root[data-appearance="light"] .sectionHead h2,
+:root[data-appearance="light"] .panelHead h2,
+:root[data-appearance="light"] .cfoDetailHeader h2,
+:root[data-appearance="light"] h1,
+:root[data-appearance="light"] h2,
+:root[data-appearance="light"] h3,
+:root[data-appearance="light"] strong{
+  color:var(--ink);
+}
+:root[data-appearance="light"] .intro,
+:root[data-appearance="light"] .sectionHead p,
+:root[data-appearance="light"] .panelHead p,
+:root[data-appearance="light"] .heroCard p,
+:root[data-appearance="light"] .smallNote,
+:root[data-appearance="light"] .emptyState,
+:root[data-appearance="light"] .savedCard p,
+:root[data-appearance="light"] .workflowGroupHeader p,
+:root[data-appearance="light"] .templateCard p,
+:root[data-appearance="light"] .dashboardTabHint,
+:root[data-appearance="light"] .cfoDetailHeader p,
+:root[data-appearance="light"] .cfoDetailEmpty,
+:root[data-appearance="light"] .checklistItem p,
+:root[data-appearance="light"] .crmTimelineItem p{
+  color:var(--muted);
+}
+:root[data-appearance="light"] .field input,
+:root[data-appearance="light"] .field select,
+:root[data-appearance="light"] .field textarea,
+:root[data-appearance="light"] .tableInput,
+:root[data-appearance="light"] input,
+:root[data-appearance="light"] select,
+:root[data-appearance="light"] textarea{
+  color:var(--ink);
+  background:linear-gradient(180deg, #ffffff, #f4f9ff);
+  border-color:rgba(18,166,245,.35);
+}
+:root[data-appearance="light"] .dataTable th,
+:root[data-appearance="light"] .cfoDetailTable th,
+:root[data-appearance="light"] .activeJobsTable th,
+:root[data-appearance="light"] .detailRow span,
+:root[data-appearance="light"] .summaryCard span,
+:root[data-appearance="light"] .field span{
+  color:#365a73;
+}
+:root[data-appearance="light"] .primaryButton,
+:root[data-appearance="light"] .secondaryButton,
+:root[data-appearance="light"] .successButton,
+:root[data-appearance="light"] .loginButton{
+  color:#053250;
+  border-color:rgba(10,135,209,.46);
+  background:linear-gradient(180deg, rgba(18,166,245,.24), rgba(18,166,245,.13));
+}
+:root[data-appearance="light"] .successButton{
+  color:#075f3d;
+  border-color:rgba(2,142,97,.48);
+  background:linear-gradient(180deg, rgba(45,203,139,.24), rgba(2,142,97,.12));
+}
+:root[data-appearance="light"] .dangerButton{
+  color:#7d0f2f;
+  border-color:rgba(207,48,85,.44);
+  background:linear-gradient(180deg, rgba(207,48,85,.18), rgba(207,48,85,.10));
+}
+:root[data-appearance="light"] .dashboardTabButton,
+:root[data-appearance="light"] .statusTag,
+:root[data-appearance="light"] .cfoDetailChip,
+:root[data-appearance="light"] .statusPill,
+:root[data-appearance="light"] .checklistEmpty{
+  color:var(--ink);
+  border-color:rgba(18,166,245,.35);
+  background:rgba(18,166,245,.09);
+}
+:root[data-appearance="light"] .dangerMessage,
+:root[data-appearance="light"] .statusPill.bad,
+:root[data-appearance="light"] .checklistItem{
+  color:#8b1236;
+}
+:root[data-appearance="light"] .activeJobOverlay,
+:root[data-appearance="light"] .cfoDetailOverlay{
+  background:rgba(8,27,42,.34);
+}
 @media (max-width: 1180px){
   .hero,.summaryGrid,.bidGrid,.formGrid,.templateGrid{grid-template-columns:1fr}
   .bidGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -2387,7 +2905,10 @@ h1{
   .choiceRow{grid-template-columns:1fr}
   .bidGrid{grid-template-columns:1fr}
   .panel{padding:16px}
+  .approvedDailyProgressHeader{align-items:flex-start; flex-direction:column}
+  .approvedDailyProgressActions{justify-content:flex-start; width:100%}
   .dataTable{min-width:820px}
+  .appearanceControl{min-width:100%}
 }
 `;
 
@@ -2462,6 +2983,125 @@ function createBlankCfoLiquidCashEntry() {
   };
 }
 
+function buildCfoSourceRecordUid(recordType, cardKey, id) {
+  return `${recordType}:${cardKey}:${String(id || "")}`;
+}
+
+function flattenCfoStateToSupabaseRecords(liquidCashEntries = [], receivableEntries = [], manualEntriesByCard = {}) {
+  const liquid = flattenLiquidCashEntriesToSharedRecord(Array.isArray(liquidCashEntries) ? liquidCashEntries : []).map((record) => ({
+    ...record,
+    card_key: CFO_SHARED_LIQUID_CASH_CARD_KEY,
+    source_record_uid: CFO_SHARED_LIQUID_CASH_RECORD_UID,
+  }));
+
+  const receivable = (Array.isArray(receivableEntries) ? receivableEntries : [])
+    .map((entry) => normalizeCfoReceivableEntry(entry))
+    .map((entry) => ({
+      source_record_uid: buildCfoSourceRecordUid("receivable", "waitingOnPayment", entry.id),
+      record_type: "receivable",
+      card_key: "waitingOnPayment",
+      customer_name: entry.customerName,
+      record_name: entry.customerName || "",
+      amount: toNumber(entry.amountOwed, 0),
+      period_from_date: entry.periodFromDate || null,
+      period_to_date: entry.periodToDate || null,
+      status: entry.paymentStatus || "",
+      note: entry.note || "",
+      record_date: entry.periodToDate || entry.periodFromDate || null,
+      included_in_total: true,
+      is_archived: false,
+      row_version: Math.max(1, toNumber(entry.rowVersion, 1)),
+    }));
+
+  const manual = CFO_MANUAL_CARD_KEYS.flatMap((cardKey) => {
+    const entries = Array.isArray(manualEntriesByCard?.[cardKey]) ? manualEntriesByCard[cardKey] : [];
+    return entries.map((entry) => normalizeCfoManualEntry(entry, cardKey)).map((entry) => ({
+      source_record_uid: buildCfoSourceRecordUid("manual", cardKey, entry.id),
+      record_type: "manual",
+      card_key: cardKey,
+      record_name: entry.recordName || "",
+      amount: toNumber(entry.amount, 0),
+      count_value: toNumber(entry.count, cardKey === "proposalsSent" ? 1 : 0),
+      record_date: entry.recordDate || null,
+      status: entry.status || "",
+      note: entry.note || "",
+      included_in_total: true,
+      is_archived: false,
+      row_version: Math.max(1, toNumber(entry.rowVersion, 1)),
+    }));
+  });
+
+  return [...liquid, ...receivable, ...manual];
+}
+
+function flattenCfoNonLiquidCashRecords(receivableEntries = [], manualEntriesByCard = {}) {
+  return stripLiquidCashRecords(flattenCfoStateToSupabaseRecords([], receivableEntries, manualEntriesByCard));
+}
+
+function hydrateCfoStateFromSupabaseRecords(rows = []) {
+  const source = Array.isArray(rows) ? rows.filter((row) => !row?.is_archived) : [];
+
+  const liquidCashEntries = hydrateLiquidCashEntriesFromSupabaseRows(source).map((entry) =>
+    normalizeCfoLiquidCashEntry({
+      ...entry,
+      id: String(entry.id || "").split(":").pop() || CFO_SHARED_LIQUID_CASH_RECORD_UID,
+      currentLiquidBalance: money2(toNumber(entry.currentLiquidBalance, 0)),
+      rowVersion: toNumber(entry.rowVersion, 1),
+    }),
+  );
+
+  const receivableEntries = source
+    .filter((row) => row.record_type === "receivable")
+    .map((row) =>
+      normalizeCfoReceivableEntry({
+        id: String(row.source_record_uid || "").split(":").pop() || createFieldDailyLogId(),
+        customerName: row.customer_name || row.record_name || "",
+        periodFromDate: row.period_from_date || "",
+        periodToDate: row.period_to_date || "",
+        amountOwed: money2(toNumber(row.amount, 0)),
+        paymentStatus: row.status || "Waiting on Payment",
+        note: row.note || "",
+        rowVersion: toNumber(row.row_version, 1),
+      }),
+    );
+
+  const manualEntriesByCard = createBlankCfoManualEntriesByCard();
+  source
+    .filter((row) => row.record_type === "manual" && CFO_MANUAL_CARD_KEYS.includes(String(row.card_key || "")))
+    .forEach((row) => {
+      const cardKey = String(row.card_key || "");
+      manualEntriesByCard[cardKey].push(
+        normalizeCfoManualEntry(
+          {
+            id: String(row.source_record_uid || "").split(":").pop() || createFieldDailyLogId(),
+            recordName: row.record_name || "",
+            amount: money2(toNumber(row.amount, 0)),
+            count: String(toNumber(row.count_value, cardKey === "proposalsSent" ? 1 : 0)),
+            recordDate: row.record_date || "",
+            status: row.status || "",
+            note: row.note || "",
+            rowVersion: toNumber(row.row_version, 1),
+          },
+          cardKey,
+        ),
+      );
+    });
+
+  return {
+    liquidCashEntries,
+    receivableEntries,
+    manualEntriesByCard,
+  };
+}
+
+function hasActiveLiquidCashRecord(rows = []) {
+  return (Array.isArray(rows) ? rows : []).some((row) =>
+    !row?.is_archived &&
+    String(row?.record_type || "") === "liquid_cash" &&
+    String(row?.card_key || "") === CFO_SHARED_LIQUID_CASH_CARD_KEY,
+  );
+}
+
 function normalizeCfoLiquidCashEntry(entry = {}) {
   return {
     id: String(entry.id || createFieldDailyLogId()),
@@ -2469,6 +3109,7 @@ function normalizeCfoLiquidCashEntry(entry = {}) {
     currentLiquidBalance: String(entry.currentLiquidBalance ?? entry.current_liquid_balance ?? ""),
     lastUpdatedDate: String(entry.lastUpdatedDate || entry.last_updated_date || ""),
     includedInTotal: String(entry.includedInTotal || entry.included_in_total || "Yes"),
+    rowVersion: Math.max(1, toNumber(entry.rowVersion ?? entry.row_version, 1)),
   };
 }
 
@@ -2479,7 +3120,7 @@ function createBlankCfoReceivableEntry() {
     periodFromDate: "",
     periodToDate: "",
     amountOwed: "",
-    paymentStatus: "Current",
+    paymentStatus: "Waiting on Payment",
     note: "",
   };
 }
@@ -2491,8 +3132,21 @@ function normalizeCfoReceivableEntry(entry = {}) {
     periodFromDate: String(entry.periodFromDate || entry.period_from_date || ""),
     periodToDate: String(entry.periodToDate || entry.period_to_date || ""),
     amountOwed: String(entry.amountOwed ?? entry.amount_owed ?? ""),
-    paymentStatus: String(entry.paymentStatus || entry.payment_status || "Current"),
+    paymentStatus: normalizeReceivablePaymentStatus(entry.paymentStatus || entry.payment_status),
     note: String(entry.note || ""),
+    rowVersion: Math.max(1, toNumber(entry.rowVersion ?? entry.row_version, 1)),
+  };
+}
+
+function createBlankApprovedJobQuickDraft() {
+  return {
+    projectName: "",
+    customerName: "",
+    projectAddress: "",
+    contractAmount: "",
+    anticipatedStartDate: "",
+    projectContact: "",
+    status: "Approved",
   };
 }
 
@@ -2503,20 +3157,39 @@ function createBlankCfoManualEntry(cardKey = "") {
     amount: "",
     count: cardKey === "proposalsSent" ? "1" : "",
     recordDate: "",
-    status: "",
+    status: cardKey === "supplierOverdue"
+      ? "Overdue"
+      : cardKey === "supplierTotalsPayable"
+        ? "Waiting on Payment"
+        : "",
     note: "",
   };
 }
 
 function normalizeCfoManualEntry(entry = {}, cardKey = "") {
+  const rawStatus = String(entry.status || entry.paymentStatus || entry.payment_status || "");
   return {
     id: String(entry.id || createFieldDailyLogId()),
     recordName: String(entry.recordName || entry.record_name || entry.label || ""),
     amount: String(entry.amount ?? entry.dollarAmount ?? entry.dollar_amount ?? ""),
     count: cardKey === "proposalsSent" ? String(entry.count ?? entry.proposalCount ?? entry.proposal_count ?? "") : String(entry.count ?? entry.proposalCount ?? entry.proposal_count ?? ""),
     recordDate: String(entry.recordDate || entry.record_date || entry.date || ""),
-    status: String(entry.status || entry.paymentStatus || entry.payment_status || ""),
+    status: cardKey === "supplierTotalsPayable" || cardKey === "supplierOverdue"
+      ? normalizeSupplierPaymentStatus(rawStatus, cardKey === "supplierOverdue" ? "Overdue" : "Waiting on Payment")
+      : rawStatus,
     note: String(entry.note || ""),
+    rowVersion: Math.max(1, toNumber(entry.rowVersion ?? entry.row_version, 1)),
+  };
+}
+
+function createBlankSupplierPaymentDraft() {
+  return {
+    paymentDate: "",
+    paymentMethod: "ACH",
+    paymentKind: "Full",
+    amountPaid: "",
+    checkNumber: "",
+    note: "",
   };
 }
 
@@ -2624,7 +3297,17 @@ function mapCompletedJobRow(row) {
 }
 
 function normalizeAppRole(value) {
-  return String(value || "").trim().toLowerCase() === "admin" ? "admin" : "salesperson";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "admin") return "admin";
+  if (normalized === "cfo") return "cfo";
+  if (normalized === "estimator") return "estimator";
+  if (normalized === "salesperson") return "salesperson";
+  return "salesperson";
+}
+
+function hasExplicitAppRole(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "admin" || normalized === "cfo" || normalized === "estimator" || normalized === "salesperson";
 }
 
 function normalizeEmployeeEmail(email) {
@@ -2636,7 +3319,10 @@ function getEmployeeDirectoryEntry(email) {
 }
 
 function deriveBootstrapRoleFromEmail(email) {
-  return String(email || "").trim().toLowerCase() === "natalia@crtroofing.com" ? "admin" : "salesperson";
+  const normalized = String(email || "").trim().toLowerCase();
+  if (normalized === "natalia@crtroofing.com") return "admin";
+  if (normalized === "jorge@crtroofing.com" || normalized === "jorgejr@crtroofing.com") return "cfo";
+  return "salesperson";
 }
 
 function mapAuthUserFromSession(user, profile = null) {
@@ -2645,15 +3331,30 @@ function mapAuthUserFromSession(user, profile = null) {
   const directoryEntry = getEmployeeDirectoryEntry(email);
   const fullName = String(profile?.full_name || profile?.display_name || user.user_metadata?.full_name || user.user_metadata?.name || "").trim();
   const fallbackName = String(email || "User").trim();
-  const role = normalizeAppRole(profile?.role || user.app_metadata?.role || user.user_metadata?.role);
+  const profileRole = String(profile?.role || "").trim();
+  const metadataRole = String(user.app_metadata?.role || user.user_metadata?.role || "").trim();
+  const role = hasExplicitAppRole(profileRole)
+    ? normalizeAppRole(profileRole)
+    : hasExplicitAppRole(metadataRole)
+      ? normalizeAppRole(metadataRole)
+      : deriveBootstrapRoleFromEmail(email);
+  const roleSource = hasExplicitAppRole(profileRole)
+    ? "user_profiles"
+    : hasExplicitAppRole(metadataRole)
+      ? "auth_metadata"
+      : "bootstrap_email";
+  const canAccessCfoDashboard = role === "admin" || role === "cfo";
   return {
     key: String(user.id),
     displayName: directoryEntry?.displayName || fullName || fallbackName,
     email,
-    title: directoryEntry?.title || (role === "admin" ? "Administration" : "Sales"),
+    title: directoryEntry?.title || (role === "admin" ? "Administration" : role === "cfo" ? "Finance" : "Sales"),
     canViewAllProposals: Boolean(directoryEntry?.canViewAllProposals),
-    canAccessCfoDashboard: Boolean(directoryEntry?.canAccessCfoDashboard),
+    canAccessCfoDashboard,
     role,
+    roleSource,
+    avatarPath: String(profile?.avatar_path || ""),
+    avatarUrl: "",
     source: "supabase",
   };
 }
@@ -3088,7 +3789,7 @@ async function fetchAuthUserProfile(userId) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !userId) return { data: null, error: null };
   const { data, error } = await supabase
     .from("user_profiles")
-    .select("id, full_name, email, role")
+    .select("id, full_name, email, role, avatar_path")
     .eq("id", userId)
     .maybeSingle();
   return { data, error };
@@ -3112,7 +3813,7 @@ async function ensureAuthUserProfile(user, profile = null) {
       },
       { onConflict: "id" },
     )
-    .select("id, full_name, email, role")
+    .select("id, full_name, email, role, avatar_path")
     .maybeSingle();
   return { data, error };
 }
@@ -3121,8 +3822,110 @@ async function fetchCompanyUserProfiles() {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
   const { data, error } = await supabase
     .from("user_profiles")
-    .select("id, full_name, email, role")
+    .select("id, full_name, email, role, avatar_path")
     .order("full_name", { ascending: true });
+  return { data: Array.isArray(data) ? data : [], error };
+}
+
+async function createProfilePhotoSignedUrl(avatarPath) {
+  const path = String(avatarPath || "").trim();
+  if (!path || !SUPABASE_URL || !SUPABASE_ANON_KEY) return "";
+  const { data, error } = await supabase.storage.from(PROFILE_PHOTO_BUCKET).createSignedUrl(path, 60 * 60 * 24);
+  if (error) return "";
+  return String(data?.signedUrl || "");
+}
+
+async function attachProfilePhotoUrl(mappedUser) {
+  if (!mappedUser?.avatarPath) return mappedUser;
+  const avatarUrl = await createProfilePhotoSignedUrl(mappedUser.avatarPath);
+  return { ...mappedUser, avatarUrl };
+}
+
+async function fetchCompanyEstimatorSettingsFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: null };
+  const { data, error } = await supabase
+    .from(COMPANY_ESTIMATOR_SETTINGS_TABLE)
+    .select("*")
+    .eq("id", "primary")
+    .maybeSingle();
+  return { data, error };
+}
+
+async function upsertCompanyEstimatorSettingsToSupabase(payload, updatedBy = "") {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: null };
+  const { data, error } = await supabase
+    .from(COMPANY_ESTIMATOR_SETTINGS_TABLE)
+    .upsert(
+      {
+        id: "primary",
+        material_price_defaults: payload?.material_price_defaults || {},
+        admin_pricing_defaults: payload?.admin_pricing_defaults || {},
+        travel_defaults: payload?.travel_defaults || {},
+        updated_by: updatedBy || null,
+      },
+      { onConflict: "id" },
+    )
+    .select("*")
+    .maybeSingle();
+  return { data, error };
+}
+
+async function fetchCompanyFinancialRecordsFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const { data, error } = await supabase
+    .from(COMPANY_FINANCIAL_RECORDS_TABLE)
+    .select("*")
+    .neq("record_type", "liquid_cash")
+    .eq("is_archived", false)
+    .order("updated_at", { ascending: false });
+  return { data: Array.isArray(data) ? data : [], error };
+}
+
+async function fetchSupplierPaymentHistoryFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const { data, error } = await supabase
+    .from("supplier_payment_history")
+    .select("*")
+    .order("recorded_at", { ascending: false });
+  return { data: Array.isArray(data) ? data : [], error };
+}
+
+async function invokeLiquidCashFunction(functionName, body = {}) {
+  const { data, error } = await supabase.functions.invoke(functionName, { body });
+  if (!error) return { data, error: null };
+  let message = error?.message || "The secure liquid-cash request failed";
+  try {
+    const payload = await error.context?.json();
+    if (payload?.error) message = payload.error;
+    return { data: payload || data, error: new Error(message) };
+  } catch {
+    return { data, error: new Error(message) };
+  }
+}
+
+async function upsertCompanyFinancialRecordsToSupabase(records = [], updatedBy = "") {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  if (!Array.isArray(records) || records.length === 0) return { data: [], error: null };
+  const payload = records.map((record) => ({
+    ...record,
+    updated_by: updatedBy || null,
+    is_archived: false,
+  }));
+  const { data, error } = await supabase
+    .from(COMPANY_FINANCIAL_RECORDS_TABLE)
+    .upsert(payload, { onConflict: "source_record_uid" })
+    .select("*");
+  return { data: Array.isArray(data) ? data : [], error };
+}
+
+async function archiveCompanyFinancialRecordsInSupabase(sourceRecordUids = [], updatedBy = "") {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  if (!Array.isArray(sourceRecordUids) || sourceRecordUids.length === 0) return { data: [], error: null };
+  const { data, error } = await supabase
+    .from(COMPANY_FINANCIAL_RECORDS_TABLE)
+    .update({ is_archived: true, updated_by: updatedBy || null })
+    .in("source_record_uid", sourceRecordUids)
+    .select("id, source_record_uid");
   return { data: Array.isArray(data) ? data : [], error };
 }
 
@@ -3145,6 +3948,57 @@ async function fetchCompletedJobsFromSupabase(userKey) {
     .select("*")
     .eq("user_key", userKey)
     .order("saved_at", { ascending: false });
+}
+
+async function fetchSharedJobsFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const { data, error } = await supabase
+    .from(COMPANY_ACTIVE_JOBS_TABLE)
+    .select("*")
+    .order("updated_at", { ascending: false });
+  return { data: Array.isArray(data) ? data : [], error };
+}
+
+async function upsertSharedJobToSupabase(job, userKey = "", updatedBy = "") {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const payload = buildSharedJobUpsertRow(job, userKey, updatedBy);
+  const { data, error } = await supabase
+    .from(COMPANY_ACTIVE_JOBS_TABLE)
+    .upsert([payload], { onConflict: "source_record_uid" })
+    .select("*");
+  return { data: Array.isArray(data) ? data : [], error };
+}
+
+async function updateDailyJobCostsForStaffInSupabase(job, updatedBy = "") {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const dailyProgressLog = Array.isArray(job.dailyProgressLog) ? job.dailyProgressLog : [];
+  if (!dailyProgressLog.length) return { data: [], error: new Error("Add a daily progress day before saving.") };
+
+  let latestData = [];
+  for (const day of dailyProgressLog) {
+    const { data, error } = await supabase.rpc("save_staff_daily_job_progress_day", {
+      p_source_record_uid: buildSharedJobSourceId(job),
+      p_day: day,
+      p_updated_by: String(updatedBy || ""),
+    });
+    if (error) return { data: [], error };
+    latestData = Array.isArray(data) ? data : [];
+  }
+  return { data: latestData, error: null };
+}
+
+async function createApprovedJobFromStaffDraft(draft = {}) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: null };
+  const { data, error } = await supabase.rpc("create_staff_approved_job", {
+    p_project_name: String(draft.projectName || "").trim(),
+    p_customer_name: String(draft.customerName || "").trim(),
+    p_project_address: String(draft.projectAddress || "").trim(),
+    p_contract_amount: Math.max(0, toNumber(draft.contractAmount, 0)),
+    p_anticipated_start_date: draft.anticipatedStartDate || null,
+    p_project_contact: String(draft.projectContact || "").trim(),
+    p_status: String(draft.status || "Approved").trim(),
+  });
+  return { data, error };
 }
 
 async function fetchFieldDailyLogsFromSupabase(userKey) {
@@ -3225,13 +4079,7 @@ async function fetchFieldDailyLogsFromSupabase(userKey) {
 function mapFieldOperationEmployeeRow(row = {}) {
   const firstName = String(row.first_name || row.firstName || "");
   const lastName = String(row.last_name || row.lastName || "");
-  const displayName = String(
-    row.display_name ||
-      row.displayName ||
-      row.employee_name ||
-      row.name ||
-      [firstName, lastName].filter(Boolean).join(" ").trim(),
-  );
+  const displayName = resolveEmployeeDisplayName({ ...row, firstName, lastName });
   return {
     id: String(row.id || row.employee_id || createFieldDailyLogId()),
     firstName,
@@ -3266,13 +4114,7 @@ function mapCompanyVehicleRow(row = {}) {
 }
 
 function buildEmployeeDisplayName(employee = {}) {
-  return (
-    String(employee.displayName || "")
-      .trim() ||
-    [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim() ||
-    String(employee.employeeName || "").trim() ||
-    ""
-  );
+  return resolveEmployeeDisplayName(employee);
 }
 
 function normalizeEmployeeRecord(employee = {}) {
@@ -4025,9 +4867,18 @@ function normalizeCrmFollowup(followup = {}) {
   };
 }
 
-async function fetchFieldOperationEmployeesFromSupabase(userKey) {
+async function fetchFieldOperationEmployeesFromSupabase(userKey, companyWide = false, dailyCostEditor = false) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
-  const { data, error } = await supabase.from("employees").select("*").eq("user_key", userKey).order("display_order", { ascending: true });
+  if (dailyCostEditor && !companyWide) {
+    const { data, error } = await supabase.rpc("list_daily_job_cost_employees");
+    return {
+      data: Array.isArray(data) ? data.map(mapFieldOperationEmployeeRow) : [],
+      error,
+    };
+  }
+  let query = supabase.from("employees").select("*").order("display_order", { ascending: true });
+  if (!companyWide) query = query.eq("user_key", userKey);
+  const { data, error } = await query;
   return {
     data: Array.isArray(data) ? data.map(mapFieldOperationEmployeeRow) : [],
     error,
@@ -4084,8 +4935,9 @@ function parseSupabaseMissingColumnError(error) {
 
 async function insertOrUpdateEstimate(dbRow, userKey) {
   if (!dbRow.local_estimate_id) return { data: null, error: new Error("Missing local_estimate_id") };
+  const mutationRow = prepareEstimateMutationRow(dbRow);
   if (dbRow.id) {
-    return supabase.from("estimates").update(dbRow).eq("id", dbRow.id).select("*");
+    return supabase.from("estimates").update(mutationRow).eq("id", dbRow.id).select("*");
   }
   const { data: existing, error: queryError } = await supabase
     .from("estimates")
@@ -4096,9 +4948,9 @@ async function insertOrUpdateEstimate(dbRow, userKey) {
   if (queryError) return { data: null, error: queryError };
   if (existing && existing.length > 0) {
     const estimateId = existing[0].id;
-    return supabase.from("estimates").update(dbRow).eq("id", estimateId).select("*");
+    return supabase.from("estimates").update(mutationRow).eq("id", estimateId).select("*");
   }
-  return supabase.from("estimates").insert([dbRow]).select("*");
+  return supabase.from("estimates").insert([mutationRow]).select("*");
 }
 
 async function upsertRowWithMissingColumnFallback(table, row, onConflict) {
@@ -4287,6 +5139,21 @@ async function uploadFieldDailyLogPhotoToStorage(file, userKey, logId, category)
       reader.readAsDataURL(file);
     });
   }
+}
+
+async function uploadApprovedJobAttachmentToStorage(file, userId, jobId, dayId, uploadedBy) {
+  const validationError = validateApprovedJobAttachment(file);
+  if (validationError) return { attachment: null, error: new Error(validationError) };
+  const storagePath = buildApprovedJobAttachmentPath({ userId, jobId, dayId, fileName: file.name });
+  const { error } = await supabase.storage.from(APPROVED_JOB_ATTACHMENT_BUCKET).upload(storagePath, file, {
+    upsert: false,
+    contentType: file.type || "application/octet-stream",
+  });
+  if (error) return { attachment: null, error };
+  return {
+    attachment: createApprovedJobAttachmentRecord(file, storagePath, { uploadedBy }),
+    error: null,
+  };
 }
 
 async function upsertFieldDailyLogToSupabase(log, userKey, options = {}) {
@@ -5040,7 +5907,7 @@ function normalizeSprayFoamRoofAreas(items = []) {
   return source.map((item) => ({
     label: String(item?.label || ""),
     fieldRoofSquares: Math.max(0, toNumber(item?.fieldRoofSquares, 0)),
-    foamThicknessInches: Math.min(16, Math.max(1, toNumber(item?.foamThicknessInches, 2))),
+    foamThicknessInches: normalizeSprayFoamThickness(item?.foamThicknessInches, 2),
     hasParapetWalls: Boolean(item?.hasParapetWalls),
     parapetWallSquares: Math.max(0, toNumber(item?.parapetWallSquares, 0)),
   }));
@@ -5071,8 +5938,8 @@ function calculateSprayFoamRoofAreaTotalsSafe(items = [], setCost = DEFAULT_SPF_
   const rowsWithTotals = rows.map((row) => {
     const parapetWallSquares = row.hasParapetWalls ? row.parapetWallSquares : 0;
     const totalAreaSquares = row.fieldRoofSquares + parapetWallSquares;
-    const yieldPerKit = yieldPerInch / Math.max(0.1, row.foamThicknessInches);
-    const kitsNeeded = totalAreaSquares > 0 ? totalAreaSquares / yieldPerKit : 0;
+    const usage = calculateSprayFoamUsage(totalAreaSquares, row.foamThicknessInches, yieldPerInch);
+    const { yieldPerKit, kitsNeeded } = usage;
     return {
       ...row,
       parapetWallSquares,
@@ -5158,6 +6025,7 @@ function normalizeDraftInputs(inputs = {}) {
   return {
     ...DEFAULT_INPUTS,
     ...inputs,
+    laborEmployeeRows: normalizeEstimateLaborEmployeeRows(inputs.laborEmployeeRows),
     sprayFoamLayerConfig: normalizeSprayFoamLayerConfig(inputs.sprayFoamLayerConfig),
     sprayFoamDetailMaterials: normalizeSprayFoamDetailMaterials(inputs.sprayFoamDetailMaterials),
     sprayFoamAdditionalDetailMaterials: normalizeSprayFoamAdditionalDetailMaterials(inputs.sprayFoamAdditionalDetailMaterials),
@@ -5868,7 +6736,8 @@ function calculateLabor(inputs) {
   const workers = Math.max(0, Math.round(toNumber(inputs.laborWorkers, 0)));
   const hourlyRate = Math.max(0, toNumber(inputs.laborHourlyRate, 0));
   const hoursPerWorker = Math.max(0, toNumber(inputs.laborHoursPerWorker, 0));
-  const payrollBurdenPercent = Math.max(0, toNumber(inputs.payrollBurdenPercent, 0));
+  const laborEmployeeRows = normalizeEstimateLaborEmployeeRows(inputs.laborEmployeeRows);
+  const payrollBurdenPercent = TOTAL_LABOR_BURDEN_RATE * 100;
 
   if (laborType === "subcontractor") {
     const subLaborBase = totalSquares * subcontractorLaborRatePerSq;
@@ -5899,9 +6768,12 @@ function calculateLabor(inputs) {
     };
   }
 
-  const basePayroll = workers * hourlyRate * hoursPerWorker;
-  const payrollBurden = basePayroll * (payrollBurdenPercent / 100);
-  const totalLaborCost = basePayroll + payrollBurden;
+  const loadedLabor = calculateInHouseLaborBurden({
+    employeeRows: laborEmployeeRows,
+    workers,
+    hourlyRate,
+    hoursPerWorker,
+  });
 
   return {
     laborType,
@@ -5909,17 +6781,21 @@ function calculateLabor(inputs) {
     subcontractorLaborRatePerSq: 0,
     subcontractorHasAddOns: false,
     subcontractorAddOnItems: normalizeSubcontractorAddOnItems([]),
-    workers,
+    workers: loadedLabor.workers,
     hourlyRate,
     hoursPerWorker,
     payrollBurdenPercent,
+    employeeRows: loadedLabor.employeeRows,
+    usesEmployeeWages: loadedLabor.usesEmployeeWages,
     subLaborBase: 0,
-    workersCompRate: 0,
-    workersCompCost: 0,
+    workersCompRate: loadedLabor.workersCompRate,
+    workersCompCost: loadedLabor.workersCompCost,
+    payrollTaxRate: loadedLabor.payrollTaxRate,
+    payrollTaxCost: loadedLabor.payrollTaxCost,
     subcontractorAddOnTotal: 0,
-    basePayroll,
-    payrollBurden,
-    totalLaborCost,
+    basePayroll: loadedLabor.basePayroll,
+    payrollBurden: loadedLabor.payrollBurden,
+    totalLaborCost: loadedLabor.totalLaborCost,
   };
 }
 
@@ -6258,8 +7134,8 @@ function calculateSprayFoamRoofAreaTotals(items = [], setCost = DEFAULT_SPF_RATE
   const rowsWithTotals = rows.map((row) => {
     const parapetWallSquares = row.hasParapetWalls ? row.parapetWallSquares : 0;
     const totalAreaSquares = row.fieldRoofSquares + parapetWallSquares;
-    const yieldPerKit = yieldPerInch / Math.max(0.1, row.foamThicknessInches);
-    const kitsNeeded = totalAreaSquares > 0 ? totalAreaSquares / yieldPerKit : 0;
+    const usage = calculateSprayFoamUsage(totalAreaSquares, row.foamThicknessInches, yieldPerInch);
+    const { yieldPerKit, kitsNeeded } = usage;
     return {
       ...row,
       parapetWallSquares,
@@ -6963,25 +7839,27 @@ function calculateSprayFoamEstimate(inputs, travelConfig = DEFAULT_TRAVEL_ADMIN_
   const totalParapetSquareFeet = totalParapetSquares * 100;
   const totalRoofSquares = fieldSquares + totalParapetSquares;
   const productionSquares = totalRoofSquares;
-  const selectedFoamThicknessInches = Math.min(16, Math.max(1, toNumber(inputs.sprayFoamFieldThickness, 2)));
-  const yieldPerKitAtSelectedThickness = foamSetYieldAtOneInch / selectedFoamThicknessInches;
+  const selectedFoamThicknessInches = normalizeSprayFoamThickness(inputs.sprayFoamFieldThickness, 2);
+  const foamEnabled = separateRoofAreas ? roofAreaTotals.totalFoamKits > 0 : selectedFoamThicknessInches > 0;
+  const yieldPerKitAtSelectedThickness = selectedFoamThicknessInches > 0 ? foamSetYieldAtOneInch / selectedFoamThicknessInches : 0;
   const wallFoamSqFt = productionSquares;
   const wallFoamKitCoverage = yieldPerKitAtSelectedThickness;
   const wallFoamUsageRatio = wallFoamKitCoverage > 0 ? wallFoamSqFt / wallFoamKitCoverage : 0;
-  const wallFoamFullKitsNeeded = Math.ceil(wallFoamUsageRatio);
+  const wallFoamFullKitsNeeded = foamEnabled ? Math.ceil(wallFoamUsageRatio) : 0;
   const wallFoamProratedMaterialCost = foamSetCost * wallFoamUsageRatio;
   const foamKitsNeeded = separateRoofAreas
     ? roofAreaTotals.totalFoamKits
     : isWallFoamEstimate
       ? wallFoamFullKitsNeeded
-      : totalRoofSquares > 0
+      : foamEnabled && totalRoofSquares > 0
         ? totalRoofSquares / yieldPerKitAtSelectedThickness
         : 0;
   const foamKitCost = foamSetCost;
-  const wallFoamMaterialCost =
-    wallFoamChargeMethod === "fullKit"
+  const wallFoamMaterialCost = foamEnabled
+    ? wallFoamChargeMethod === "fullKit"
       ? wallFoamFullKitsNeeded * foamKitCost
-      : wallFoamProratedMaterialCost;
+      : wallFoamProratedMaterialCost
+    : 0;
   const linearFeet = Math.max(0, toNumber(inputs.sprayFoamLinearFeet, 0));
   const dripEdgeRequired = Boolean(inputs.sprayFoamDripEdgeRequired);
   const foamStopDripEdgePieces = dripEdgeRequired ? Math.ceil(linearFeet / 10) : 0;
@@ -7023,7 +7901,9 @@ function calculateSprayFoamEstimate(inputs, travelConfig = DEFAULT_TRAVEL_ADMIN_
       })
     : [];
   const subcontractorCost = subcontractorItems.reduce((sum, item) => sum + item.totalCost, 0);
-  const travelAndOvertime = calculateTravelAndOvertime(inputs, travelConfig);
+  const sprayFoamTravelVehicles = normalizeTravelVehicles(inputs.travelVehicles || inputs.travelVehicle);
+  const resolvedSprayFoamTravelInputs = resolveSprayFoamTravelInputs(inputs, sprayFoamTravelVehicles.length);
+  const travelAndOvertime = calculateTravelAndOvertime({ ...inputs, ...resolvedSprayFoamTravelInputs }, travelConfig);
   const lodgingName = String(inputs.sprayFoamLodgingName || "");
   const nightlyLodgingCost = Math.max(0, toNumber(inputs.sprayFoamNightlyLodgingCost, 0));
   const lodgingNights = Math.max(0, Math.round(toNumber(inputs.sprayFoamLodgingNights, 0)));
@@ -7103,7 +7983,7 @@ function calculateSprayFoamEstimate(inputs, travelConfig = DEFAULT_TRAVEL_ADMIN_
     ? roofAreaTotals.totalFoamCost
     : isWallFoamEstimate
       ? wallFoamMaterialCost
-      : totalRoofSquares > 0 && coatingItems.some((item) => item.amount > 0)
+      : foamEnabled && totalRoofSquares > 0
         ? foamKitsNeeded * foamKitCost
         : 0;
   const materialItems = [
@@ -7122,7 +8002,7 @@ function calculateSprayFoamEstimate(inputs, travelConfig = DEFAULT_TRAVEL_ADMIN_
     {
       key: "wallThickness",
       label: "Wall thickness",
-      quantity: linearFeet * wallThickness,
+      quantity: foamEnabled ? linearFeet * wallThickness : 0,
       unit: "lf / inch",
       unitPrice: DEFAULT_SPF_RATES.wallThicknessUnitCost,
     },
@@ -8601,6 +9481,17 @@ function TravelCalculator({
           </button>
           {travelLookupMessage ? <em>{travelLookupMessage}</em> : null}
         </div>
+        <Field label={`${oneWayMilesLabel} (manual fallback)`}>
+          <input
+            type="number"
+            onWheel={handleNumberInputWheel}
+            min="0"
+            step="0.1"
+            value={safeInputs.oneWayMiles || safeInputs.sprayFoamMilesToLocation || 0}
+            onChange={(e) => onOneWayMilesChange?.(e.target.value)}
+          />
+          <span className="smallNote">Use this when Google Maps is unavailable. Travel cost updates immediately.</span>
+        </Field>
         <div className="field" style={{ gridColumn: "1 / -1" }}>
           <label>Trucks on jobsite</label>
           <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
@@ -8643,9 +9534,6 @@ function TravelCalculator({
       <details style={{ marginTop: 14 }}>
         <summary style={{ cursor: "pointer", fontWeight: 700 }}>Travel calculation details</summary>
         <div className="formGrid" style={{ marginTop: 12 }}>
-          <Field label={oneWayMilesLabel}>
-            <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={safeInputs.oneWayMiles || 0} onChange={(e) => onOneWayMilesChange?.(e.target.value)} />
-          </Field>
           <Field label="Average speed">
             <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={safeInputs.averageDrivingSpeedMph || 0} onChange={(e) => onAverageDrivingSpeedChange?.(e.target.value)} />
           </Field>
@@ -8775,6 +9663,22 @@ function OverheadCalculator({
 }
 
 function App() {
+  const getInitialAppearancePreference = () => {
+    if (typeof window === "undefined") return "system";
+    const stored = String(window.localStorage.getItem(APPEARANCE_PREFERENCE_KEY) || "").toLowerCase();
+    return ["light", "dark", "system"].includes(stored) ? stored : "system";
+  };
+
+  const [appearancePreference, setAppearancePreference] = useState(getInitialAppearancePreference);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+  });
+  const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
   const [authUser, setAuthUser] = useState(null);
   const [authRole, setAuthRole] = useState("salesperson");
   const [authLoading, setAuthLoading] = useState(true);
@@ -8791,6 +9695,14 @@ function App() {
   const [estimateOwnerAssignments, setEstimateOwnerAssignments] = useState({});
   const [sessionMessage, setSessionMessage] = useState("");
   const [sessionMessageType, setSessionMessageType] = useState("");
+  const [workHubInitialTaskId, setWorkHubInitialTaskId] = useState("");
+  const [cfoPaymentDiscussionOpeningId, setCfoPaymentDiscussionOpeningId] = useState("");
+  const [cfoPaymentDiscussionError, setCfoPaymentDiscussionError] = useState("");
+  const [profilePhotoUploading, setProfilePhotoUploading] = useState(false);
+  const [profilePhotoMessage, setProfilePhotoMessage] = useState("");
+  const [profilePhotoMessageType, setProfilePhotoMessageType] = useState("");
+  const profilePhotoInputRef = useRef(null);
+  const employeeManagementEditorRef = useRef(null);
   const [travelLookupMessage, setTravelLookupMessage] = useState("");
   const [isLookingUpDistance, setIsLookingUpDistance] = useState(false);
   const [quickMeasureReport, setQuickMeasureReport] = useState(null);
@@ -8798,7 +9710,23 @@ function App() {
   const [quickMeasureIsProcessing, setQuickMeasureIsProcessing] = useState(false);
   const quickMeasureFileInputRef = useRef(null);
   const isAdminUser = authRole === "admin";
-  const canAccessCfoDashboard = Boolean(authUser?.canAccessCfoDashboard);
+  const isFinanceUser = authRole === "admin" || authRole === "cfo";
+  const canManageEmployeeWages = isFinanceUser;
+  const canManageSubcontractorCompliance = isFinanceUser || normalizeEmployeeEmail(authUser?.email) === "natalia@crtroofing.com";
+  const canManageSharedJobData = canManageSharedJobs(authRole);
+  const canUpdateDailyJobCostData = canUpdateDailyJobCosts(authRole, authUser?.email);
+  const canCreateApprovedJobData = canCreateApprovedJobs(authRole, authUser?.email);
+  const canSubmitInvoiceHandoff = canSubmitJobForInvoice(authRole);
+  const canAccessInvoiceQueue = canManageInvoiceQueue(authRole, authUser?.email);
+  const canAccessCfoDashboard = isFinanceUser;
+
+  const applySharedJobRows = useCallback((rows = []) => {
+    const split = splitSharedJobsByWorkflow(rows);
+    setActiveJobs(split.activeJobs);
+    setCompletedJobs(split.approvedJobs);
+    setPastCompletedJobs(split.completedJobs);
+    setArchivedJobs(split.archivedJobs);
+  }, []);
 
   useEffect(() => {
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
@@ -8831,8 +9759,34 @@ function App() {
       }
       if (!active) return;
       const mapped = mapAuthUserFromSession(session.user, profile);
-      setAuthUser(mapped);
-      setAuthRole(mapped?.role || "salesperson");
+      if ((!profile?.role || !String(profile.role).trim()) && mapped?.role) {
+        const { data: patchedProfile, error: patchedProfileError } = await supabase
+          .from("user_profiles")
+          .upsert(
+            {
+              id: session.user.id,
+              email: String(session.user.email || profile?.email || "").trim(),
+              full_name: String(profile?.full_name || profile?.display_name || session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email || "").trim(),
+              role: mapped.role,
+            },
+            { onConflict: "id" },
+          )
+          .select("id, full_name, email, role, avatar_path")
+          .maybeSingle();
+        if (!active) return;
+        if (!patchedProfileError && patchedProfile) {
+          const patchedMapped = await attachProfilePhotoUrl(mapAuthUserFromSession(session.user, patchedProfile));
+          if (!active) return;
+          setAuthUser(patchedMapped);
+          setAuthRole(patchedMapped?.role || "salesperson");
+          setAuthLoading(false);
+          return;
+        }
+      }
+      const mappedWithPhoto = await attachProfilePhotoUrl(mapped);
+      if (!active) return;
+      setAuthUser(mappedWithPhoto);
+      setAuthRole(mappedWithPhoto?.role || "salesperson");
       setAuthLoading(false);
     };
 
@@ -8927,15 +9881,22 @@ function App() {
   const [templatesSavedEstimatesOpen, setTemplatesSavedEstimatesOpen] = useState(false);
   const [templatesSavedEstimateSearch, setTemplatesSavedEstimateSearch] = useState("");
   const [dashboardApprovedJobsCollapsed, setDashboardApprovedJobsCollapsed] = useState(false);
+  const [archivedJobsCollapsed, setArchivedJobsCollapsed] = useState(false);
   const [completedJobs, setCompletedJobs] = useState([]);
+  const [pastCompletedJobs, setPastCompletedJobs] = useState([]);
   const [completedJobMetrics, setCompletedJobMetrics] = useState([]);
   const [selectedMetricsEstimate, setSelectedMetricsEstimate] = useState(null);
   const [metricsFormData, setMetricsFormData] = useState(null);
   const [selectedApprovedJob, setSelectedApprovedJob] = useState(null);
   const [approvedJobData, setApprovedJobData] = useState(null);
   const [approvedDailyProgressLogs, setApprovedDailyProgressLogs] = useState([]);
-  const [activeJobs, setActiveJobs] = useState(() => createSeedActiveJobs());
+  const [approvedAttachmentUploadingDayIds, setApprovedAttachmentUploadingDayIds] = useState([]);
+  const [collapsedApprovedDailyProgressDayIds, setCollapsedApprovedDailyProgressDayIds] = useState([]);
+  const [activeJobs, setActiveJobs] = useState([]);
+  const [archivedJobs, setArchivedJobs] = useState([]);
   const [activeJobSelectedId, setActiveJobSelectedId] = useState("");
+  const [activeJobEditDraft, setActiveJobEditDraft] = useState(null);
+  const [activeJobEditMode, setActiveJobEditMode] = useState(false);
   const [activeJobsSearch, setActiveJobsSearch] = useState("");
   const [activeJobsFilters, setActiveJobsFilters] = useState(() => ({
     status: "all",
@@ -8951,6 +9912,10 @@ function App() {
   const [activeJobIssueModalOpen, setActiveJobIssueModalOpen] = useState(false);
   const [activeJobIssueDraft, setActiveJobIssueDraft] = useState(() => createBlankActiveJobIssue());
   const [activeJobIssueResponse, setActiveJobIssueResponse] = useState("");
+  const [invoiceHandoffJob, setInvoiceHandoffJob] = useState(null);
+  const [invoiceHandoffDraft, setInvoiceHandoffDraft] = useState(null);
+  const [invoiceHandoffSaving, setInvoiceHandoffSaving] = useState(false);
+  const [invoiceHandoffError, setInvoiceHandoffError] = useState("");
   const [approvedJobsSearch, setApprovedJobsSearch] = useState("");
   const [approvedJobsFilters, setApprovedJobsFilters] = useState(() => ({
     customer: "",
@@ -8959,8 +9924,9 @@ function App() {
     contact: "",
     startDate: "",
   }));
+  const [approvedJobQuickCreateOpen, setApprovedJobQuickCreateOpen] = useState(false);
+  const [approvedJobQuickDraft, setApprovedJobQuickDraft] = useState(() => createBlankApprovedJobQuickDraft());
   const [selectedCfoCard, setSelectedCfoCard] = useState("");
-  const [cfoSupplierPayablesView, setCfoSupplierPayablesView] = useState("current");
   const [cfoDashboardFilters, setCfoDashboardFilters] = useState(() => ({
     search: "",
     dateFrom: "",
@@ -9024,12 +9990,37 @@ function App() {
   const [cfoLiquidCashEntries, setCfoLiquidCashEntries] = useState([]);
   const [cfoLiquidCashDraft, setCfoLiquidCashDraft] = useState(() => createBlankCfoLiquidCashEntry());
   const [cfoLiquidCashEditingId, setCfoLiquidCashEditingId] = useState("");
+  const [liquidCashCode, setLiquidCashCode] = useState("");
+  const [liquidCashSaving, setLiquidCashSaving] = useState(false);
+  const [liquidCashAccess, setLiquidCashAccess] = useState(() => ({
+    phase: "hidden",
+    challengeId: "",
+    challengeExpiresAt: "",
+    maskedEmail: "",
+    attemptsRemaining: 5,
+    revealToken: "",
+    revealExpiresAt: "",
+    secondsRemaining: 0,
+    error: "",
+  }));
   const [cfoReceivableEntries, setCfoReceivableEntries] = useState([]);
   const [cfoReceivableDraft, setCfoReceivableDraft] = useState(() => createBlankCfoReceivableEntry());
   const [cfoReceivableEditingId, setCfoReceivableEditingId] = useState("");
+  const [cfoReceivablePaymentMessage, setCfoReceivablePaymentMessage] = useState("");
+  const [cfoSupplierPaymentMessage, setCfoSupplierPaymentMessage] = useState("");
+  const [cfoSupplierPaymentSavingId, setCfoSupplierPaymentSavingId] = useState("");
+  const [cfoSupplierPaymentEntry, setCfoSupplierPaymentEntry] = useState(null);
+  const [cfoSupplierPaymentDraft, setCfoSupplierPaymentDraft] = useState(() => createBlankSupplierPaymentDraft());
+  const [supplierPaymentHistory, setSupplierPaymentHistory] = useState([]);
   const [cfoManualEntriesByCard, setCfoManualEntriesByCard] = useState(() => createBlankCfoManualEntriesByCard());
   const [cfoManualDraftsByCard, setCfoManualDraftsByCard] = useState(() => createBlankCfoManualDraftsByCard());
   const [cfoManualEditingByCard, setCfoManualEditingByCard] = useState(() => createBlankCfoManualEditingByCard());
+  const [cfoDeletedSourceRecordUids, setCfoDeletedSourceRecordUids] = useState([]);
+  const [estimatorSettingsSyncStatus, setEstimatorSettingsSyncStatus] = useState("idle");
+  const [jobsSyncStatus, setJobsSyncStatus] = useState("idle");
+  const [jobsSyncError, setJobsSyncError] = useState("");
+  const [cfoSyncStatus, setCfoSyncStatus] = useState("idle");
+  const [cfoSyncError, setCfoSyncError] = useState("");
   const [crmTab, setCrmTab] = useState("newLead");
   const [crmLeads, setCrmLeads] = useState([]);
   const [crmLeadDraft, setCrmLeadDraft] = useState(() => createBlankCrmLead());
@@ -9054,50 +10045,188 @@ function App() {
   const [crmFollowupSearch, setCrmFollowupSearch] = useState("");
   const fieldNotesSyncInitializedRef = useRef(false);
   const fieldOperationsSyncInitializedRef = useRef(false);
+  const estimatorSettingsHydratingRef = useRef(false);
+  const cfoHydratingRef = useRef(false);
+  const estimatorSettingsLastSyncedRef = useRef("");
+  const cfoLastSyncedRef = useRef("");
+  const cfoLiquidCashEntriesRef = useRef([]);
+
+  const applyHydratedCfoState = (
+    payload,
+    {
+      preserveLiquidOnEmpty = false,
+      resetDrafts = false,
+      clearDeleted = false,
+    } = {},
+  ) => {
+    const fallbackManual = createBlankCfoManualEntriesByCard();
+    const payloadLiquid = Array.isArray(payload?.liquidCashEntries) ? payload.liquidCashEntries : [];
+    const nextLiquid = preserveLiquidOnEmpty && payloadLiquid.length === 0
+      ? cfoLiquidCashEntriesRef.current
+      : payloadLiquid;
+    const nextReceivable = Array.isArray(payload?.receivableEntries) ? payload.receivableEntries : [];
+    const nextManual = payload?.manualEntriesByCard || fallbackManual;
+
+    cfoHydratingRef.current = true;
+    setCfoLiquidCashEntries(nextLiquid);
+    setCfoReceivableEntries(nextReceivable);
+    setCfoManualEntriesByCard(nextManual);
+    if (resetDrafts) {
+      setCfoLiquidCashDraft(createBlankCfoLiquidCashEntry());
+      setCfoLiquidCashEditingId("");
+      setCfoReceivableDraft(createBlankCfoReceivableEntry());
+      setCfoReceivableEditingId("");
+      setCfoManualDraftsByCard(createBlankCfoManualDraftsByCard());
+      setCfoManualEditingByCard(createBlankCfoManualEditingByCard());
+    }
+    if (clearDeleted) {
+      setCfoDeletedSourceRecordUids([]);
+    }
+    cfoLastSyncedRef.current = JSON.stringify(
+      flattenCfoNonLiquidCashRecords(nextReceivable, nextManual),
+    );
+    cfoHydratingRef.current = false;
+  };
+  const resolvedAppearance = appearancePreference === "system" ? (systemPrefersDark ? "dark" : "light") : appearancePreference;
 
   useEffect(() => {
-    if (!authUser?.key) {
-      setActiveJobs(createSeedActiveJobs());
-      return;
-    }
-    setActiveJobs(readJson(ACTIVE_JOBS_KEY(authUser.key), createSeedActiveJobs()));
-  }, [authUser?.key]);
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (event) => {
+      setSystemPrefersDark(event.matches);
+    };
+    setSystemPrefersDark(query.matches);
+    query.addEventListener("change", handleChange);
+    return () => {
+      query.removeEventListener("change", handleChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(APPEARANCE_PREFERENCE_KEY, appearancePreference);
+    const root = document.documentElement;
+    root.dataset.appearancePreference = appearancePreference;
+    root.dataset.appearance = resolvedAppearance;
+  }, [appearancePreference, resolvedAppearance]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    cfoLiquidCashEntriesRef.current = cfoLiquidCashEntries;
+  }, [cfoLiquidCashEntries]);
 
   useEffect(() => {
     if (!authUser?.key) return;
-    writeJson(ACTIVE_JOBS_KEY(authUser.key), activeJobs);
-  }, [activeJobs, authUser?.key]);
+    removeKey(CFO_LIQUID_CASH_KEY(authUser.key));
+  }, [authUser?.key]);
+
+  useEffect(() => {
+    if (liquidCashAccess.phase !== "revealed" || !liquidCashAccess.revealExpiresAt) return undefined;
+    let expiryHandled = false;
+    const expireReveal = () => {
+      if (expiryHandled) return;
+      expiryHandled = true;
+      const revealToken = liquidCashAccess.revealToken;
+      setCfoLiquidCashEntries([]);
+      setCfoLiquidCashDraft(createBlankCfoLiquidCashEntry());
+      setCfoLiquidCashEditingId("");
+      setLiquidCashCode("");
+      setLiquidCashAccess((current) => ({
+        ...current,
+        phase: "hidden",
+        revealToken: "",
+        revealExpiresAt: "",
+        secondsRemaining: 0,
+        error: "",
+      }));
+      if (revealToken) {
+        invokeLiquidCashFunction("liquid-cash-reveal", { action: "hide", revealToken }).catch(() => {});
+      }
+    };
+    const tick = () => {
+      const remaining = getRevealSecondsRemaining(liquidCashAccess.revealExpiresAt);
+      setLiquidCashAccess((current) => current.phase === "revealed" ? { ...current, secondsRemaining: remaining } : current);
+      if (remaining === 0) expireReveal();
+    };
+    const expiryDelay = Math.max(0, new Date(liquidCashAccess.revealExpiresAt).getTime() - Date.now());
+    const interval = window.setInterval(tick, 250);
+    const timeout = window.setTimeout(expireReveal, expiryDelay);
+    return () => {
+      window.clearInterval(interval);
+      window.clearTimeout(timeout);
+    };
+  }, [liquidCashAccess.phase, liquidCashAccess.revealExpiresAt, liquidCashAccess.revealToken]);
 
   useEffect(() => {
     if (!authUser?.key) {
-      setCompletedJobs(createSeedApprovedJobs());
+      setActiveJobs([]);
+      setArchivedJobs([]);
+      setCompletedJobs([]);
+      setPastCompletedJobs([]);
+      setJobsSyncStatus("idle");
+      setJobsSyncError("");
       setProposals([]);
       return;
     }
 
     let active = true;
-    const loadApprovedJobData = async () => {
-      const { data: completedData, error: completedError } = await fetchCompletedJobsFromSupabase(authUser.key);
+    const loadSharedJobData = async (mode = "loading") => {
+      setJobsSyncStatus(mode);
+      setJobsSyncError("");
+      let { data, error } = await fetchSharedJobsFromSupabase();
       if (!active) return;
-      if (!completedError && Array.isArray(completedData) && completedData.length) {
-        setCompletedJobs(completedData.map(mapCompletedJobRow).filter(Boolean));
-      } else {
-        const fallback = readJson(COMPLETED_JOBS_KEY(authUser.key), createSeedApprovedJobs());
-        setCompletedJobs(Array.isArray(fallback) && fallback.length ? fallback : createSeedApprovedJobs());
-        if (completedError) console.warn("Supabase completed jobs load failed:", completedError?.message || completedError);
+      if (error) {
+        setJobsSyncStatus("error");
+        setJobsSyncError(error?.message || String(error));
+        console.warn("Shared jobs load failed:", error?.message || error);
+        return;
       }
+
+      if ((!data || data.length === 0) && canManageSharedJobData) {
+        const localActive = Array.isArray(readJson(ACTIVE_JOBS_KEY(authUser.key), [])) ? readJson(ACTIVE_JOBS_KEY(authUser.key), []) : [];
+        const localApproved = Array.isArray(readJson(COMPLETED_JOBS_KEY(authUser.key), [])) ? readJson(COMPLETED_JOBS_KEY(authUser.key), []) : [];
+        const migrationCandidates = [...localActive, ...localApproved].filter(Boolean);
+
+        if (migrationCandidates.length) {
+          for (const job of migrationCandidates) {
+            const payload = {
+              ...job,
+              workflowStatus: job.workflowStatus || (isActiveJobStatus(job.status) ? "active" : "approved"),
+            };
+            // eslint-disable-next-line no-await-in-loop
+            const migrateRes = await upsertSharedJobToSupabase(payload, authUser.key, authUser.id || authUser.key);
+            if (migrateRes.error) {
+              console.warn("Shared jobs migration row failed:", migrateRes.error?.message || migrateRes.error);
+            }
+          }
+
+          ({ data, error } = await fetchSharedJobsFromSupabase());
+          if (!error) {
+            removeKey(ACTIVE_JOBS_KEY(authUser.key));
+            removeKey(COMPLETED_JOBS_KEY(authUser.key));
+          }
+        }
+      }
+
+      if (error) {
+        setJobsSyncStatus("error");
+        setJobsSyncError(error?.message || String(error));
+        return;
+      }
+
+      applySharedJobRows(data);
+      setJobsSyncStatus("saved");
     };
 
-    loadApprovedJobData();
+    loadSharedJobData("loading");
     return () => {
       active = false;
     };
-  }, [authUser?.key]);
-
-  useEffect(() => {
-    if (!authUser?.key) return;
-    writeJson(COMPLETED_JOBS_KEY(authUser.key), completedJobs);
-  }, [authUser?.key, completedJobs]);
+  }, [authUser?.id, authUser?.key, applySharedJobRows, canManageSharedJobData]);
 
   useEffect(() => {
     if (!authUser?.key) return;
@@ -9109,42 +10238,179 @@ function App() {
       setCfoLiquidCashEntries([]);
       setCfoLiquidCashDraft(createBlankCfoLiquidCashEntry());
       setCfoLiquidCashEditingId("");
+      setLiquidCashCode("");
+      setLiquidCashAccess({
+        phase: "hidden",
+        challengeId: "",
+        challengeExpiresAt: "",
+        maskedEmail: "",
+        attemptsRemaining: 5,
+        revealToken: "",
+        revealExpiresAt: "",
+        secondsRemaining: 0,
+        error: "",
+      });
       setCfoReceivableEntries([]);
       setCfoReceivableDraft(createBlankCfoReceivableEntry());
       setCfoReceivableEditingId("");
       setCfoManualEntriesByCard(createBlankCfoManualEntriesByCard());
       setCfoManualDraftsByCard(createBlankCfoManualDraftsByCard());
       setCfoManualEditingByCard(createBlankCfoManualEditingByCard());
+      setCfoDeletedSourceRecordUids([]);
+      setCfoSyncStatus("idle");
+      setCfoSyncError("");
       return;
     }
-    const savedLiquidCashEntries = readJson(CFO_LIQUID_CASH_KEY(authUser.key), []);
-    const savedReceivableEntries = readJson(CFO_RECEIVABLES_KEY(authUser.key), []);
-    const savedManualEntriesByCard = readJson(CFO_MANUAL_ENTRIES_KEY(authUser.key), {});
-    setCfoLiquidCashEntries(Array.isArray(savedLiquidCashEntries) ? savedLiquidCashEntries.map(normalizeCfoLiquidCashEntry) : []);
-    setCfoLiquidCashDraft(createBlankCfoLiquidCashEntry());
-    setCfoLiquidCashEditingId("");
-    setCfoReceivableEntries(Array.isArray(savedReceivableEntries) ? savedReceivableEntries.map(normalizeCfoReceivableEntry) : []);
-    setCfoReceivableDraft(createBlankCfoReceivableEntry());
-    setCfoReceivableEditingId("");
-    setCfoManualEntriesByCard(normalizeCfoManualEntriesByCard(savedManualEntriesByCard));
-    setCfoManualDraftsByCard(createBlankCfoManualDraftsByCard());
-    setCfoManualEditingByCard(createBlankCfoManualEditingByCard());
-  }, [authUser?.key]);
+    let active = true;
+    const loadCfoRecords = async () => {
+      if (!isFinanceUser) {
+        applyHydratedCfoState({
+          liquidCashEntries: [],
+          receivableEntries: [],
+          manualEntriesByCard: createBlankCfoManualEntriesByCard(),
+        }, { resetDrafts: true, clearDeleted: true });
+        return;
+      }
+      setCfoSyncStatus("loading");
+      setCfoSyncError("");
+      const { data, error } = await fetchCompanyFinancialRecordsFromSupabase();
+      if (!active) return;
+      if (error) {
+        setCfoSyncStatus("error");
+        setCfoSyncError(error?.message || String(error));
+        console.warn("Supabase CFO records load failed:", error?.message || error);
+        return;
+      }
+
+      if (Array.isArray(data) && data.length) {
+        const hydrated = hydrateCfoStateFromSupabaseRecords(data);
+        applyHydratedCfoState(hydrated, {
+          preserveLiquidOnEmpty: !hasActiveLiquidCashRecord(data),
+          resetDrafts: true,
+          clearDeleted: true,
+        });
+        setCfoSyncStatus("saved");
+        return;
+      }
+
+      applyHydratedCfoState({
+        liquidCashEntries: [],
+        receivableEntries: cfoReceivableEntries,
+        manualEntriesByCard: cfoManualEntriesByCard,
+      }, {
+        preserveLiquidOnEmpty: true,
+        resetDrafts: true,
+        clearDeleted: true,
+      });
+      setCfoSyncStatus("idle");
+    };
+
+    loadCfoRecords();
+    return () => {
+      active = false;
+    };
+  }, [authUser?.key, isFinanceUser]);
 
   useEffect(() => {
-    if (!authUser?.key) return;
-    writeJson(CFO_LIQUID_CASH_KEY(authUser.key), cfoLiquidCashEntries);
-  }, [authUser?.key, cfoLiquidCashEntries]);
+    if (!authUser?.key || !isFinanceUser) {
+      setSupplierPaymentHistory([]);
+      return undefined;
+    }
+
+    let active = true;
+    const loadSupplierPaymentHistory = async () => {
+      const { data, error } = await fetchSupplierPaymentHistoryFromSupabase();
+      if (!active) return;
+      if (error) {
+        console.warn("Supplier payment history load failed:", error?.message || error);
+        return;
+      }
+      setSupplierPaymentHistory(data);
+    };
+
+    loadSupplierPaymentHistory();
+    const channel = supabase
+      .channel(`supplier-payment-history-${authUser.key}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "supplier_payment_history" },
+        () => loadSupplierPaymentHistory(),
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [authUser?.key, isFinanceUser]);
 
   useEffect(() => {
-    if (!authUser?.key) return;
-    writeJson(CFO_RECEIVABLES_KEY(authUser.key), cfoReceivableEntries);
-  }, [authUser?.key, cfoReceivableEntries]);
+    if (!authUser?.key || !isFinanceUser || cfoHydratingRef.current) return;
 
-  useEffect(() => {
-    if (!authUser?.key) return;
-    writeJson(CFO_MANUAL_ENTRIES_KEY(authUser.key), cfoManualEntriesByCard);
-  }, [authUser?.key, cfoManualEntriesByCard]);
+    const currentSnapshot = JSON.stringify(
+      flattenCfoNonLiquidCashRecords(cfoReceivableEntries, cfoManualEntriesByCard),
+    );
+    if (currentSnapshot === cfoLastSyncedRef.current && cfoDeletedSourceRecordUids.length === 0) return;
+
+    let active = true;
+    const syncCfoRecords = async () => {
+      setCfoSyncStatus("saving");
+      setCfoSyncError("");
+      const records = flattenCfoNonLiquidCashRecords(cfoReceivableEntries, cfoManualEntriesByCard);
+      const upsertRes = await upsertCompanyFinancialRecordsToSupabase(records, authUser.id || authUser.key);
+      if (!active) return;
+      if (upsertRes.error) {
+        const errorMessage = upsertRes.error?.message || String(upsertRes.error || "Unknown save error");
+        setCfoSyncError(errorMessage);
+        setCfoSyncStatus("error");
+        console.warn("Supabase CFO records save failed:", errorMessage);
+        return;
+      }
+      if (cfoDeletedSourceRecordUids.length) {
+        const archiveRes = await archiveCompanyFinancialRecordsInSupabase(cfoDeletedSourceRecordUids, authUser.id || authUser.key);
+        if (!active) return;
+        if (archiveRes.error) {
+          const errorMessage = archiveRes.error?.message || String(archiveRes.error || "Unknown archive error");
+          setCfoSyncError(errorMessage);
+          setCfoSyncStatus("error");
+          console.warn("Supabase CFO records archive failed:", errorMessage);
+          return;
+        }
+        setCfoDeletedSourceRecordUids([]);
+      }
+
+      if (Array.isArray(upsertRes.data) && upsertRes.data.length) {
+        const hydratedFromSave = hydrateCfoStateFromSupabaseRecords(upsertRes.data);
+        applyHydratedCfoState(hydratedFromSave, {
+          preserveLiquidOnEmpty: !hasActiveLiquidCashRecord(upsertRes.data),
+        });
+      }
+
+      const refetchRes = await fetchCompanyFinancialRecordsFromSupabase();
+      if (!active) return;
+      if (!refetchRes.error && Array.isArray(refetchRes.data)) {
+        const hydrated = hydrateCfoStateFromSupabaseRecords(refetchRes.data);
+        applyHydratedCfoState(hydrated, {
+          preserveLiquidOnEmpty: !hasActiveLiquidCashRecord(refetchRes.data),
+        });
+      }
+
+      setCfoSyncError("");
+      setCfoSyncStatus("saved");
+    };
+
+    syncCfoRecords();
+    return () => {
+      active = false;
+    };
+  }, [
+    authUser?.id,
+    authUser?.key,
+    isFinanceUser,
+    cfoReceivableEntries,
+    cfoManualEntriesByCard,
+    cfoDeletedSourceRecordUids,
+  ]);
 
   useEffect(() => {
     if (!authUser?.key) {
@@ -9171,7 +10437,7 @@ function App() {
     setCrmSelectedCustomerId("");
     setCrmFollowupDraft(createBlankCrmFollowup());
     setCrmFollowupEditingId("");
-  }, [authUser?.key]);
+  }, [authUser?.key, applySharedJobRows]);
 
   useEffect(() => {
     if (!authUser?.key) return;
@@ -9322,7 +10588,7 @@ function App() {
     });
   }, [fieldDailyLogFilters, fieldDailyLogReviewSearch, fieldDailyLogs]);
   const activeJobsSummary = useMemo(() => {
-    const active = activeJobs.filter((job) => isActiveJobStatus(job.status));
+    const active = activeJobs;
     return {
       totalJobs: activeJobs.length,
       activeCount: active.length,
@@ -9389,7 +10655,7 @@ function App() {
       });
   }, [activeJobs, activeJobsFilters, activeJobsSearch]);
   const selectedActiveJob = useMemo(() => activeJobs.find((job) => job.id === activeJobSelectedId) || null, [activeJobs, activeJobSelectedId]);
-  const approvedJobsDashboardSource = useMemo(() => (completedJobs.length ? completedJobs : createSeedApprovedJobs()), [completedJobs]);
+  const approvedJobsDashboardSource = useMemo(() => completedJobs, [completedJobs]);
   const approvedJobsDashboardSummary = useMemo(() => {
     const active = approvedJobsDashboardSource.filter((job) => !["completed", "closed"].includes(String(job.projectStatus || job.status || "").toLowerCase()));
     const upcoming = [...approvedJobsDashboardSource]
@@ -9408,6 +10674,10 @@ function App() {
       upcoming,
     };
   }, [approvedJobsDashboardSource]);
+  const cfoApprovedJobsLedger = useMemo(
+    () => buildCfoApprovedJobsLedger([...completedJobs, ...activeJobs]),
+    [activeJobs, completedJobs],
+  );
   const filteredApprovedJobs = useMemo(() => {
     const query = approvedJobsSearch.trim().toLowerCase();
     const filters = approvedJobsFilters || {};
@@ -9575,7 +10845,7 @@ function App() {
     let active = true;
     (async () => {
       const [employeeResult, vehicleResult] = await Promise.all([
-        fetchFieldOperationEmployeesFromSupabase(authUser.key),
+        fetchFieldOperationEmployeesFromSupabase(authUser.key, canManageEmployeeWages, canUpdateDailyJobCostData),
         fetchCompanyVehiclesFromSupabase(authUser.key),
       ]);
       if (!active) return;
@@ -9594,7 +10864,7 @@ function App() {
     return () => {
       active = false;
     };
-  }, [authUser?.key]);
+  }, [authUser?.key, applySharedJobRows, canManageEmployeeWages, canUpdateDailyJobCostData]);
 
   useEffect(() => {
     if (!authUser?.key) {
@@ -9705,12 +10975,212 @@ function App() {
   }, [authUser?.key, isAdminUser]);
 
   useEffect(() => {
-    writeJson(ADMIN_PRICING_KEY, adminPricing);
-  }, [adminPricing]);
+    if (!authUser?.key || !SUPABASE_URL || !SUPABASE_ANON_KEY) return undefined;
+
+    const reloadCompanyData = async () => {
+      const [settingsRes, cfoRes] = await Promise.all([
+        fetchCompanyEstimatorSettingsFromSupabase(),
+        isFinanceUser ? fetchCompanyFinancialRecordsFromSupabase() : Promise.resolve({ data: [], error: null }),
+      ]);
+
+      if (settingsRes?.data) {
+        const mergedPricing = normalizeAdminPricing({
+          ...DEFAULT_ADMIN_PRICING,
+          ...toPlainObject(settingsRes.data.admin_pricing_defaults, {}),
+        });
+        const mergedTravel = normalizeTravelAdminSettings({
+          ...DEFAULT_TRAVEL_ADMIN_SETTINGS,
+          ...toPlainObject(settingsRes.data.travel_defaults, {}),
+        });
+        estimatorSettingsHydratingRef.current = true;
+        setAdminPricing(mergedPricing);
+        setAdminTravelSettings(mergedTravel);
+        estimatorSettingsHydratingRef.current = false;
+        estimatorSettingsLastSyncedRef.current = JSON.stringify({
+          adminPricing: mergedPricing,
+          adminTravelSettings: mergedTravel,
+        });
+      }
+
+      if (isFinanceUser && !cfoRes?.error && Array.isArray(cfoRes?.data)) {
+        const hydrated = hydrateCfoStateFromSupabaseRecords(cfoRes.data);
+        applyHydratedCfoState(hydrated, {
+          preserveLiquidOnEmpty: !hasActiveLiquidCashRecord(cfoRes.data),
+        });
+      } else if (isFinanceUser && cfoRes?.error) {
+        setCfoSyncError(cfoRes.error?.message || String(cfoRes.error));
+        setCfoSyncStatus("error");
+      }
+    };
+
+    const settingsChannel = supabase
+      .channel(`company-settings-${authUser.key}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: COMPANY_ESTIMATOR_SETTINGS_TABLE },
+        () => reloadCompanyData(),
+      )
+      .subscribe();
+
+    const financialChannel = supabase
+      .channel(`company-financial-${authUser.key}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: COMPANY_FINANCIAL_RECORDS_TABLE },
+        () => reloadCompanyData(),
+      )
+      .subscribe();
+
+    const handleRefetchTrigger = () => {
+      reloadCompanyData();
+    };
+
+    window.addEventListener("online", handleRefetchTrigger);
+    document.addEventListener("visibilitychange", handleRefetchTrigger);
+
+    return () => {
+      window.removeEventListener("online", handleRefetchTrigger);
+      document.removeEventListener("visibilitychange", handleRefetchTrigger);
+      supabase.removeChannel(settingsChannel);
+      supabase.removeChannel(financialChannel);
+    };
+  }, [authUser?.key, isFinanceUser]);
 
   useEffect(() => {
+    if (!authUser?.key || !SUPABASE_URL || !SUPABASE_ANON_KEY) return undefined;
+
+    let active = true;
+    const reloadSharedJobs = async (status = "refreshing") => {
+      setJobsSyncStatus(status);
+      const { data, error } = await fetchSharedJobsFromSupabase();
+      if (!active) return;
+      if (error) {
+        setJobsSyncStatus("error");
+        setJobsSyncError(error?.message || String(error));
+        return;
+      }
+      applySharedJobRows(data);
+      setJobsSyncError("");
+      setJobsSyncStatus("saved");
+    };
+
+    const jobsChannel = supabase
+      .channel(`company-shared-jobs-${authUser.key}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: COMPANY_ACTIVE_JOBS_TABLE },
+        () => reloadSharedJobs("refreshing"),
+      )
+      .subscribe();
+
+    const handleOnline = () => {
+      reloadSharedJobs("reconnecting");
+    };
+
+    const handleOffline = () => {
+      setJobsSyncStatus("offline");
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    document.addEventListener("visibilitychange", handleOnline);
+
+    return () => {
+      active = false;
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      document.removeEventListener("visibilitychange", handleOnline);
+      supabase.removeChannel(jobsChannel);
+    };
+  }, [authUser?.key]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadCompanyEstimatorSettings = async () => {
+      if (!authUser?.key) {
+        setEstimatorSettingsSyncStatus("idle");
+        return;
+      }
+      estimatorSettingsHydratingRef.current = true;
+      const localPricing = normalizeAdminPricing(readJson(ADMIN_PRICING_KEY, DEFAULT_ADMIN_PRICING));
+      const localTravel = normalizeTravelAdminSettings(readJson(ADMIN_TRAVEL_SETTINGS_KEY, DEFAULT_TRAVEL_ADMIN_SETTINGS));
+      setAdminPricing(localPricing);
+      setAdminTravelSettings(localTravel);
+
+      const { data, error } = await fetchCompanyEstimatorSettingsFromSupabase();
+      if (!active) return;
+      if (!error && data) {
+        const mergedPricing = normalizeAdminPricing({
+          ...DEFAULT_ADMIN_PRICING,
+          ...toPlainObject(data.admin_pricing_defaults, {}),
+        });
+        const mergedTravel = normalizeTravelAdminSettings({
+          ...DEFAULT_TRAVEL_ADMIN_SETTINGS,
+          ...toPlainObject(data.travel_defaults, {}),
+        });
+        setAdminPricing(mergedPricing);
+        setAdminTravelSettings(mergedTravel);
+        writeJson(ADMIN_PRICING_KEY, mergedPricing);
+        writeJson(ADMIN_TRAVEL_SETTINGS_KEY, mergedTravel);
+        estimatorSettingsLastSyncedRef.current = JSON.stringify({
+          adminPricing: mergedPricing,
+          adminTravelSettings: mergedTravel,
+        });
+        setEstimatorSettingsSyncStatus("saved");
+      } else {
+        estimatorSettingsLastSyncedRef.current = JSON.stringify({
+          adminPricing: localPricing,
+          adminTravelSettings: localTravel,
+        });
+        setEstimatorSettingsSyncStatus(error ? "error" : "idle");
+      }
+      estimatorSettingsHydratingRef.current = false;
+    };
+
+    loadCompanyEstimatorSettings();
+    return () => {
+      active = false;
+    };
+  }, [authUser?.key]);
+
+  useEffect(() => {
+    writeJson(ADMIN_PRICING_KEY, adminPricing);
     writeJson(ADMIN_TRAVEL_SETTINGS_KEY, adminTravelSettings);
-  }, [adminTravelSettings]);
+    if (!authUser?.key || estimatorSettingsHydratingRef.current) return;
+
+    const payload = {
+      material_price_defaults: {},
+      admin_pricing_defaults: adminPricing,
+      travel_defaults: adminTravelSettings,
+    };
+    const currentSnapshot = JSON.stringify({ adminPricing, adminTravelSettings });
+    if (currentSnapshot === estimatorSettingsLastSyncedRef.current) return;
+
+    if (!(authRole === "admin" || authRole === "cfo")) {
+      estimatorSettingsLastSyncedRef.current = currentSnapshot;
+      return;
+    }
+
+    let active = true;
+    const saveCompanyEstimatorSettings = async () => {
+      setEstimatorSettingsSyncStatus("saving");
+      const { error } = await upsertCompanyEstimatorSettingsToSupabase(payload, authUser.id || authUser.key);
+      if (!active) return;
+      if (error) {
+        setEstimatorSettingsSyncStatus("error");
+        console.warn("Supabase estimator settings save failed:", error?.message || error);
+        return;
+      }
+      estimatorSettingsLastSyncedRef.current = currentSnapshot;
+      setEstimatorSettingsSyncStatus("saved");
+    };
+
+    saveCompanyEstimatorSettings();
+    return () => {
+      active = false;
+    };
+  }, [authRole, authUser?.id, authUser?.key, adminPricing, adminTravelSettings]);
 
   useEffect(() => {
     if (!authUser?.key) {
@@ -9827,6 +11297,51 @@ function App() {
           }
         : null),
       [key]: value,
+    }));
+  };
+
+  const addEstimateLaborEmployee = () => {
+    setInputs((current) => ({
+      ...current,
+      laborEmployeeRows: [
+        ...normalizeEstimateLaborEmployeeRows(current.laborEmployeeRows),
+        {
+          id: createFieldDailyLogId(),
+          employeeId: "",
+          employeeName: "",
+          hourlyRate: 0,
+          estimatedHours: 0,
+        },
+      ],
+    }));
+  };
+
+  const updateEstimateLaborEmployee = (rowId, key, value) => {
+    setInputs((current) => ({
+      ...current,
+      laborEmployeeRows: normalizeEstimateLaborEmployeeRows(current.laborEmployeeRows).map((row) => {
+        if (row.id !== rowId) return row;
+        if (key === "employeeId") {
+          const employee = employeeDirectory.find((candidate) => candidate.id === value) || null;
+          return {
+            ...row,
+            employeeId: value,
+            employeeName: employee?.displayName || buildEmployeeDisplayName(employee || {}) || "",
+            hourlyRate: Math.max(0, toNumber(employee?.hourlyRate, 0)),
+          };
+        }
+        return {
+          ...row,
+          [key]: ["hourlyRate", "estimatedHours"].includes(key) ? Math.max(0, toNumber(value, 0)) : value,
+        };
+      }),
+    }));
+  };
+
+  const removeEstimateLaborEmployee = (rowId) => {
+    setInputs((current) => ({
+      ...current,
+      laborEmployeeRows: normalizeEstimateLaborEmployeeRows(current.laborEmployeeRows).filter((row) => row.id !== rowId),
     }));
   };
 
@@ -11161,7 +12676,7 @@ function App() {
     setEmployeeManagementDraft(createBlankEmployeeRecord());
     setEmployeeManagementSearch("");
     setFieldOperationCompanyVehicles([]);
-    setActiveJobs(createSeedActiveJobs());
+    setActiveJobs([]);
     setActiveJobSelectedId("");
     setActiveJobsSearch("");
     setActiveJobsFilters({
@@ -11183,6 +12698,8 @@ function App() {
       contact: "",
       startDate: "",
     });
+    setApprovedJobQuickCreateOpen(false);
+    setApprovedJobQuickDraft(createBlankApprovedJobQuickDraft());
     setActiveJobIssueModalOpen(false);
     setActiveJobIssueDraft(createBlankActiveJobIssue());
     setActiveJobIssueResponse("");
@@ -11198,6 +12715,9 @@ function App() {
       sortDirection: "desc",
     });
     setProposalDraft(createBlankProposal());
+    setCompletedJobs([]);
+    setJobsSyncStatus("idle");
+    setJobsSyncError("");
     setSelectedCfoCard("");
     setCfoDashboardFilters({
       search: "",
@@ -11280,14 +12800,22 @@ function App() {
   };
 
   const editEmployeeRecord = (employee) => {
-    setEmployeeManagementDraft(normalizeEmployeeRecord(employee));
+    const normalized = normalizeEmployeeRecord(employee);
+    setEmployeeManagementDraft(normalized);
+    setSessionMessageType("success");
+    setSessionMessage(`Editing ${normalized.displayName || "employee"}. Update the fields, then select Update employee.`);
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        employeeManagementEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
   };
 
   const updateEmployeeDraftField = (key, value) => {
     setEmployeeManagementDraft((current) => {
       const next = { ...current, [key]: value };
       if (key === "firstName" || key === "lastName") {
-        next.displayName = buildEmployeeDisplayName(next);
+        next.displayName = [next.firstName, next.lastName].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
       }
       if (key === "displayName") {
         next.displayName = String(value || "");
@@ -11298,6 +12826,11 @@ function App() {
 
   const saveEmployeeDraft = async () => {
     if (!authUser?.key) return;
+    if (!canManageEmployeeWages) {
+      setSessionMessageType("error");
+      setSessionMessage("Only CFO and admin users can manage employee wages.");
+      return;
+    }
     const normalized = normalizeEmployeeRecord(employeeManagementDraft);
     if (!normalized.displayName) {
       setSessionMessageType("error");
@@ -11375,6 +12908,14 @@ function App() {
     setCrmLeadDraft(createBlankCrmLead());
     setCrmLeadEditingId("");
     setCrmTab("newLead");
+  };
+
+  const openDashboardLeadCapture = () => {
+    startNewCrmLeadDraft();
+    setActiveTemplate("crm");
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
   };
 
   const editCrmLead = (lead) => {
@@ -12389,6 +13930,7 @@ function App() {
 
   const createBlankEmployeeRow = () => ({
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    employeeId: "",
     employeeName: "",
     hoursWorked: 0,
     hourlyRate: 0,
@@ -12401,12 +13943,22 @@ function App() {
     unitCost: 0,
   });
 
+  const createBlankSubcontractorRow = () => ({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    company: "",
+    squares: 0,
+    pricePerSquare: 0,
+  });
+
   const createBlankDailyProgress = () => ({
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     date: new Date().toISOString().slice(0, 10),
     crewSize: 0,
     employeeRows: [createBlankEmployeeRow()],
+    subcontractors: [createBlankSubcontractorRow()],
+    sprayFoamGallonsUsed: 0,
     materialsUsed: [createBlankMaterialItem()],
+    attachments: [],
     notes: "",
     issues: "",
   });
@@ -12414,30 +13966,76 @@ function App() {
   const calculateApprovedJobTotals = (logs) => {
     const totals = {
       totalActualLaborHours: 0,
+      totalActualBasePayroll: 0,
+      totalWorkersCompCost: 0,
+      totalPayrollTaxCost: 0,
       totalActualLaborCost: 0,
+      totalSubcontractorCost: 0,
       totalJobDays: logs.length,
+      totalSprayFoamGallonsUsed: 0,
+      totalSprayFoamEquivalentKits: 0,
+      totalSprayFoamCost: 0,
       totalMaterialCost: 0,
+      directActualCost: 0,
+      operatingOverheadCost: 0,
       runningActualCost: 0,
       laborLog: [],
+      subcontractorLog: [],
       materialUsageLog: [],
     };
 
     logs.forEach((day) => {
       (day.employeeRows || []).forEach((employee) => {
-        const hours = toNumber(employee.hoursWorked);
-        const rate = toNumber(employee.hourlyRate);
-        const cost = hours * rate;
-        totals.totalActualLaborHours += hours;
-        totals.totalActualLaborCost += cost;
+        const laborCost = calculateDailyEmployeeLaborCost(employee);
+        totals.totalActualLaborHours += laborCost.hoursWorked;
+        totals.totalActualBasePayroll += laborCost.basePayroll;
+        totals.totalWorkersCompCost += laborCost.workersCompCost;
+        totals.totalPayrollTaxCost += laborCost.payrollTaxCost;
+        totals.totalActualLaborCost += laborCost.totalLaborCost;
         totals.laborLog.push({
           dayId: day.id,
           date: day.date,
+          employeeId: employee.employeeId || "",
           employeeName: employee.employeeName,
-          hoursWorked: hours,
-          hourlyRate: rate,
-          laborCost: cost,
+          hoursWorked: laborCost.hoursWorked,
+          hourlyRate: laborCost.hourlyRate,
+          basePayroll: laborCost.basePayroll,
+          workersCompCost: laborCost.workersCompCost,
+          payrollTaxCost: laborCost.payrollTaxCost,
+          laborCost: laborCost.totalLaborCost,
         });
       });
+      (day.subcontractors || []).forEach((subcontractor) => {
+        const subcontractorCost = calculateSubcontractorCost(subcontractor);
+        totals.totalSubcontractorCost += subcontractorCost.totalCost;
+        if (subcontractor.company || subcontractorCost.totalCost > 0) {
+          totals.subcontractorLog.push({
+            dayId: day.id,
+            date: day.date,
+            company: subcontractor.company || "",
+            squares: subcontractorCost.squares,
+            pricePerSquare: subcontractorCost.pricePerSquare,
+            totalCost: subcontractorCost.totalCost,
+          });
+        }
+      });
+      const sprayFoamUsage = calculateSprayFoamMaterialUsage(day.sprayFoamGallonsUsed);
+      totals.totalSprayFoamGallonsUsed += sprayFoamUsage.gallonsUsed;
+      totals.totalSprayFoamEquivalentKits += sprayFoamUsage.equivalentKits;
+      totals.totalSprayFoamCost += sprayFoamUsage.totalCost;
+      totals.totalMaterialCost += sprayFoamUsage.totalCost;
+      if (sprayFoamUsage.gallonsUsed > 0) {
+        totals.materialUsageLog.push({
+          dayId: day.id,
+          date: day.date,
+          description: "Spray foam",
+          quantity: sprayFoamUsage.gallonsUsed,
+          unitCost: SPRAY_FOAM_KIT_COST / SPRAY_FOAM_GALLONS_PER_KIT,
+          totalCost: sprayFoamUsage.totalCost,
+          gallonsUsed: sprayFoamUsage.gallonsUsed,
+          equivalentKits: sprayFoamUsage.equivalentKits,
+        });
+      }
       (day.materialsUsed || []).forEach((material) => {
         const quantity = toNumber(material.quantity);
         const unitCost = toNumber(material.unitCost);
@@ -12454,7 +14052,12 @@ function App() {
       });
     });
 
-    totals.runningActualCost = totals.totalActualLaborCost + totals.totalMaterialCost;
+    const costWithOverhead = calculateApprovedJobOperatingOverhead(
+      totals.totalActualLaborCost + totals.totalSubcontractorCost + totals.totalMaterialCost,
+    );
+    totals.directActualCost = costWithOverhead.directCost;
+    totals.operatingOverheadCost = costWithOverhead.operatingOverheadCost;
+    totals.runningActualCost = costWithOverhead.totalCost;
     return totals;
   };
 
@@ -12470,12 +14073,15 @@ function App() {
       roofType: estimate.inputs?.roofType || estimate.summary?.roofType || buildEstimateRoofType(estimate.inputs),
       totalSquares: estimate.summary?.totalSquares || estimate.inputs?.totalSquares || 0,
       approvedBidAmount: estimate.summary?.selectedBidAmount || 0,
+      changeOrders: 0,
       status: "approved",
     };
 
     setSelectedApprovedJob(estimate);
     setApprovedJobData({ ...baseJob, status: baseJob.status || "approved" });
-    setApprovedDailyProgressLogs(existingJob?.dailyProgressLog || []);
+    const existingDailyProgress = existingJob?.dailyProgressLog || [];
+    setApprovedDailyProgressLogs(existingDailyProgress);
+    setCollapsedApprovedDailyProgressDayIds(getDailyProgressDayIds(existingDailyProgress));
     setActiveTemplate("approvedJob");
   };
 
@@ -12491,11 +14097,14 @@ function App() {
       roofType: job.roofType || matchingEstimate?.summary?.roofType || buildEstimateRoofType(matchingEstimate?.inputs || {}),
       totalSquares: job.squareCount || matchingEstimate?.summary?.totalSquares || 0,
       approvedBidAmount: job.finalBid || matchingEstimate?.summary?.selectedBidAmount || 0,
+      changeOrders: toNumber(job.changeOrders || 0),
       status: job.status || "approved",
     };
     setSelectedApprovedJob(matchingEstimate || job);
     setApprovedJobData(data);
-    setApprovedDailyProgressLogs(job.dailyProgressLog || []);
+    const existingDailyProgress = job.dailyProgressLog || [];
+    setApprovedDailyProgressLogs(existingDailyProgress);
+    setCollapsedApprovedDailyProgressDayIds(getDailyProgressDayIds(existingDailyProgress));
     setActiveTemplate("approvedJob");
   };
 
@@ -12507,11 +14116,18 @@ function App() {
   };
 
   const handleAddDailyProgressDay = () => {
-    setApprovedDailyProgressLogs((current) => [...current, createBlankDailyProgress()]);
+    const newDay = createBlankDailyProgress();
+    setApprovedDailyProgressLogs((current) => [...current, newDay]);
+    setCollapsedApprovedDailyProgressDayIds((current) => current.filter((dayId) => dayId !== newDay.id));
   };
 
   const handleDeleteDailyProgressDay = (dayId) => {
     setApprovedDailyProgressLogs((current) => current.filter((day) => day.id !== dayId));
+    setCollapsedApprovedDailyProgressDayIds((current) => current.filter((collapsedDayId) => collapsedDayId !== dayId));
+  };
+
+  const handleToggleDailyProgressDay = (dayId) => {
+    setCollapsedApprovedDailyProgressDayIds((current) => toggleCollapsedDailyProgressDay(current, dayId));
   };
 
   const handleDailyProgressFieldChange = (dayId, key, value) => {
@@ -12537,9 +14153,52 @@ function App() {
       if (day.id !== dayId) return day;
       return {
         ...day,
-        employeeRows: (day.employeeRows || []).map((row) => (row.id === rowId ? { ...row, [key]: value } : row)),
+        employeeRows: (day.employeeRows || []).map((row) => {
+          if (row.id !== rowId) return row;
+          if (key === "employeeId") {
+            const selectedEmployee = employeeDirectory.find((employee) => employee.id === value) || null;
+            return {
+              ...row,
+              employeeId: value,
+              employeeName: selectedEmployee ? buildEmployeeDisplayName(selectedEmployee) : "",
+              hourlyRate: selectedEmployee && toNumber(selectedEmployee.hourlyRate) > 0
+                ? toNumber(selectedEmployee.hourlyRate)
+                : toNumber(row.hourlyRate),
+            };
+          }
+          return { ...row, [key]: value };
+        }),
       };
     }));
+  };
+
+  const handleAddSubcontractorRow = (dayId) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => (
+      day.id === dayId
+        ? { ...day, subcontractors: [...(day.subcontractors || []), createBlankSubcontractorRow()] }
+        : day
+    )));
+  };
+
+  const handleRemoveSubcontractorRow = (dayId, rowId) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => (
+      day.id === dayId
+        ? { ...day, subcontractors: (day.subcontractors || []).filter((row) => row.id !== rowId) }
+        : day
+    )));
+  };
+
+  const handleSubcontractorRowChange = (dayId, rowId, key, value) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => (
+      day.id === dayId
+        ? {
+            ...day,
+            subcontractors: (day.subcontractors || []).map((row) => (
+              row.id === rowId ? { ...row, [key]: value } : row
+            )),
+          }
+        : day
+    )));
   };
 
   const handleAddMaterialItem = (dayId) => {
@@ -12566,6 +14225,80 @@ function App() {
     }));
   };
 
+  const handleApprovedProgressAttachmentUpload = async (dayId, event) => {
+    const input = event.currentTarget;
+    const files = Array.from(input.files || []);
+    if (!files.length || !authUser?.key) return;
+
+    setApprovedAttachmentUploadingDayIds((current) => [...new Set([...current, dayId])]);
+    const uploaded = [];
+    const errors = [];
+    const jobId = selectedApprovedJob?.sourceRecordUid
+      || approvedJobData?.estimateId
+      || approvedJobData?.localEstimateId
+      || "approved-job";
+    for (const file of files) {
+      const result = await uploadApprovedJobAttachmentToStorage(
+        file,
+        authUser.key,
+        jobId,
+        dayId,
+        authUser.displayName || authUser.email || authUser.key,
+      );
+      if (result.error) errors.push(`${file.name}: ${result.error.message || result.error}`);
+      else if (result.attachment) uploaded.push(result.attachment);
+    }
+
+    if (uploaded.length) {
+      setApprovedDailyProgressLogs((current) => current.map((day) => (
+        day.id === dayId
+          ? { ...day, attachments: [...(day.attachments || []), ...uploaded] }
+          : day
+      )));
+    }
+    setApprovedAttachmentUploadingDayIds((current) => current.filter((id) => id !== dayId));
+    input.value = "";
+    if (errors.length) {
+      setSessionMessageType("error");
+      setSessionMessage(`Some attachments could not be uploaded: ${errors.join(" ")}`);
+    } else {
+      setSessionMessageType("success");
+      setSessionMessage(`${uploaded.length} attachment${uploaded.length === 1 ? "" : "s"} uploaded. Save daily progress to attach them to the job.`);
+    }
+  };
+
+  const handleOpenApprovedProgressAttachment = async (attachment) => {
+    if (!attachment?.storagePath) return;
+    const { data, error } = await supabase.storage
+      .from(APPROVED_JOB_ATTACHMENT_BUCKET)
+      .createSignedUrl(attachment.storagePath, 60 * 10, { download: attachment.fileName || true });
+    if (error || !data?.signedUrl) {
+      setSessionMessageType("error");
+      setSessionMessage(`Could not open attachment: ${error?.message || "Signed link was unavailable."}`);
+      return;
+    }
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const handleRemoveApprovedProgressAttachment = async (dayId, attachment) => {
+    if (!attachment?.id) return;
+    if (attachment.storagePath) {
+      const { error } = await supabase.storage.from(APPROVED_JOB_ATTACHMENT_BUCKET).remove([attachment.storagePath]);
+      if (error) {
+        setSessionMessageType("error");
+        setSessionMessage(`Could not remove attachment: ${error.message || error}`);
+        return;
+      }
+    }
+    setApprovedDailyProgressLogs((current) => current.map((day) => (
+      day.id === dayId
+        ? { ...day, attachments: (day.attachments || []).filter((item) => item.id !== attachment.id) }
+        : day
+    )));
+    setSessionMessageType("success");
+    setSessionMessage("Attachment removed. Save daily progress to update the job record.");
+  };
+
   const updateActiveJobsFilter = (key, value) => {
     setActiveJobsFilters((current) => ({
       ...current,
@@ -12589,7 +14322,267 @@ function App() {
 
   const openActiveJobDetail = (jobId) => {
     setActiveJobSelectedId(jobId || "");
+    setActiveJobEditDraft(null);
+    setActiveJobEditMode(false);
     setActiveTemplate("activeJob");
+  };
+
+  const handleStartActiveJobEdit = (job) => {
+    if (!job || !canManageSharedJobData) return;
+    setActiveJobEditDraft(buildActiveJobEditDraft(job));
+    setActiveJobEditMode(true);
+  };
+
+  const handleActiveJobEditFieldChange = (key, value) => {
+    setActiveJobEditDraft((current) => ({ ...current, [key]: value }));
+  };
+
+  const handleCancelActiveJobEdit = () => {
+    setActiveJobEditDraft(null);
+    setActiveJobEditMode(false);
+  };
+
+  const handleSaveActiveJobEdit = async (job) => {
+    if (!job || !activeJobEditDraft || !authUser?.key) return;
+    if (!canManageSharedJobData) {
+      setSessionMessageType("error");
+      setSessionMessage("You do not have permission to edit shared jobs.");
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    const updatedJob = applyActiveJobEditDraft(job, activeJobEditDraft, {
+      updatedAt,
+      updatedBy: authUser.displayName || authUser.key,
+      activityId: `activity-edit-active-${Date.now()}`,
+    });
+
+    setJobsSyncStatus("saving");
+    setSessionMessage("");
+    const { error } = await upsertSharedJobToSupabase(
+      updatedJob,
+      authUser.key,
+      authUser.id || authUser.key,
+    );
+    if (error) {
+      setJobsSyncStatus("error");
+      setJobsSyncError(error.message || String(error));
+      setSessionMessageType("error");
+      setSessionMessage(`Could not save project changes: ${error.message || error}`);
+      return;
+    }
+
+    const refreshed = await fetchSharedJobsFromSupabase();
+    if (!refreshed.error) applySharedJobRows(refreshed.data);
+    setJobsSyncStatus(refreshed.error ? "error" : "saved");
+    setJobsSyncError(refreshed.error?.message || "");
+    setSessionMessageType(refreshed.error ? "error" : "success");
+    setSessionMessage(
+      refreshed.error
+        ? `Changes saved, but the project could not refresh: ${refreshed.error.message || refreshed.error}`
+        : `${updatedJob.projectName || "Active job"} updated.`,
+    );
+    if (!refreshed.error) handleCancelActiveJobEdit();
+  };
+
+  const handleArchiveActiveJob = async (job) => {
+    if (!job || !authUser?.key) return;
+    if (!canManageSharedJobData) {
+      setSessionMessageType("error");
+      setSessionMessage("You do not have permission to archive shared jobs.");
+      return;
+    }
+
+    const archivedAt = new Date().toISOString();
+    const archivedJob = {
+      ...job,
+      archivedFromWorkflowStatus: job.workflowStatus || "active",
+      workflowStatus: "archived",
+      isActive: false,
+      archivedAt,
+      activityLog: [
+        {
+          id: `activity-archive-${Date.now()}`,
+          summary: "Job archived",
+          changedBy: authUser.displayName || "Unknown",
+          createdAt: archivedAt,
+        },
+        ...(job.activityLog || []),
+      ],
+    };
+
+    setJobsSyncStatus("saving");
+    const { error } = await upsertSharedJobToSupabase(
+      archivedJob,
+      authUser.key,
+      authUser.id || authUser.key,
+    );
+    if (error) {
+      setJobsSyncStatus("error");
+      setJobsSyncError(error.message || String(error));
+      setSessionMessageType("error");
+      setSessionMessage(`Archive failed: ${error.message || error}`);
+      return;
+    }
+
+    const refreshed = await fetchSharedJobsFromSupabase();
+    if (!refreshed.error) applySharedJobRows(refreshed.data);
+    setActiveJobSelectedId((current) => (current === job.id ? "" : current));
+    setJobsSyncStatus(refreshed.error ? "error" : "saved");
+    setJobsSyncError(refreshed.error?.message || "");
+    setSessionMessageType("success");
+    setSessionMessage(`${job.projectName || "Job"} moved to the archive.`);
+  };
+
+  const openInvoiceHandoff = (job) => {
+    if (!job || !canSubmitInvoiceHandoff) return;
+    setInvoiceHandoffJob(job);
+    setInvoiceHandoffDraft(createInvoiceHandoffDraft(job));
+    setInvoiceHandoffError("");
+  };
+
+  const closeInvoiceHandoff = () => {
+    if (invoiceHandoffSaving) return;
+    setInvoiceHandoffJob(null);
+    setInvoiceHandoffDraft(null);
+    setInvoiceHandoffError("");
+  };
+
+  const updateInvoiceHandoffDraft = (key, value) => {
+    setInvoiceHandoffDraft((current) => ({ ...current, [key]: value }));
+  };
+
+  const submitInvoiceHandoff = async () => {
+    if (!invoiceHandoffJob || !invoiceHandoffDraft || !authUser?.key) return;
+    const errors = validateInvoiceHandoffDraft(invoiceHandoffDraft);
+    if (errors.length) {
+      setInvoiceHandoffError(errors[0]);
+      return;
+    }
+    setInvoiceHandoffSaving(true);
+    setInvoiceHandoffError("");
+    const { error } = await supabase.rpc("submit_active_job_for_invoicing", {
+      p_source_record_uid: buildSharedJobSourceId(invoiceHandoffJob),
+      p_completion_date: invoiceHandoffDraft.completionDate,
+      p_invoice_type: invoiceHandoffDraft.invoiceType,
+      p_customer_name: invoiceHandoffDraft.customerName,
+      p_billing_contact_name: invoiceHandoffDraft.billingContactName,
+      p_billing_email: invoiceHandoffDraft.billingEmail,
+      p_billing_address: invoiceHandoffDraft.billingAddress,
+      p_purchase_order_number: invoiceHandoffDraft.purchaseOrderNumber,
+      p_payment_terms: invoiceHandoffDraft.paymentTerms,
+      p_contract_amount: Number(invoiceHandoffDraft.contractAmount || 0),
+      p_change_orders_amount: Number(invoiceHandoffDraft.changeOrders || 0),
+      p_amount_already_billed: Number(invoiceHandoffDraft.amountAlreadyBilled || 0),
+      p_amount_to_invoice: Number(invoiceHandoffDraft.amountToInvoice || 0),
+      p_retainage_amount: Number(invoiceHandoffDraft.retainageAmount || 0),
+      p_notes: invoiceHandoffDraft.notes,
+    });
+    setInvoiceHandoffSaving(false);
+    if (error) {
+      setInvoiceHandoffError(error.message || "The job could not be sent to invoicing.");
+      return;
+    }
+
+    const refreshed = await fetchSharedJobsFromSupabase();
+    if (!refreshed.error) applySharedJobRows(refreshed.data);
+    setActiveJobSelectedId("");
+    setInvoiceHandoffJob(null);
+    setInvoiceHandoffDraft(null);
+    setSessionMessageType("success");
+    setSessionMessage("Job closed and sent to Natalia's Invoice Requests queue.");
+    setActiveTemplate(canAccessInvoiceQueue ? "invoices" : "activeJobs");
+  };
+
+  const handleMoveApprovedJobToActive = async (job) => {
+    if (!job || !authUser?.key) return;
+    if (!canManageSharedJobData) {
+      setSessionMessageType("error");
+      setSessionMessage("You do not have permission to move shared jobs.");
+      return;
+    }
+
+    const movedAt = new Date().toISOString();
+    const activeJob = moveApprovedJobToActive(job, {
+      movedAt,
+      movedBy: authUser.displayName || authUser.key,
+      activityId: `activity-move-active-${Date.now()}`,
+    });
+
+    setJobsSyncStatus("saving");
+    const { error } = await upsertSharedJobToSupabase(
+      activeJob,
+      authUser.key,
+      authUser.id || authUser.key,
+    );
+    if (error) {
+      setJobsSyncStatus("error");
+      setJobsSyncError(error.message || String(error));
+      setSessionMessageType("error");
+      setSessionMessage(`Could not move job: ${error.message || error}`);
+      return;
+    }
+
+    const refreshed = await fetchSharedJobsFromSupabase();
+    if (!refreshed.error) applySharedJobRows(refreshed.data);
+    setJobsSyncStatus(refreshed.error ? "error" : "saved");
+    setJobsSyncError(refreshed.error?.message || "");
+    setSessionMessageType(refreshed.error ? "error" : "success");
+    setSessionMessage(
+      refreshed.error
+        ? `Job moved, but the lists could not refresh: ${refreshed.error.message || refreshed.error}`
+        : `${job.projectName || "Job"} moved to Active Jobs.`,
+    );
+  };
+
+  const handleRestoreArchivedJob = async (job) => {
+    if (!job || !authUser?.key) return;
+    if (!canManageSharedJobData) {
+      setSessionMessageType("error");
+      setSessionMessage("You do not have permission to restore shared jobs.");
+      return;
+    }
+
+    const restoredAt = new Date().toISOString();
+    const restoredWorkflowStatus = job.archivedFromWorkflowStatus
+      || (isActiveJobStatus(job.projectStatus || job.status) ? "active" : "approved");
+    const restoredJob = {
+      ...job,
+      workflowStatus: restoredWorkflowStatus,
+      isActive: true,
+      archivedAt: "",
+      restoredAt,
+      activityLog: [
+        {
+          id: `activity-restore-${Date.now()}`,
+          summary: "Job restored from archive",
+          changedBy: authUser.displayName || "Unknown",
+          createdAt: restoredAt,
+        },
+        ...(job.activityLog || []),
+      ],
+    };
+
+    setJobsSyncStatus("saving");
+    const { error } = await upsertSharedJobToSupabase(
+      restoredJob,
+      authUser.key,
+      authUser.id || authUser.key,
+    );
+    if (error) {
+      setJobsSyncStatus("error");
+      setJobsSyncError(error.message || String(error));
+      setSessionMessageType("error");
+      setSessionMessage(`Restore failed: ${error.message || error}`);
+      return;
+    }
+
+    const refreshed = await fetchSharedJobsFromSupabase();
+    if (!refreshed.error) applySharedJobRows(refreshed.data);
+    setJobsSyncStatus(refreshed.error ? "error" : "saved");
+    setJobsSyncError(refreshed.error?.message || "");
+    setSessionMessageType("success");
+    setSessionMessage(`${job.projectName || "Job"} restored from the archive.`);
   };
 
   const openApprovedJobDetail = (job) => {
@@ -12604,6 +14597,7 @@ function App() {
       roofType: job.roofType || "",
       totalSquares: toNumber(job.squareCount || job.totalSquares || 0),
       approvedBidAmount: toNumber(job.contractAmount || job.finalBid || 0),
+      changeOrders: toNumber(job.changeOrders || 0),
       status: job.projectStatus || job.status || "Approved",
       jobAddress: job.projectAddress || job.jobAddress || "",
       projectContact: job.projectContact || "",
@@ -12614,7 +14608,9 @@ function App() {
       subcontractorIncomplete: Boolean(job.subcontractorIncomplete),
       documentsIncomplete: Boolean(job.documentsIncomplete),
     });
-    setApprovedDailyProgressLogs(job.dailyProgressLog || []);
+    const existingDailyProgress = job.dailyProgressLog || [];
+    setApprovedDailyProgressLogs(existingDailyProgress);
+    setCollapsedApprovedDailyProgressDayIds(getDailyProgressDayIds(existingDailyProgress));
     setActiveTemplate("approvedJob");
   };
 
@@ -12859,59 +14855,6 @@ function App() {
     setSessionMessage("Proposal marked as sent. Email delivery is coming in the next phase.");
   };
 
-  const handleConvertProposalToApprovedJob = (proposal) => {
-    if (!proposal) return;
-    const sourceEstimate = savedEstimates.find((estimate) => estimate.id === proposal.sourceEstimateId || estimate.estimateCode === proposal.sourceEstimateCode) || null;
-    const approvedJob = {
-      id: `approved-${proposal.id}`,
-      estimateId: proposal.sourceEstimateId || proposal.id,
-      localEstimateId: proposal.sourceEstimateId || proposal.id,
-      estimateCode: proposal.sourceEstimateCode || proposal.estimateCode || estimateCode(Number(proposal.proposalNumber || 1)),
-      jobNumber: proposal.estimateNumber || proposal.proposalNumber || "",
-      customerName: proposal.customerName || sourceEstimate?.inputs?.customerName || "",
-      projectName: proposal.projectName || sourceEstimate?.inputs?.jobName || "",
-      projectAddress: proposal.projectAddress || sourceEstimate?.inputs?.jobAddress || "",
-      roofType: proposal.roofSystem || sourceEstimate?.summary?.roofType || "",
-      squareCount: toNumber(sourceEstimate?.summary?.totalSquares || 0),
-      finalBid: toNumber(proposal.totalPrice || 0),
-      status: "approved",
-      projectStatus: "Pre-construction",
-      approvalDate: new Date().toISOString().slice(0, 10),
-      anticipatedStartDate: proposal.estimatedSchedule || "",
-      projectContact: proposal.customerContact || "",
-      fieldSupervisor: "",
-      permitStatus: "Pending",
-      documentsIncomplete: true,
-      subcontractorIncomplete: true,
-      materialOrderIncomplete: true,
-      customerDocumentIncomplete: true,
-      warningText: "Approved from accepted proposal; pre-construction items still needed.",
-      salesperson: proposal.salesperson || "",
-      estimatedStartDays: proposal.estimatedSchedule ? 0 : 999,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-    };
-    setCompletedJobs((current) => [approvedJob, ...current.filter((item) => item.estimateId !== approvedJob.estimateId)]);
-    setSessionMessageType("success");
-    setSessionMessage("Proposal converted to an approved job.");
-    setApprovedJobData({
-      estimateId: approvedJob.estimateId,
-      localEstimateId: approvedJob.localEstimateId,
-      estimateCode: approvedJob.estimateCode,
-      jobName: approvedJob.projectName,
-      customerName: approvedJob.customerName,
-      roofType: approvedJob.roofType,
-      totalSquares: approvedJob.squareCount,
-      approvedBidAmount: approvedJob.finalBid,
-      status: "approved",
-      jobAddress: approvedJob.projectAddress,
-    });
-    setSelectedApprovedJob(sourceEstimate);
-    setApprovedDailyProgressLogs([]);
-    setActiveJobSelectedId("");
-    setActiveTemplate("approvedJob");
-  };
-
   const openActiveJobIssueModal = (project) => {
     if (!project) return;
     setActiveJobSelectedId(project.id);
@@ -12931,7 +14874,13 @@ function App() {
     setActiveJobIssueResponse("");
   };
 
-  const saveActiveJobIssue = () => {
+  const saveActiveJobIssue = async () => {
+    if (!canManageSharedJobData) {
+      setSessionMessageType("error");
+      setSessionMessage("You do not have permission to update shared jobs.");
+      return;
+    }
+
     const projectId = activeJobIssueDraft.projectId || activeJobSelectedId;
     const project = activeJobs.find((job) => job.id === projectId) || null;
     if (!project) {
@@ -12982,19 +14931,28 @@ function App() {
       createdAt,
     };
 
+    const nextProject = {
+      ...project,
+      issues: [...(project.issues || []), issue],
+      activityLog: [activityEntry, ...(project.activityLog || [])],
+      riskLevel: issue.priority === "Emergency" || issue.priority === "High" ? "Critical" : project.riskLevel,
+      workflowStatus: "active",
+      status: project.status || "Active",
+      projectStatus: project.projectStatus || project.status || "Active",
+      updatedAt: createdAt,
+    };
+    nextProject.openIssuesCount = getActiveJobOpenIssuesCount(nextProject);
+
     setActiveJobs((current) =>
-      current.map((job) => {
-        if (job.id !== project.id) return job;
-        const issues = [...(job.issues || []), issue];
-        return {
-          ...job,
-          issues,
-          openIssuesCount: getActiveJobOpenIssuesCount({ ...job, issues }),
-          activityLog: [activityEntry, ...(job.activityLog || [])],
-          riskLevel: issue.priority === "Emergency" || issue.priority === "High" ? "Critical" : job.riskLevel,
-        };
-      }),
+      current.map((job) => (job.id !== project.id ? job : nextProject)),
     );
+
+    const upsertRes = await upsertSharedJobToSupabase(nextProject, authUser?.key || "", authUser?.id || authUser?.key || "");
+    if (upsertRes.error) {
+      setSessionMessageType("error");
+      setSessionMessage(`Issue saved locally but sync failed: ${upsertRes.error.message || upsertRes.error}`);
+      return;
+    }
 
     setSessionMessageType("success");
     setSessionMessage(`Issue ${issue.issueNumber} saved to ${project.projectName || "the project"}.`);
@@ -13007,37 +14965,79 @@ function App() {
       setSessionMessage("Please sign in and select a job.");
       return;
     }
+    if (!canUpdateDailyJobCostData) {
+      setSessionMessageType("error");
+      setSessionMessage("You do not have permission to update daily job costs.");
+      return;
+    }
 
     setSessionMessageType("");
     setSessionMessage("Saving approved job...");
 
     const totals = calculateApprovedJobTotals(approvedDailyProgressLogs);
-    const actualProfit = toNumber(approvedJobData.approvedBidAmount) - totals.totalActualLaborCost - totals.totalMaterialCost;
-    const marginPercent = toNumber(approvedJobData.approvedBidAmount) > 0 ? round((actualProfit / toNumber(approvedJobData.approvedBidAmount)) * 100, 1) : 0;
+    const financialSummary = calculateApprovedJobFinancialSummary(
+      approvedJobData.approvedBidAmount,
+      approvedJobData.changeOrders,
+      totals.runningActualCost,
+    );
+    const actualProfit = financialSummary.profitAmount;
+    const marginPercent = financialSummary.profitMarginPercent;
 
-    const dbRow = {
-      user_key: authUser.key,
-      local_estimate_id: approvedJobData.localEstimateId,
-      estimate_id: approvedJobData.estimateId,
-      estimate_code: approvedJobData.estimateCode,
-      job_name: approvedJobData.jobName,
-      customer_name: approvedJobData.customerName,
-      roof_type: approvedJobData.roofType,
-      square_count: approvedJobData.totalSquares,
-      final_bid: approvedJobData.approvedBidAmount,
+    const normalizedStatus = String(approvedJobData.status || "approved").toLowerCase();
+    const workflowStatus = normalizedStatus === "completed"
+      ? "completed"
+      : normalizedStatus === "in progress"
+        ? "active"
+        : "approved";
+
+    const sharedJob = {
+      ...(selectedApprovedJob || {}),
+      id: approvedJobData.estimateId || approvedJobData.localEstimateId || selectedApprovedJob?.id || createFieldDailyLogId(),
+      estimateId: approvedJobData.estimateId,
+      localEstimateId: approvedJobData.localEstimateId,
+      estimateCode: approvedJobData.estimateCode,
+      jobNumber: selectedApprovedJob?.jobNumber || "",
+      jobName: approvedJobData.jobName,
+      projectName: approvedJobData.jobName,
+      customerName: approvedJobData.customerName,
+      customer: approvedJobData.customerName,
+      roofType: approvedJobData.roofType,
+      totalSquares: approvedJobData.totalSquares,
+      finalBid: approvedJobData.approvedBidAmount,
+      contractAmount: approvedJobData.approvedBidAmount,
+      changeOrders: financialSummary.changeOrders,
+      totalSalePrice: financialSummary.totalSalePrice,
       status: approvedJobData.status,
-      saved_at: new Date().toISOString(),
-      daily_progress_log: approvedDailyProgressLogs,
-      labor_log: totals.laborLog,
-      material_usage_log: totals.materialUsageLog,
-      actual_labor_hours: totals.totalActualLaborHours,
-      actual_labor_cost: totals.totalActualLaborCost,
-      actual_cost: totals.runningActualCost,
-      actual_material_cost: totals.totalMaterialCost,
+      projectStatus: approvedJobData.status,
+      projectAddress: approvedJobData.jobAddress || selectedApprovedJob?.projectAddress || "",
+      jobAddress: approvedJobData.jobAddress || selectedApprovedJob?.projectAddress || "",
+      projectContact: approvedJobData.projectContact || selectedApprovedJob?.projectContact || "",
+      fieldSupervisor: approvedJobData.fieldSupervisor || selectedApprovedJob?.fieldSupervisor || "",
+      permitStatus: approvedJobData.permitStatus || selectedApprovedJob?.permitStatus || "",
+      anticipatedStartDate: selectedApprovedJob?.anticipatedStartDate || "",
+      dailyProgressLog: approvedDailyProgressLogs,
+      laborLog: totals.laborLog,
+      subcontractorLog: totals.subcontractorLog,
+      materialUsageLog: totals.materialUsageLog,
+      actualLaborHours: totals.totalActualLaborHours,
+      actualLaborCost: totals.totalActualLaborCost,
+      actualSubcontractorCost: totals.totalSubcontractorCost,
+      actualCost: totals.runningActualCost,
+      actualMaterialCost: totals.totalMaterialCost,
+      actualOperatingOverheadCost: totals.operatingOverheadCost,
+      actualProfit,
+      actualMarginPercent: marginPercent,
+      workflowStatus,
+      documentsIncomplete: Boolean(approvedJobData.documentsIncomplete),
+      subcontractorIncomplete: Boolean(approvedJobData.subcontractorIncomplete),
+      materialOrderIncomplete: Boolean(approvedJobData.materialOrderIncomplete),
+      customerDocumentIncomplete: Boolean(approvedJobData.customerDocumentIncomplete),
     };
 
     try {
-      const { data, error } = await upsertRowWithMissingColumnFallback("completed_jobs", dbRow, "estimate_id");
+      const { data, error } = canManageSharedJobData
+        ? await upsertSharedJobToSupabase(sharedJob, authUser.key, authUser.id || authUser.key)
+        : await updateDailyJobCostsForStaffInSupabase(sharedJob, authUser.displayName || authUser.email || authUser.key);
       if (error) {
         const cloudErrorMessage = error.message || String(error);
         console.warn("Approved job save failed:", cloudErrorMessage);
@@ -13046,17 +15046,22 @@ function App() {
         return;
       }
 
-      const persistedJob = Array.isArray(data) ? data[0] : data?.[0] || dbRow;
-      const normalizedJob = {
-        ...dbRow,
-        id: persistedJob.local_estimate_id || persistedJob.estimate_id || persistedJob.id,
-        estimateId: persistedJob.estimate_id || persistedJob.local_estimate_id,
-        dailyProgressLog: persistedJob.daily_progress_log || approvedDailyProgressLogs,
-        laborLog: persistedJob.labor_log || totals.laborLog,
-        materialUsageLog: persistedJob.material_usage_log || totals.materialUsageLog,
-      };
+      const persistedJob = Array.isArray(data) ? data[0] : data?.[0] || null;
+      const normalizedJob = persistedJob ? splitSharedJobsByWorkflow([persistedJob]).allJobs[0] || sharedJob : sharedJob;
 
-      setCompletedJobs((current) => [normalizedJob, ...current.filter((item) => item.estimateId !== normalizedJob.estimateId)]);
+      if (normalizedJob.workflowStatus === "active") {
+        setActiveJobs((current) => [
+          normalizedJob,
+          ...current.filter((item) => item.sourceRecordUid !== normalizedJob.sourceRecordUid && item.id !== normalizedJob.id),
+        ]);
+        setCompletedJobs((current) => current.filter((item) => item.sourceRecordUid !== normalizedJob.sourceRecordUid && item.id !== normalizedJob.id));
+        setActiveJobSelectedId(normalizedJob.id);
+      } else {
+        setCompletedJobs((current) => [
+          normalizedJob,
+          ...current.filter((item) => item.sourceRecordUid !== normalizedJob.sourceRecordUid && item.id !== normalizedJob.id),
+        ]);
+      }
 
       if (approvedJobData.status === "completed") {
         const metricsPayload = {
@@ -13075,8 +15080,8 @@ function App() {
           actualLaborCost: totals.totalActualLaborCost,
           actualLaborHours: totals.totalActualLaborHours,
           actualTravelCost: 0,
-          changeOrders: 0,
-          finalInvoiceAmount: approvedJobData.approvedBidAmount,
+          changeOrders: financialSummary.changeOrders,
+          finalInvoiceAmount: financialSummary.totalSalePrice,
           actualProfit,
           actualMarginPercent: marginPercent,
           notes: "Auto-generated from daily progress; edit manually if needed.",
@@ -13092,7 +15097,8 @@ function App() {
       }
 
       setSessionMessageType("success");
-      setSessionMessage("Approved job saved.");
+      setSessionMessage("Saved");
+      setCollapsedApprovedDailyProgressDayIds(getDailyProgressDayIds(approvedDailyProgressLogs));
     } catch (error) {
       console.error("handleSaveApprovedJob failed:", error);
       setSessionMessageType("error");
@@ -13616,6 +15622,25 @@ function App() {
       </Section>
     ) : null;
 
+  const renderAppearanceControl = ({ compact = false } = {}) => {
+    const modeLabel = resolvedAppearance === "dark" ? "Dark" : "Light";
+    return (
+      <div className={`appearanceControl ${compact ? "compact" : ""}`}>
+        <label htmlFor="appearance-select">Appearance</label>
+        <select
+          id="appearance-select"
+          value={appearancePreference}
+          onChange={(event) => setAppearancePreference(event.target.value)}
+        >
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="system">System</option>
+        </select>
+        {appearancePreference === "system" ? <span className="smallNote">Using device setting ({modeLabel})</span> : null}
+      </div>
+    );
+  };
+
   const renderEstimatorShellHeader = ({
     title,
     intro,
@@ -13878,7 +15903,7 @@ function App() {
                         <input
                           className="tableInput"
                           type="number" onWheel={handleNumberInputWheel}
-                          min="1"
+                          min="0"
                           max="16"
                           step="0.1"
                           value={row.foamThicknessInches}
@@ -13962,11 +15987,14 @@ function App() {
       </Section>
 
       <Section title="SPF material calculations" subtitle="Foam thickness, coatings, and material quantities.">
+        <p className="smallNote" style={{ marginTop: 0 }}>
+          Enter 0 inches for an acrylic-coating-only estimate. Spray foam quantity and cost will be removed.
+        </p>
         <div className="formGrid">
           <Field label="Selected foam thickness (inches)">
             <input
               type="number" onWheel={handleNumberInputWheel}
-              min="1"
+              min="0"
               max="16"
               step="0.1"
               value={inputs.sprayFoamFieldThickness}
@@ -13985,7 +16013,10 @@ function App() {
         </div>
 
         <div className="detailList" style={{ marginTop: 14 }}>
-          <DetailRow label="Selected foam thickness" value={`${num(calculation.selectedFoamThicknessInches, 1)} in`} />
+          <DetailRow
+            label="Selected foam thickness"
+            value={calculation.selectedFoamThicknessInches > 0 ? `${num(calculation.selectedFoamThicknessInches, 1)} in` : "0 in — acrylic coating only"}
+          />
           <DetailRow label={calculation.isWallFoamEstimate ? "Yield per set" : "Yield per kit"} value={`${num(calculation.yieldPerKitAtSelectedThickness, 2)} squares`} />
           <DetailRow label={calculation.isWallFoamEstimate ? "Sets needed" : "SPF material used"} value={num(calculation.foamKitsNeeded, calculation.isWallFoamEstimate ? 0 : 3)} />
           <DetailRow label={calculation.isWallFoamEstimate ? "Set cost" : "Kit cost"} value={money2(calculation.foamKitCost)} />
@@ -15572,7 +17603,8 @@ function App() {
         .toLowerCase();
       return haystack.includes(query);
     });
-
+    const draftWageBreakdown = calculateLoadedHourlyWage(employeeManagementDraft.hourlyRate);
+    const isEditingEmployee = employeeDirectory.some((employee) => employee.id === employeeManagementDraft.id);
     return (
       <div className="appShell">
         <style>{css}</style>
@@ -15585,7 +17617,7 @@ function App() {
               <div>
                 <p className="eyebrow">CRT Roofing Administration</p>
                 <h1>Administration</h1>
-                <p className="intro">Manage employee records used across the app.</p>
+                <p className="intro">Manage employee records and review supplier payment history.</p>
               </div>
             </div>
           </div>
@@ -15601,12 +17633,56 @@ function App() {
           <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
             Back to dashboard
           </button>
-          {isAdminUser ? (
+          {isFinanceUser ? (
             <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
               Open Admin Pricing
             </button>
           ) : null}
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("accountAccess")}>Account Access</button>
         </div>
+
+        <Section title="Supplier Payment History" subtitle="A permanent record of supplier invoices marked paid from the CFO dashboard.">
+          {supplierPaymentHistory.length ? (
+            <div className="cfoDetailTableWrap">
+              <table className="cfoDetailTable">
+                <thead>
+                  <tr>
+                    <th>Supplier / invoice</th>
+                    <th>Amount paid</th>
+                    <th>Date paid</th>
+                    <th>Method / reference</th>
+                    <th>Payment</th>
+                    <th>Remaining balance</th>
+                    <th>Recorded by</th>
+                    <th>Note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {supplierPaymentHistory.map((payment) => {
+                    const recordedAt = payment.recorded_at ? new Date(payment.recorded_at) : null;
+                    const methodReference = payment.payment_method === "Check"
+                      ? `Check #${payment.check_number || "not provided"}`
+                      : payment.payment_method || "—";
+                    return (
+                      <tr key={payment.id}>
+                        <td>{payment.supplier_name || "—"}</td>
+                        <td>{money2(toNumber(payment.amount_paid, 0))}</td>
+                        <td>{payment.payment_date || "—"}</td>
+                        <td>{methodReference}</td>
+                        <td>{payment.payment_kind || "—"}</td>
+                        <td>{money2(toNumber(payment.balance_after, 0))}</td>
+                        <td>{payment.recorded_by_name || "Finance user"}{recordedAt && !Number.isNaN(recordedAt.getTime()) ? ` · ${recordedAt.toLocaleString()}` : ""}</td>
+                        <td>{payment.note || "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="emptyState">No supplier payments have been recorded yet.</p>
+          )}
+        </Section>
 
         <Section title="Employee Management" subtitle="Add, edit, and activate employees used in Field Operations, Office, Sales, and Management.">
           <div className="detailList" style={{ marginBottom: 14 }}>
@@ -15616,14 +17692,20 @@ function App() {
             <DetailRow label="Drivers" value={num(activeEmployeeDrivers.length, 0)} />
           </div>
 
-          <div className="actionRow" style={{ marginBottom: 12 }}>
+          <div ref={employeeManagementEditorRef} className="actionRow" style={{ marginBottom: 12, scrollMarginTop: 20 }}>
             <button type="button" className="primaryButton" onClick={startNewEmployeeDraft}>
               + Add employee
             </button>
             <button type="button" className="secondaryButton" onClick={saveEmployeeDraft}>
-              Save employee
+              {isEditingEmployee ? "Update employee" : "Save employee"}
             </button>
           </div>
+
+          {isEditingEmployee ? (
+            <p className="smallNote" style={{ marginTop: 0 }}>
+              Editing {buildEmployeeDisplayName(employeeManagementDraft) || "employee"}. Make the changes below, then select Update employee.
+            </p>
+          ) : null}
 
           <div className="formGrid">
             <Field label="First Name">
@@ -15683,7 +17765,7 @@ function App() {
             <Field label="Hire Date">
               <input type="date" value={employeeManagementDraft.hireDate} onChange={(e) => updateEmployeeDraftField("hireDate", e.target.value)} />
             </Field>
-            <Field label="Hourly Rate">
+            <Field label="Base Hourly Wage">
               <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={employeeManagementDraft.hourlyRate} onChange={(e) => updateEmployeeDraftField("hourlyRate", e.target.value)} />
             </Field>
             <Field label="Payroll ID">
@@ -15709,6 +17791,10 @@ function App() {
           <div className="detailList" style={{ marginTop: 14 }}>
             <DetailRow label="Display name" value={buildEmployeeDisplayName(employeeManagementDraft) || "—"} />
             <DetailRow label="Employee record" value={employeeManagementDraft.id || "New employee"} />
+            <DetailRow label="Base hourly wage" value={money2(draftWageBreakdown.baseWage)} />
+            <DetailRow label="Workers’ compensation (50%)" value={`${money2(draftWageBreakdown.workersCompCost)} per hour`} />
+            <DetailRow label="Payroll tax (9.25%)" value={`${money2(draftWageBreakdown.payrollTaxCost)} per hour`} />
+            <DetailRow label="Loaded hourly labor cost" value={money2(draftWageBreakdown.loadedHourlyCost)} />
           </div>
         </Section>
 
@@ -15739,6 +17825,9 @@ function App() {
                       {employee.occupation || "No occupation"} | {employee.department || "No department"} |{" "}
                       {employee.phone || "No phone"} | {employee.email || "No email"}
                     </p>
+                    <p>
+                      Base wage {money2(employee.hourlyRate || 0)}/hr · Loaded labor cost {money2(calculateLoadedHourlyWage(employee.hourlyRate).loadedHourlyCost)}/hr
+                    </p>
                   </div>
                   <div className="savedActions">
                     <button type="button" className="secondaryButton" onClick={() => editEmployeeRecord(employee)}>
@@ -15752,9 +17841,31 @@ function App() {
             )}
           </div>
       </Section>
+        <Section title="Subcontractor Compliance" subtitle="Maintain licensing, workers' compensation, and COI records in one protected company directory.">
+          <SubcontractorCompliance supabase={supabase} authUser={authUser} />
+        </Section>
     </div>
   );
   };
+
+  const renderSubcontractorDirectoryScreen = () => (
+    <div className="appShell">
+      <style>{css}</style>
+      <header className="hero">
+        <div className="brandRow">
+          <div className="brandMark"><img src={LOGO_SRC} alt="CRT Roofing logo" /></div>
+          <div>
+            <p className="eyebrow">Company Directory</p>
+            <h1>Approved Vendors &amp; Subcontractors</h1>
+            <p className="intro">Find approved company contacts and review current licensing and insurance status.</p>
+          </div>
+        </div>
+      </header>
+      <Section title="Approved Vendor Directory" subtitle={canManageSubcontractorCompliance ? "Manage approved vendors and subcontractors, contacts, licensing, workers' compensation, and COIs." : "Read-only approved directory for sales and estimating."}>
+        <SubcontractorCompliance supabase={supabase} authUser={authUser} readOnly={!canManageSubcontractorCompliance} />
+      </Section>
+    </div>
+  );
 
   const renderCrmLeadsScreen = () => {
     const assignedStaffOptions = [
@@ -16939,7 +19050,7 @@ function App() {
             <div>
               <p className="eyebrow">CRT Roofing Employee Portal</p>
               <h1>Admin Pricing &amp; Defaults</h1>
-              <p className="intro">Local settings only for now.</p>
+              <p className="intro">Shared company estimator defaults with realtime sync.</p>
             </div>
           </div>
         </div>
@@ -16947,7 +19058,10 @@ function App() {
         <div className="heroCard">
           <span>Signed in</span>
           <strong>{authUser.displayName}</strong>
-          <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
+          <p>{authRole === "admin" ? "Admin" : authRole === "cfo" ? "CFO" : "Salesperson"}</p>
+          <p className="smallNote" style={{ marginTop: 8 }}>
+            Sync status: {estimatorSettingsSyncStatus === "saving" ? "Saving" : estimatorSettingsSyncStatus === "saved" ? "Saved" : estimatorSettingsSyncStatus === "error" ? "Error" : estimatorSettingsSyncStatus === "loading" ? "Loading" : "Idle"}
+          </p>
         </div>
       </header>
 
@@ -17089,7 +19203,7 @@ function App() {
             <p>{activeSavedEstimates.length ? `${activeSavedEstimates.length} saved` : "No saved estimates yet"}</p>
           </button>
         </div>
-        {isAdminUser ? (
+        {isFinanceUser ? (
           <div className="actionRow" style={{ marginTop: 16 }}>
             <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
               Admin Pricing
@@ -17174,7 +19288,7 @@ function App() {
         </Section>
       ) : null}
 
-      {isAdminUser ? (
+      {isFinanceUser ? (
         <Section title="Admin" subtitle="Pricing and default settings.">
           <div className="actionRow">
             <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("adminPricing")}>
@@ -17185,6 +19299,49 @@ function App() {
       ) : null}
     </div>
   );
+
+  const handleApprovedJobQuickDraftChange = (field, value) => {
+    setApprovedJobQuickDraft((current) => ({ ...current, [field]: value }));
+  };
+
+  const handleCreateApprovedJobQuick = async () => {
+    if (!canCreateApprovedJobData) {
+      setSessionMessageType("error");
+      setSessionMessage("You do not have permission to create approved jobs.");
+      return;
+    }
+    if (!approvedJobQuickDraft.projectName.trim()) {
+      setSessionMessageType("error");
+      setSessionMessage("Please enter a job number or project name.");
+      return;
+    }
+
+    setJobsSyncStatus("saving");
+    setSessionMessage("");
+    const created = await createApprovedJobFromStaffDraft(approvedJobQuickDraft);
+    if (created.error) {
+      setJobsSyncStatus("error");
+      setJobsSyncError(created.error.message || String(created.error));
+      setSessionMessageType("error");
+      setSessionMessage(`Could not add the approved job: ${created.error.message || created.error}`);
+      return;
+    }
+
+    const refreshed = await fetchSharedJobsFromSupabase();
+    if (!refreshed.error) applySharedJobRows(refreshed.data);
+    setJobsSyncStatus(refreshed.error ? "error" : "saved");
+    setJobsSyncError(refreshed.error?.message || "");
+    setSessionMessageType(refreshed.error ? "error" : "success");
+    setSessionMessage(
+      refreshed.error
+        ? `The job was added, but the list could not refresh: ${refreshed.error.message || refreshed.error}`
+        : `${approvedJobQuickDraft.projectName.trim()} added to Approved Jobs.`,
+    );
+    if (!refreshed.error) {
+      setApprovedJobQuickDraft(createBlankApprovedJobQuickDraft());
+      setApprovedJobQuickCreateOpen(false);
+    }
+  };
 
   const renderApprovedJobsScreen = () => (
     <div className="appShell">
@@ -17211,16 +19368,123 @@ function App() {
 
       <div className="actionRow" style={{ marginBottom: 16 }}>
         <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>Back to dashboard</button>
+        {canCreateApprovedJobData ? (
+          <button
+            type="button"
+            className="primaryButton"
+            aria-expanded={approvedJobQuickCreateOpen}
+            onClick={() => setApprovedJobQuickCreateOpen((current) => !current)}
+          >
+            {approvedJobQuickCreateOpen ? "Close Add Approved Job" : "Add Approved Job"}
+          </button>
+        ) : null}
       </div>
 
-      <Section title="Approved Jobs / Upcoming Projects" subtitle="Track the jobs that need your next step.">
-        {renderApprovedJobsTableSection({
-          title: "Approved Jobs / Upcoming Projects",
-          subtitle: "Filtered approved jobs and upcoming projects.",
-          jobs: filteredApprovedJobs,
-          showViewAllButton: false,
-          limit: null,
-        })}
+      {approvedJobQuickCreateOpen ? (
+        <Section title="Add Approved Job" subtitle="Create an approved or upcoming project without opening the CFO dashboard.">
+          <div className="formGrid">
+            <Field label="Job number / project">
+              <input type="text" value={approvedJobQuickDraft.projectName} onChange={(e) => handleApprovedJobQuickDraftChange("projectName", e.target.value)} placeholder="Job number or project name" />
+            </Field>
+            <Field label="Customer / homeowner">
+              <input type="text" value={approvedJobQuickDraft.customerName} onChange={(e) => handleApprovedJobQuickDraftChange("customerName", e.target.value)} placeholder="Customer or homeowner name" />
+            </Field>
+            <Field label="Project address">
+              <input type="text" value={approvedJobQuickDraft.projectAddress} onChange={(e) => handleApprovedJobQuickDraftChange("projectAddress", e.target.value)} placeholder="Job-site address" />
+            </Field>
+            <Field label="Approved contract amount">
+              <input type="text" inputMode="decimal" value={approvedJobQuickDraft.contractAmount} onChange={(e) => handleApprovedJobQuickDraftChange("contractAmount", e.target.value)} placeholder="$0.00" />
+            </Field>
+            <Field label="Anticipated start date">
+              <input type="date" value={approvedJobQuickDraft.anticipatedStartDate} onChange={(e) => handleApprovedJobQuickDraftChange("anticipatedStartDate", e.target.value)} />
+            </Field>
+            <Field label="Project contact">
+              <input type="text" value={approvedJobQuickDraft.projectContact} onChange={(e) => handleApprovedJobQuickDraftChange("projectContact", e.target.value)} placeholder="Assigned project contact" />
+            </Field>
+            <Field label="Project status">
+              <select value={approvedJobQuickDraft.status} onChange={(e) => handleApprovedJobQuickDraftChange("status", e.target.value)}>
+                {APPROVED_JOB_STATUS_OPTIONS.filter((status) => !["Active", "Completed", "Closed"].includes(status)).map((status) => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="actionRow" style={{ marginTop: 14 }}>
+            <button type="button" className="primaryButton" onClick={handleCreateApprovedJobQuick}>Save Approved Job</button>
+            <button type="button" className="secondaryButton" onClick={() => setApprovedJobQuickCreateOpen(false)}>Cancel</button>
+          </div>
+        </Section>
+      ) : null}
+
+      {sessionMessage ? (
+        <p className={`statusMessage ${sessionMessageType === "error" ? "dangerMessage" : ""}`}>{sessionMessage}</p>
+      ) : null}
+
+      {jobsSyncStatus === "loading" || jobsSyncStatus === "refreshing" || jobsSyncStatus === "reconnecting" || jobsSyncStatus === "offline" || jobsSyncStatus === "error" ? (
+        <div className="summaryCard" style={{ marginBottom: 16 }}>
+          <strong>
+            {jobsSyncStatus === "offline"
+              ? "You are offline"
+              : jobsSyncStatus === "reconnecting"
+                ? "Reconnecting to shared jobs"
+                : jobsSyncStatus === "error"
+                  ? "Shared jobs sync error"
+                  : "Loading shared jobs"}
+          </strong>
+          <p style={{ marginBottom: 0, color: "var(--muted)" }}>
+            {jobsSyncStatus === "error" ? (jobsSyncError || "Could not retrieve the latest shared jobs.") : "This screen reflects the shared company job workflow."}
+          </p>
+        </div>
+      ) : null}
+
+      {renderApprovedJobsTableSection({
+        title: "Approved Jobs / Upcoming Projects",
+        subtitle: "Focus on the next action, schedule, owner, and outstanding checklist items.",
+        jobs: filteredApprovedJobs,
+        showViewAllButton: false,
+        limit: null,
+      })}
+
+      <Section
+        title={`Archived approved jobs (${archivedJobs.length})`}
+        subtitle="Saved job history that can be restored to its previous workflow stage."
+        right={(
+          <button
+            type="button"
+            className="secondaryButton"
+            aria-expanded={!archivedJobsCollapsed}
+            onClick={() => setArchivedJobsCollapsed((value) => !value)}
+          >
+            {archivedJobsCollapsed ? "Expand" : "Minimize"}
+          </button>
+        )}
+      >
+        {archivedJobsCollapsed ? null : archivedJobs.length ? (
+          <div className="savedList">
+            {archivedJobs.map((job) => (
+              <div className="savedCard" key={job.id}>
+                <div>
+                  <span className="statusTag">Archived</span>
+                  <strong>{job.projectName || job.jobName || "Untitled project"}</strong>
+                  <p>
+                    {job.jobNumber ? `Job ${job.jobNumber} | ` : ""}
+                    {job.customerName || job.customer || "No customer"}
+                    {job.archivedAt ? ` | ${new Date(job.archivedAt).toLocaleString()}` : ""}
+                  </p>
+                </div>
+                {canManageSharedJobData ? (
+                  <div className="savedActions">
+                    <button type="button" className="secondaryButton" onClick={() => handleRestoreArchivedJob(job)}>
+                      Restore
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="emptyState">No archived approved jobs yet.</p>
+        )}
       </Section>
     </div>
   );
@@ -17241,6 +19505,13 @@ function App() {
     }
 
     const totals = calculateApprovedJobTotals(approvedDailyProgressLogs);
+    const financialSummary = calculateApprovedJobFinancialSummary(
+      approvedJobData.approvedBidAmount,
+      approvedJobData.changeOrders,
+      totals.runningActualCost,
+    );
+    const dailyCostReturnTemplate = selectedApprovedJob?.workflowStatus === "active" ? "activeJob" : "approvedJobs";
+    const payrollTaxPercentLabel = `${(PAYROLL_TAX_RATE * 100).toFixed(2)}%`;
 
     return (
       <div className="appShell">
@@ -17266,7 +19537,9 @@ function App() {
         </header>
 
         <div className="actionRow" style={{ marginBottom: 16 }}>
-          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("approvedJobs")}>Back to approved jobs</button>
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate(dailyCostReturnTemplate)}>
+            {dailyCostReturnTemplate === "activeJob" ? "Back to active job" : "Back to approved jobs"}
+          </button>
         </div>
 
         {sessionMessage && (
@@ -17293,10 +19566,13 @@ function App() {
               <input type="number" onWheel={handleNumberInputWheel} value={approvedJobData.totalSquares} disabled />
             </Field>
             <Field label="Approved bid amount">
-              <input type="number" onWheel={handleNumberInputWheel} value={approvedJobData.approvedBidAmount} onChange={(e) => handleApprovedJobFormChange("approvedBidAmount", toNumber(e.target.value))} />
+              <input type="number" onWheel={handleNumberInputWheel} value={approvedJobData.approvedBidAmount} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("approvedBidAmount", toNumber(e.target.value))} />
+            </Field>
+            <Field label="Change orders total (if any)">
+              <input type="number" onWheel={handleNumberInputWheel} step="0.01" value={approvedJobData.changeOrders ?? 0} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("changeOrders", toNumber(e.target.value))} />
             </Field>
             <Field label="Job status">
-              <select value={approvedJobData.status} onChange={(e) => handleApprovedJobFormChange("status", e.target.value)}>
+              <select value={approvedJobData.status} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("status", e.target.value)}>
                 <option value="approved">Approved</option>
                 <option value="scheduled">Scheduled</option>
                 <option value="in progress">In Progress</option>
@@ -17314,8 +19590,39 @@ function App() {
           </div>
 
           {approvedDailyProgressLogs.length ? (
-            approvedDailyProgressLogs.map((day) => (
-              <div key={day.id} className="panel" style={{ marginBottom: 12 }}>
+            approvedDailyProgressLogs.map((day, dayIndex) => {
+              const isCollapsed = collapsedApprovedDailyProgressDayIds.includes(day.id);
+              const daySummary = summarizeApprovedDailyProgress(day);
+              return (
+              <div key={day.id} className="panel approvedDailyProgressCard" style={{ marginBottom: 12 }}>
+                <div className="approvedDailyProgressHeader">
+                  <div>
+                    <p className="approvedDailyProgressEyebrow">Day {dayIndex + 1}</p>
+                    <h3>{day.date || "Date not selected"}</h3>
+                    <p className="approvedDailyProgressSummary">
+                      Crew {toNumber(day.crewSize)} · {round(daySummary.laborHours, 2)} labor hours · {money2(daySummary.laborCost)} loaded labor · {money2(daySummary.subcontractorCost)} subcontractors · {money2(daySummary.materialCost)} materials
+                    </p>
+                  </div>
+                  <div className="approvedDailyProgressActions">
+                    <button
+                      type="button"
+                      className="secondaryButton"
+                      aria-expanded={!isCollapsed}
+                      aria-controls={`approved-daily-progress-${day.id}`}
+                      onClick={() => handleToggleDailyProgressDay(day.id)}
+                    >
+                      {isCollapsed ? "Expand" : "Minimize"}
+                    </button>
+                    {canManageSharedJobData ? (
+                      <button type="button" className="dangerButton" onClick={() => handleDeleteDailyProgressDay(day.id)}>
+                        Delete day
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                {!isCollapsed ? (
+                <div id={`approved-daily-progress-${day.id}`} className="approvedDailyProgressBody">
                 <div className="formGrid">
                   <Field label="Date">
                     <input type="date" value={day.date} onChange={(e) => handleDailyProgressFieldChange(day.id, "date", e.target.value)} />
@@ -17323,32 +19630,44 @@ function App() {
                   <Field label="Crew size">
                     <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={day.crewSize} onChange={(e) => handleDailyProgressFieldChange(day.id, "crewSize", toNumber(e.target.value))} />
                   </Field>
-                  <div style={{ display: "flex", alignItems: "flex-end" }}>
-                    <button type="button" className="dangerButton" style={{ marginTop: 24 }} onClick={() => handleDeleteDailyProgressDay(day.id)}>
-                      Delete day
-                    </button>
-                  </div>
                 </div>
 
                 <div className="formGrid" style={{ marginTop: 12 }}>
                   <Field label="Employee labor">
                     <div>
                       {(day.employeeRows || []).map((employee) => {
-                        const laborCost = toNumber(employee.hoursWorked) * toNumber(employee.hourlyRate);
+                        const laborCost = calculateDailyEmployeeLaborCost(employee);
                         return (
                           <div key={employee.id} style={{ marginBottom: 12, border: "1px solid #ddd", padding: 12, borderRadius: 6 }}>
                             <div className="formGrid">
-                              <Field label="Name">
-                                <input type="text" value={employee.employeeName} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "employeeName", e.target.value)} />
+                              <Field label="CRT employee">
+                                <select value={employee.employeeId || ""} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "employeeId", e.target.value)}>
+                                  <option value="">Select employee</option>
+                                  {employeeDirectory.filter((person) => person.isActive).map((person) => (
+                                    <option key={person.id} value={person.id}>
+                                      {buildEmployeeDisplayName(person) || "Unnamed employee"} · {money2(person.hourlyRate || 0)}/hr
+                                    </option>
+                                  ))}
+                                </select>
+                                {!employee.employeeId && employee.employeeName ? <p className="smallNote">Previously saved: {employee.employeeName}</p> : null}
                               </Field>
                               <Field label="Hours">
                                 <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.5" value={employee.hoursWorked} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "hoursWorked", toNumber(e.target.value))} />
                               </Field>
-                              <Field label="Hourly rate">
-                                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={employee.hourlyRate} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "hourlyRate", toNumber(e.target.value))} />
+                              <Field label="Base hourly wage">
+                                <input type="number" value={laborCost.hourlyRate} disabled />
                               </Field>
-                              <Field label="Labor cost">
-                                <input type="number" onWheel={handleNumberInputWheel} value={round(laborCost, 2)} disabled />
+                              <Field label="Base payroll">
+                                <input type="text" value={money2(laborCost.basePayroll)} disabled />
+                              </Field>
+                              <Field label="Workers’ comp (50%)">
+                                <input type="text" value={money2(laborCost.workersCompCost)} disabled />
+                              </Field>
+                              <Field label={`Payroll tax (${payrollTaxPercentLabel})`}>
+                                <input type="text" value={money2(laborCost.payrollTaxCost)} disabled />
+                              </Field>
+                              <Field label="Total loaded labor cost">
+                                <input type="text" value={money2(laborCost.totalLaborCost)} disabled />
                               </Field>
                             </div>
                             <div className="actionRow" style={{ marginTop: 12 }}>
@@ -17367,8 +19686,88 @@ function App() {
                 </div>
 
                 <div className="formGrid" style={{ marginTop: 12 }}>
+                  <Field label="Sub-contractors">
+                    <div>
+                      {(day.subcontractors || []).map((subcontractor) => {
+                        const subcontractorCost = calculateSubcontractorCost(subcontractor);
+                        return (
+                          <div key={subcontractor.id} style={{ marginBottom: 12, border: "1px solid #ddd", padding: 12, borderRadius: 6 }}>
+                            <div className="formGrid">
+                              <Field label="Company">
+                                <input
+                                  type="text"
+                                  value={subcontractor.company || ""}
+                                  onChange={(e) => handleSubcontractorRowChange(day.id, subcontractor.id, "company", e.target.value)}
+                                />
+                              </Field>
+                              <Field label="Squares">
+                                <input
+                                  type="number"
+                                  onWheel={handleNumberInputWheel}
+                                  min="0"
+                                  step="0.1"
+                                  value={subcontractor.squares ?? 0}
+                                  onChange={(e) => handleSubcontractorRowChange(day.id, subcontractor.id, "squares", toNumber(e.target.value))}
+                                />
+                              </Field>
+                              <Field label="Price per square">
+                                <input
+                                  type="number"
+                                  onWheel={handleNumberInputWheel}
+                                  min="0"
+                                  step="0.01"
+                                  value={subcontractor.pricePerSquare ?? 0}
+                                  onChange={(e) => handleSubcontractorRowChange(day.id, subcontractor.id, "pricePerSquare", toNumber(e.target.value))}
+                                />
+                              </Field>
+                              <Field label="Total cost">
+                                <input type="text" value={money2(subcontractorCost.totalCost)} disabled />
+                              </Field>
+                            </div>
+                            <div className="actionRow" style={{ marginTop: 12 }}>
+                              <button type="button" className="secondaryButton" onClick={() => handleRemoveSubcontractorRow(day.id, subcontractor.id)}>
+                                Delete subcontractor
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <button type="button" className="secondaryButton" onClick={() => handleAddSubcontractorRow(day.id)}>
+                        Add subcontractor
+                      </button>
+                    </div>
+                  </Field>
+                </div>
+
+                <div className="formGrid" style={{ marginTop: 12 }}>
                   <Field label="Materials used">
                     <div>
+                      <div style={{ marginBottom: 12, border: "1px solid #ddd", padding: 12, borderRadius: 6 }}>
+                        <div className="formGrid">
+                          <Field label="Spray Foam Gallons used">
+                            <input
+                              type="number"
+                              onWheel={handleNumberInputWheel}
+                              min="0"
+                              step="0.1"
+                              value={day.sprayFoamGallonsUsed ?? 0}
+                              onChange={(e) => handleDailyProgressFieldChange(day.id, "sprayFoamGallonsUsed", toNumber(e.target.value))}
+                            />
+                          </Field>
+                          <Field label={`Equivalent kits (${SPRAY_FOAM_GALLONS_PER_KIT} gal/kit)`}>
+                            <input type="number" value={round(daySummary.sprayFoamEquivalentKits, 3)} disabled />
+                          </Field>
+                          <Field label="Foam kit cost">
+                            <input type="text" value={money2(SPRAY_FOAM_KIT_COST)} disabled />
+                          </Field>
+                          <Field label="Total spray foam cost">
+                            <input type="text" value={money2(daySummary.sprayFoamCost)} disabled />
+                          </Field>
+                        </div>
+                        <p className="smallNote" style={{ marginTop: 8 }}>
+                          Gallons used ÷ {SPRAY_FOAM_GALLONS_PER_KIT} gallons per kit × {money2(SPRAY_FOAM_KIT_COST)} per kit.
+                        </p>
+                      </div>
                       {(day.materialsUsed || []).map((material) => {
                         const totalCost = toNumber(material.quantity) * toNumber(material.unitCost);
                         return (
@@ -17411,12 +19810,52 @@ function App() {
                   </Field>
                 </div>
 
-                <Section title="Attachments" subtitle="Placeholder for future photo/document upload.">
-                  <input type="file" disabled />
-                  <p className="intro">Photo / document upload is coming soon.</p>
+                <Section title="Attachments" subtitle="Upload photos or documents for this workday.">
+                  <input
+                    type="file"
+                    multiple
+                    accept="image/jpeg,image/png,image/webp,image/heic,.pdf,.doc,.docx"
+                    disabled={approvedAttachmentUploadingDayIds.includes(day.id)}
+                    onChange={(event) => handleApprovedProgressAttachmentUpload(day.id, event)}
+                  />
+                  <p className="smallNote">
+                    {approvedAttachmentUploadingDayIds.includes(day.id)
+                      ? "Uploading attachments..."
+                      : "JPG, PNG, WebP, HEIC, PDF, DOC, or DOCX files up to 15 MB each."}
+                  </p>
+                  {(day.attachments || []).length ? (
+                    <div className="savedList" style={{ marginTop: 12 }}>
+                      {(day.attachments || []).map((attachment) => (
+                        <div className="savedCard" key={attachment.id}>
+                          <div>
+                            <strong>{attachment.fileName || "Attachment"}</strong>
+                            <p>
+                              {formatAttachmentSize(attachment.fileSize)}
+                              {attachment.uploadedBy ? ` · Uploaded by ${attachment.uploadedBy}` : ""}
+                            </p>
+                          </div>
+                          <div className="savedActions">
+                            <button type="button" className="secondaryButton" onClick={() => handleOpenApprovedProgressAttachment(attachment)}>
+                              Open / Download
+                            </button>
+                            {canManageSharedJobData && String(attachment.storagePath || "").startsWith(`${authUser?.key}/`) ? (
+                              <button type="button" className="dangerButton" onClick={() => handleRemoveApprovedProgressAttachment(day.id, attachment)}>
+                                Remove
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="emptyState">No attachments uploaded for this day.</p>
+                  )}
                 </Section>
+                </div>
+                ) : null}
               </div>
-            ))
+              );
+            })
           ) : (
             <p className="emptyState">No daily logs added yet.</p>
           )}
@@ -17433,16 +19872,72 @@ function App() {
               <strong>{round(totals.totalActualLaborHours, 2)}</strong>
             </div>
             <div className="detailRow">
-              <span>Total actual labor cost</span>
+              <span>Total base payroll</span>
+              <strong>{money2(totals.totalActualBasePayroll)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Workers’ compensation (50%)</span>
+              <strong>{money2(totals.totalWorkersCompCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Payroll tax ({payrollTaxPercentLabel})</span>
+              <strong>{money2(totals.totalPayrollTaxCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total loaded labor cost</span>
               <strong>{money2(totals.totalActualLaborCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total subcontractor cost</span>
+              <strong>{money2(totals.totalSubcontractorCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total spray foam gallons used</span>
+              <strong>{round(totals.totalSprayFoamGallonsUsed, 2)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Equivalent spray foam kits ({SPRAY_FOAM_GALLONS_PER_KIT} gal/kit)</span>
+              <strong>{round(totals.totalSprayFoamEquivalentKits, 3)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total spray foam cost</span>
+              <strong>{money2(totals.totalSprayFoamCost)}</strong>
             </div>
             <div className="detailRow">
               <span>Total material cost</span>
               <strong>{money2(totals.totalMaterialCost)}</strong>
             </div>
             <div className="detailRow">
-              <span>Running actual cost</span>
+              <span>Direct cost before operating / overhead</span>
+              <strong>{money2(totals.directActualCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Operating / overhead cost ({APPROVED_JOB_OPERATING_OVERHEAD_RATE * 100}%)</span>
+              <strong>{money2(totals.operatingOverheadCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total cost including operating / overhead</span>
               <strong>{money2(totals.runningActualCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Approved sale price</span>
+              <strong>{money2(financialSummary.approvedSalePrice)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Change orders (if any)</span>
+              <strong>{money2(financialSummary.changeOrders)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total sale price (including change orders)</span>
+              <strong>{money2(financialSummary.totalSalePrice)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Profit</span>
+              <strong>{money2(financialSummary.profitAmount)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Profit margin</span>
+              <strong>{financialSummary.profitMarginPercent}%</strong>
             </div>
           </div>
         </Section>
@@ -17451,7 +19946,10 @@ function App() {
           <button type="button" className="primaryButton" onClick={handleSaveApprovedJob}>
             Save daily progress
           </button>
-          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("approvedJobs")}>Cancel</button>
+          {sessionMessageType === "success" && sessionMessage === "Saved" ? (
+            <strong role="status" aria-live="polite" style={{ color: "#2e7d32" }}>Saved</strong>
+          ) : null}
+          <button type="button" className="secondaryButton" onClick={() => setActiveTemplate(dailyCostReturnTemplate)}>Cancel</button>
         </div>
       </div>
     );
@@ -18773,23 +21271,34 @@ function App() {
           </div>
         </div>
 
-        <div className="heroCard" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
+        <div className="heroCard">
           <div style={{ display: "grid", gap: 6 }}>
             <strong>Welcome back</strong>
-            <p style={{ margin: 0, color: "#fff", fontSize: "1.05rem", fontWeight: 700 }}>{dashboardWelcomeName}</p>
+            <p style={{ margin: 0, color: "var(--ink)", fontSize: "1.05rem", fontWeight: 700 }}>{dashboardWelcomeName}</p>
             <p>{`${dashboardRoleLabel} · ${authUser.email || "No email available"}`}</p>
           </div>
-          <button type="button" className="secondaryButton" onClick={handleLogout}>
-            Sign out
-          </button>
+          <button type="button" className="secondaryButton" onClick={handleLogout}>Sign out</button>
         </div>
       </header>
 
-      <div className="actionRow" style={{ marginBottom: 16 }}>
-        {renderQuickMeasureUploadControl()}
-      </div>
-
       {renderQuickMeasureReviewPanel()}
+
+      <DashboardTasks supabase={supabase} authUser={authUser} onOpenTasks={() => setActiveTemplate("workHub")} />
+
+      <Section title="Quick actions" subtitle="Capture a new opportunity and keep it moving through the CRM.">
+        <div className="dashboardQuickActions">
+          <button type="button" className="templateCard collectLeadCard" onClick={openDashboardLeadCapture}>
+            <span className="eyebrow">CRM</span>
+            <strong>Collect Lead</strong>
+            <p>Add the customer, property, service needs, lead source, value, and follow-up details.</p>
+          </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("subcontractors")}>
+            <span className="eyebrow">Company Directory</span>
+            <strong>Approved Vendors</strong>
+            <p>Open Natalia's approved vendor and subcontractor contacts, trades, licensing, and compliance information.</p>
+          </button>
+        </div>
+      </Section>
 
       <Section title="Workflows" subtitle="Pick a starting point.">
         <div className="workflowGroups">
@@ -18809,10 +21318,10 @@ function App() {
                 <strong>Field Operations</strong>
                 <p>Daily job logs and office review for field crews.</p>
               </button>
-              <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalBuilder")}>
+              <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalRequests")}>
                 <span className="eyebrow">Sales</span>
-                <strong>Proposal Builder</strong>
-                <p>Turn saved estimates into customer-ready proposals.</p>
+                <strong>Proposal Requests</strong>
+                <p>Submit estimating requests and track Word/PDF proposal documents.</p>
               </button>
               <button type="button" className="templateCard" onClick={() => setActiveTemplate("estimateTemplates")}>
                 <span className="eyebrow">Templates</span>
@@ -18843,11 +21352,13 @@ function App() {
               <p>Office setup and the executive financial overview in one spot.</p>
             </div>
             <div className="workflowGroupGrid">
-              <button type="button" className="templateCard" onClick={() => setActiveTemplate("administration")}>
-                <span className="eyebrow">Admin</span>
-                <strong>Administration</strong>
-                <p>Manage employees and company setup.</p>
-              </button>
+              {canManageEmployeeWages ? (
+                <button type="button" className="templateCard" onClick={() => setActiveTemplate("administration")}>
+                  <span className="eyebrow">Payroll</span>
+                  <strong>Administration</strong>
+                  <p>Manage employees, wages, and company setup.</p>
+                </button>
+              ) : null}
               {canAccessCfoDashboard ? (
                 <button type="button" className="templateCard" onClick={() => setActiveTemplate("cfoDashboard")}>
                   <span className="eyebrow">Finance</span>
@@ -18868,22 +21379,57 @@ function App() {
         </div>
       </Section>
 
+      {jobsSyncStatus === "loading" || jobsSyncStatus === "refreshing" || jobsSyncStatus === "reconnecting" || jobsSyncStatus === "offline" || jobsSyncStatus === "error" ? (
+        <div className="summaryCard" style={{ marginBottom: 16 }}>
+          <strong>
+            {jobsSyncStatus === "offline"
+              ? "Shared jobs are offline"
+              : jobsSyncStatus === "reconnecting"
+                ? "Reconnecting shared jobs"
+                : jobsSyncStatus === "error"
+                  ? "Shared jobs sync error"
+                  : "Syncing shared jobs"}
+          </strong>
+          <p style={{ marginBottom: 0, color: "var(--muted)" }}>
+            {jobsSyncStatus === "error" ? (jobsSyncError || "Unable to reach the shared jobs service.") : "All authenticated users read the same live job records."}
+          </p>
+        </div>
+      ) : null}
+
       <Section title="Active jobs preview" subtitle="A quick look at open work and what starts next.">
         {activeJobsSummary.activeCount ? (
           <div className="savedList">
-            {activeJobsSummary.upcoming.map((job) => (
-              <div className="savedCard" key={job.id}>
+            {activeJobsSummary.upcoming.map((job) => {
+              const previewDetails = getActiveJobPreviewDetails(job);
+              return (
+              <div className="savedCard activeJobPreviewCard" key={job.id}>
                 <div>
                   <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
                     <span className={`statusTag statusTag-${String(job.status || "draft").toLowerCase().replace(/\s+/g, "-")}`}>{job.status}</span>
                     <span className={`statusTag ${String(job.riskLevel || "").toLowerCase() === "critical" ? "statusTag-draft" : ""}`}>{job.riskLevel || "Normal"}</span>
                   </div>
                   <strong>{job.projectName || "Untitled project"}</strong>
-                  <p>
-                    {job.jobNumber ? `Job ${job.jobNumber} | ` : ""}
-                    {job.customer || job.propertyOwner || "No customer"} |{" "}
-                    {job.fieldSupervisor || "No supervisor"} |{" "}
-                    Start {job.startDate || "TBD"} · Due {job.expectedCompletionDate || "TBD"}
+                  {job.jobNumber ? <p className="activeJobPreviewNumber">Job {job.jobNumber}</p> : null}
+                  <div className="activeJobPreviewDetails">
+                    <div>
+                      <span>Project address</span>
+                      <strong>{previewDetails.address}</strong>
+                    </div>
+                    <div>
+                      <span>Homeowner / customer</span>
+                      <strong>{previewDetails.homeowner}</strong>
+                    </div>
+                    <div>
+                      <span>Contract amount</span>
+                      <strong>{money(previewDetails.contractAmount)}</strong>
+                    </div>
+                    <div>
+                      <span>Foreman / superintendent</span>
+                      <strong>{previewDetails.fieldLead}</strong>
+                    </div>
+                  </div>
+                  <p className="activeJobPreviewSchedule">
+                    Start {job.startDate || job.anticipatedStartDate || "TBD"} · Due {job.expectedCompletionDate || "TBD"}
                   </p>
                 </div>
                 <div className="savedActions">
@@ -18893,9 +21439,20 @@ function App() {
                   <button type="button" className="secondaryButton" onClick={() => openActiveJobIssueModal(job)}>
                     Report Issue
                   </button>
+                  {canSubmitInvoiceHandoff ? (
+                    <button type="button" className="primaryButton" onClick={() => openInvoiceHandoff(job)}>
+                      Complete Job &amp; Send to Invoicing
+                    </button>
+                  ) : null}
+                  {canManageSharedJobData ? (
+                    <button type="button" className="secondaryButton" onClick={() => handleArchiveActiveJob(job)}>
+                      Archive
+                    </button>
+                  ) : null}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <p className="emptyState">No active jobs yet.</p>
@@ -18912,6 +21469,83 @@ function App() {
             Open Active Jobs
           </button>
         </div>
+      </Section>
+
+      <Section
+        title={`Past Completed Jobs (${pastCompletedJobs.length})`}
+        subtitle="Completed job history retained with project details and recorded costs."
+      >
+        {pastCompletedJobs.length ? (
+          <div className="savedList">
+            {pastCompletedJobs.map((job) => {
+              const previewDetails = getActiveJobPreviewDetails(job);
+              return (
+                <div className="savedCard activeJobPreviewCard" key={job.id}>
+                  <div>
+                    <span className="statusTag">Completed</span>
+                    <strong>{job.projectName || "Untitled project"}</strong>
+                    <p>
+                      {job.jobNumber ? `Job ${job.jobNumber} · ` : ""}
+                      {previewDetails.homeowner} · {previewDetails.address} · {money(previewDetails.contractAmount)}
+                    </p>
+                    <p className="smallNote">
+                      Completed {job.completedAt ? new Date(job.completedAt).toLocaleString() : "date not recorded"}
+                    </p>
+                  </div>
+                  <div className="savedActions">
+                    <button type="button" className="secondaryButton" onClick={() => openApprovedJobDetail(job)}>
+                      View Job History
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="emptyState">No completed jobs yet.</p>
+        )}
+      </Section>
+
+      <Section
+        title={`Archived jobs (${archivedJobs.length})`}
+        subtitle="Saved jobs removed from the active preview. Restore a job whenever it becomes active again."
+        right={(
+          <button
+            type="button"
+            className="secondaryButton"
+            aria-expanded={!archivedJobsCollapsed}
+            onClick={() => setArchivedJobsCollapsed((value) => !value)}
+          >
+            {archivedJobsCollapsed ? "Expand" : "Minimize"}
+          </button>
+        )}
+      >
+        {archivedJobsCollapsed ? null : archivedJobs.length ? (
+          <div className="savedList">
+            {archivedJobs.map((job) => (
+              <div className="savedCard" key={job.id}>
+                <div>
+                  <span className="statusTag">Archived</span>
+                  <strong>{job.projectName || "Untitled project"}</strong>
+                  <p>
+                    {job.jobNumber ? `Job ${job.jobNumber} | ` : ""}
+                    {job.customer || job.propertyOwner || "No customer"}
+                    {job.archivedAt ? ` | Archived ${new Date(job.archivedAt).toLocaleString()}` : ""}
+                  </p>
+                </div>
+                {canManageSharedJobData ? (
+                  <div className="savedActions">
+                    <button type="button" className="secondaryButton" onClick={() => handleRestoreArchivedJob(job)}>
+                      Restore
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="emptyState">No archived jobs yet.</p>
+        )}
       </Section>
 
       <Section
@@ -19046,6 +21680,8 @@ function App() {
           <p className="emptyState">Tap Saved estimates to open the list.</p>
         )}
       </Section>
+      {renderActiveJobIssueModal()}
+      {renderInvoiceHandoffModal()}
     </div>
     );
   }
@@ -19243,6 +21879,50 @@ function App() {
     );
   };
 
+  const renderInvoiceHandoffModal = () => {
+    if (!invoiceHandoffJob || !invoiceHandoffDraft) return null;
+    const totalSalePrice = Number(invoiceHandoffDraft.contractAmount || 0) + Number(invoiceHandoffDraft.changeOrders || 0);
+    return (
+      <div className="activeJobOverlay" role="presentation" onClick={closeInvoiceHandoff}>
+        <div className="activeJobPanel" role="dialog" aria-modal="true" aria-labelledby="invoice-handoff-title" onClick={(event) => event.stopPropagation()}>
+          <div className="cfoDetailHeader">
+            <div>
+              <p className="eyebrow">Active Jobs → Accounting</p>
+              <h2 id="invoice-handoff-title">Complete Job &amp; Send to Invoicing</h2>
+              <p>{invoiceHandoffJob.projectName || invoiceHandoffJob.jobNumber || "Active job"}</p>
+            </div>
+            <button type="button" className="secondaryButton" disabled={invoiceHandoffSaving} onClick={closeInvoiceHandoff}>Cancel</button>
+          </div>
+          {invoiceHandoffError ? <div className="errorBanner">{invoiceHandoffError}</div> : null}
+          <div className="formGrid">
+            <Field label="Completion date"><input type="date" value={invoiceHandoffDraft.completionDate} onChange={(event) => updateInvoiceHandoffDraft("completionDate", event.target.value)} /></Field>
+            <Field label="Invoice type"><select value={invoiceHandoffDraft.invoiceType} onChange={(event) => updateInvoiceHandoffDraft("invoiceType", event.target.value)}><option>Final</option><option>Progress</option></select></Field>
+            <Field label="Customer name"><input value={invoiceHandoffDraft.customerName} onChange={(event) => updateInvoiceHandoffDraft("customerName", event.target.value)} /></Field>
+            <Field label="Billing contact"><input value={invoiceHandoffDraft.billingContactName} onChange={(event) => updateInvoiceHandoffDraft("billingContactName", event.target.value)} /></Field>
+            <Field label="Billing email"><input type="email" value={invoiceHandoffDraft.billingEmail} onChange={(event) => updateInvoiceHandoffDraft("billingEmail", event.target.value)} /></Field>
+            <Field label="Billing address"><input value={invoiceHandoffDraft.billingAddress} onChange={(event) => updateInvoiceHandoffDraft("billingAddress", event.target.value)} /></Field>
+            <Field label="PO / customer reference"><input value={invoiceHandoffDraft.purchaseOrderNumber} onChange={(event) => updateInvoiceHandoffDraft("purchaseOrderNumber", event.target.value)} /></Field>
+            <Field label="Payment terms"><input value={invoiceHandoffDraft.paymentTerms} onChange={(event) => updateInvoiceHandoffDraft("paymentTerms", event.target.value)} /></Field>
+            <Field label="Contract amount"><input type="number" min="0" step="0.01" value={invoiceHandoffDraft.contractAmount} onChange={(event) => updateInvoiceHandoffDraft("contractAmount", event.target.value)} /></Field>
+            <Field label="Approved change orders"><input type="number" min="0" step="0.01" value={invoiceHandoffDraft.changeOrders} onChange={(event) => updateInvoiceHandoffDraft("changeOrders", event.target.value)} /></Field>
+            <Field label="Amount already billed"><input type="number" min="0" step="0.01" value={invoiceHandoffDraft.amountAlreadyBilled} onChange={(event) => updateInvoiceHandoffDraft("amountAlreadyBilled", event.target.value)} /></Field>
+            <Field label="Amount to invoice"><input type="number" min="0.01" step="0.01" value={invoiceHandoffDraft.amountToInvoice} onChange={(event) => updateInvoiceHandoffDraft("amountToInvoice", event.target.value)} /></Field>
+            <Field label="Retainage"><input type="number" min="0" step="0.01" value={invoiceHandoffDraft.retainageAmount} onChange={(event) => updateInvoiceHandoffDraft("retainageAmount", event.target.value)} /></Field>
+            <Field label="Handoff notes"><textarea rows="3" value={invoiceHandoffDraft.notes} onChange={(event) => updateInvoiceHandoffDraft("notes", event.target.value)} /></Field>
+          </div>
+          <div className="summaryGrid" style={{ marginTop: 14 }}>
+            <div className="summaryCard"><span>Total sale price</span><strong>{money2(totalSalePrice)}</strong></div>
+            <div className="summaryCard"><span>Amount requested</span><strong>{money2(invoiceHandoffDraft.amountToInvoice)}</strong></div>
+          </div>
+          <p className="smallNote">Submitting closes the operational job, places it in Past Completed Jobs, creates Natalia's invoice request, and records the handoff in the audit trail.</p>
+          <div className="actionRow">
+            <button type="button" className="primaryButton" disabled={invoiceHandoffSaving} onClick={submitInvoiceHandoff}>{invoiceHandoffSaving ? "Sending…" : "Close Job & Send to Natalia"}</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderActiveJobsScreen = () => {
     const statusCounts = ACTIVE_JOB_STATUS_OPTIONS.reduce((acc, status) => {
       acc[status] = activeJobs.filter((job) => String(job.status || "") === status).length;
@@ -19254,6 +21934,23 @@ function App() {
         <style>{css}</style>
         <header className="hero">
           <div>
+
+          {jobsSyncStatus === "loading" || jobsSyncStatus === "refreshing" || jobsSyncStatus === "reconnecting" || jobsSyncStatus === "offline" || jobsSyncStatus === "error" ? (
+            <div className="summaryCard" style={{ marginBottom: 16 }}>
+              <strong>
+                {jobsSyncStatus === "offline"
+                  ? "You are offline"
+                  : jobsSyncStatus === "reconnecting"
+                    ? "Reconnecting to shared jobs"
+                    : jobsSyncStatus === "error"
+                      ? "Shared jobs sync error"
+                      : "Loading shared jobs"}
+              </strong>
+              <p style={{ marginBottom: 0, color: "var(--muted)" }}>
+                {jobsSyncStatus === "error" ? (jobsSyncError || "Could not retrieve the latest shared jobs.") : "Active jobs are loaded from shared company workflow records."}
+              </p>
+            </div>
+          ) : null}
             <div className="brandRow">
               <div className="brandMark">
                 <img src={LOGO_SRC} alt="CRT Roofing logo" />
@@ -19429,6 +22126,16 @@ function App() {
                             <button type="button" className="secondaryButton" onClick={(e) => { e.stopPropagation(); openActiveJobIssueModal(job); }}>
                               Report Issue
                             </button>
+                            {canSubmitInvoiceHandoff ? (
+                              <button type="button" className="primaryButton" onClick={(e) => { e.stopPropagation(); openInvoiceHandoff(job); }}>
+                                Complete &amp; Invoice
+                              </button>
+                            ) : null}
+                            {canManageSharedJobData ? (
+                              <button type="button" className="secondaryButton" onClick={(e) => { e.stopPropagation(); handleArchiveActiveJob(job); }}>
+                                Archive
+                              </button>
+                            ) : null}
                           </div>
                         </td>
                       </tr>
@@ -19451,6 +22158,60 @@ function App() {
           </div>
         </Section>
 
+        <Section
+          title={`Archived jobs (${archivedJobs.length})`}
+          subtitle="Company job archive. Restoring a job returns it to its previous workflow section."
+          right={(
+            <button
+              type="button"
+              className="secondaryButton"
+              aria-expanded={!archivedJobsCollapsed}
+              onClick={() => setArchivedJobsCollapsed((value) => !value)}
+            >
+              {archivedJobsCollapsed ? "Expand" : "Minimize"}
+            </button>
+          )}
+        >
+          {archivedJobsCollapsed ? null : archivedJobs.length ? (
+            <div className="activeJobsTableWrap">
+              <table className="activeJobsTable" style={{ minWidth: 760 }}>
+                <thead>
+                  <tr>
+                    <th>Job number</th>
+                    <th>Project name</th>
+                    <th>Customer / property</th>
+                    <th>Previous status</th>
+                    <th>Archived</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {archivedJobs.map((job) => (
+                    <tr key={job.id}>
+                      <td>{job.jobNumber || "—"}</td>
+                      <td>{job.projectName || "Untitled project"}</td>
+                      <td>{job.customer || job.propertyOwner || "—"}</td>
+                      <td>{job.status || job.projectStatus || "—"}</td>
+                      <td>{job.archivedAt ? new Date(job.archivedAt).toLocaleString() : "—"}</td>
+                      <td>
+                        {canManageSharedJobData ? (
+                          <button type="button" className="secondaryButton" onClick={() => handleRestoreArchivedJob(job)}>
+                            Restore
+                          </button>
+                        ) : (
+                          <span>View only</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="emptyState">No archived jobs yet.</p>
+          )}
+        </Section>
+
         <Section title="Status breakdown" subtitle="A quick snapshot of project stage counts.">
           <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", marginTop: 0 }}>
             {ACTIVE_JOB_STATUS_OPTIONS.map((status) => (
@@ -19464,6 +22225,7 @@ function App() {
         </Section>
 
         {renderActiveJobIssueModal()}
+        {renderInvoiceHandoffModal()}
       </div>
     );
   };
@@ -19537,6 +22299,16 @@ function App() {
           <button type="button" className="primaryButton" onClick={() => openActiveJobIssueModal(project)}>
             Report Issue
           </button>
+          {canUpdateDailyJobCostData ? (
+            <button type="button" className="primaryButton" onClick={() => openApprovedJobDetail(project)}>
+              Update Daily Job Cost
+            </button>
+          ) : null}
+          {canSubmitInvoiceHandoff ? (
+            <button type="button" className="primaryButton" onClick={() => openInvoiceHandoff(project)}>
+              Complete Job &amp; Send to Invoicing
+            </button>
+          ) : null}
         </div>
 
         <div className="activeJobHeaderCards">
@@ -19567,22 +22339,118 @@ function App() {
           </div>
         </div>
 
-        <Section title="Project overview" subtitle="Clickable detail page for the active job.">
-          <div className="detailList">
-            <DetailRow label="Customer" value={project.customer || "—"} />
-            <DetailRow label="Property owner" value={project.propertyOwner || "—"} />
-            <DetailRow label="Property manager" value={project.propertyManager || "—"} />
-            <DetailRow label="Project contact" value={project.projectContact || "—"} />
-            <DetailRow label="Project manager" value={project.projectManager || "—"} />
-            <DetailRow label="Field supervisor" value={project.fieldSupervisor || "—"} />
-            <DetailRow label="Foreman" value={project.foreman || "—"} />
-            <DetailRow label="Salesperson" value={project.salesperson || "—"} />
-            <DetailRow label="Office coordinator" value={project.officeCoordinator || "—"} />
-            <DetailRow label="Percent complete" value={`${num(project.percentComplete || 0, 0)}%`} />
-            <DetailRow label="Amount billed" value={money2(project.amountBilled || 0)} />
-            <DetailRow label="Amount collected" value={money2(project.amountCollected || 0)} />
-            <DetailRow label="Remaining contract value" value={money2(project.remainingContractValue || 0)} />
-          </div>
+        <Section
+          title="Project overview"
+          subtitle={activeJobEditMode ? "Update the project information, team assignments, schedule, and financial progress." : "Review the active job details. Use Edit project details to make changes."}
+          right={canManageSharedJobData && !activeJobEditMode ? (
+            <button type="button" className="primaryButton" onClick={() => handleStartActiveJobEdit(project)}>
+              Edit project details
+            </button>
+          ) : null}
+        >
+          {activeJobEditMode && activeJobEditDraft ? (
+            <div className="activeJobEditForm">
+              <div className="formGrid">
+                <Field label="Project name">
+                  <input type="text" value={activeJobEditDraft.projectName} onChange={(e) => handleActiveJobEditFieldChange("projectName", e.target.value)} />
+                </Field>
+                <Field label="Job number">
+                  <input type="text" value={activeJobEditDraft.jobNumber} onChange={(e) => handleActiveJobEditFieldChange("jobNumber", e.target.value)} />
+                </Field>
+                <Field label="Project address">
+                  <input type="text" value={activeJobEditDraft.address} onChange={(e) => handleActiveJobEditFieldChange("address", e.target.value)} />
+                </Field>
+                <Field label="Customer / company">
+                  <input type="text" value={activeJobEditDraft.customer} onChange={(e) => handleActiveJobEditFieldChange("customer", e.target.value)} />
+                </Field>
+                <Field label="Homeowner / property owner">
+                  <input type="text" value={activeJobEditDraft.propertyOwner} onChange={(e) => handleActiveJobEditFieldChange("propertyOwner", e.target.value)} />
+                </Field>
+                <Field label="Property manager">
+                  <input type="text" value={activeJobEditDraft.propertyManager} onChange={(e) => handleActiveJobEditFieldChange("propertyManager", e.target.value)} />
+                </Field>
+                <Field label="Project contact">
+                  <input type="text" value={activeJobEditDraft.projectContact} onChange={(e) => handleActiveJobEditFieldChange("projectContact", e.target.value)} />
+                </Field>
+                <Field label="Project manager">
+                  <input type="text" value={activeJobEditDraft.projectManager} onChange={(e) => handleActiveJobEditFieldChange("projectManager", e.target.value)} />
+                </Field>
+                <Field label="Field supervisor / superintendent">
+                  <input type="text" value={activeJobEditDraft.fieldSupervisor} onChange={(e) => handleActiveJobEditFieldChange("fieldSupervisor", e.target.value)} />
+                </Field>
+                <Field label="Foreman">
+                  <input type="text" value={activeJobEditDraft.foreman} onChange={(e) => handleActiveJobEditFieldChange("foreman", e.target.value)} />
+                </Field>
+                <Field label="Salesperson">
+                  <input type="text" value={activeJobEditDraft.salesperson} onChange={(e) => handleActiveJobEditFieldChange("salesperson", e.target.value)} />
+                </Field>
+                <Field label="Office coordinator">
+                  <input type="text" value={activeJobEditDraft.officeCoordinator} onChange={(e) => handleActiveJobEditFieldChange("officeCoordinator", e.target.value)} />
+                </Field>
+                <Field label="Status">
+                  <select value={activeJobEditDraft.status} onChange={(e) => handleActiveJobEditFieldChange("status", e.target.value)}>
+                    {!ACTIVE_JOB_STATUS_OPTIONS.includes(activeJobEditDraft.status) ? <option value={activeJobEditDraft.status}>{activeJobEditDraft.status}</option> : null}
+                    {ACTIVE_JOB_STATUS_OPTIONS.filter((status) => !["Completed", "Closed"].includes(status)).map((status) => <option key={status} value={status}>{status}</option>)}
+                  </select>
+                </Field>
+                <Field label="Current phase">
+                  <input type="text" value={activeJobEditDraft.currentPhase} onChange={(e) => handleActiveJobEditFieldChange("currentPhase", e.target.value)} />
+                </Field>
+                <Field label="Risk level">
+                  <select value={activeJobEditDraft.riskLevel} onChange={(e) => handleActiveJobEditFieldChange("riskLevel", e.target.value)}>
+                    {ACTIVE_JOB_RISK_LEVELS.map((riskLevel) => <option key={riskLevel} value={riskLevel}>{riskLevel}</option>)}
+                  </select>
+                </Field>
+                <Field label="Risk notes">
+                  <input type="text" value={activeJobEditDraft.riskReason} onChange={(e) => handleActiveJobEditFieldChange("riskReason", e.target.value)} />
+                </Field>
+                <Field label="Start date">
+                  <input type="date" value={activeJobEditDraft.startDate} onChange={(e) => handleActiveJobEditFieldChange("startDate", e.target.value)} />
+                </Field>
+                <Field label="Expected completion date">
+                  <input type="date" value={activeJobEditDraft.expectedCompletionDate} onChange={(e) => handleActiveJobEditFieldChange("expectedCompletionDate", e.target.value)} />
+                </Field>
+                <Field label="Contract value">
+                  <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={activeJobEditDraft.contractAmount} onChange={(e) => handleActiveJobEditFieldChange("contractAmount", toNumber(e.target.value))} />
+                </Field>
+                <Field label="Percent complete">
+                  <input type="number" onWheel={handleNumberInputWheel} min="0" max="100" step="1" value={activeJobEditDraft.percentComplete} onChange={(e) => handleActiveJobEditFieldChange("percentComplete", toNumber(e.target.value))} />
+                </Field>
+                <Field label="Amount billed">
+                  <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={activeJobEditDraft.amountBilled} onChange={(e) => handleActiveJobEditFieldChange("amountBilled", toNumber(e.target.value))} />
+                </Field>
+                <Field label="Amount collected">
+                  <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={activeJobEditDraft.amountCollected} onChange={(e) => handleActiveJobEditFieldChange("amountCollected", toNumber(e.target.value))} />
+                </Field>
+              </div>
+              <div className="summaryCard activeJobEditRemaining">
+                <span>Remaining contract value</span>
+                <strong>{money2(Math.max(0, toNumber(activeJobEditDraft.contractAmount) - toNumber(activeJobEditDraft.amountBilled)))}</strong>
+                <p>Calculated from contract value minus amount billed.</p>
+              </div>
+              <div className="actionRow">
+                <button type="button" className="primaryButton" onClick={() => handleSaveActiveJobEdit(project)}>Save project changes</button>
+                <button type="button" className="secondaryButton" onClick={handleCancelActiveJobEdit}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div className="detailList">
+              <DetailRow label="Project address" value={project.projectAddress || project.jobAddress || project.address || "—"} />
+              <DetailRow label="Customer" value={project.customerName || project.customer || "—"} />
+              <DetailRow label="Property owner" value={project.propertyOwner || "—"} />
+              <DetailRow label="Property manager" value={project.propertyManager || "—"} />
+              <DetailRow label="Project contact" value={project.projectContact || "—"} />
+              <DetailRow label="Project manager" value={project.projectManager || "—"} />
+              <DetailRow label="Field supervisor / superintendent" value={project.fieldSupervisor || "—"} />
+              <DetailRow label="Foreman" value={project.foreman || "—"} />
+              <DetailRow label="Salesperson" value={project.salesperson || "—"} />
+              <DetailRow label="Office coordinator" value={project.officeCoordinator || "—"} />
+              <DetailRow label="Percent complete" value={`${num(project.percentComplete || 0, 0)}%`} />
+              <DetailRow label="Amount billed" value={money2(project.amountBilled || 0)} />
+              <DetailRow label="Amount collected" value={money2(project.amountCollected || 0)} />
+              <DetailRow label="Remaining contract value" value={money2(project.remainingContractValue ?? Math.max(0, toNumber(project.contractAmount) - toNumber(project.amountBilled)))} />
+            </div>
+          )}
         </Section>
 
         <div className="fieldOpsReviewColumns">
@@ -19739,6 +22607,7 @@ function App() {
         </div>
 
         {renderActiveJobIssueModal()}
+        {renderInvoiceHandoffModal()}
       </div>
     );
   };
@@ -20494,20 +23363,19 @@ function App() {
   };
 
   const renderCfoDashboardScreen = () => {
+    const liquidCashIsRevealed = liquidCashAccess.phase === "revealed" && liquidCashAccess.secondsRemaining > 0;
+    const liquidCashCountdown = `${Math.floor(liquidCashAccess.secondsRemaining / 60)}:${String(liquidCashAccess.secondsRemaining % 60).padStart(2, "0")}`;
     const liquidCashEntries = cfoLiquidCashEntries.filter((entry) => String(entry.bankAccountName || "").trim());
     const liquidCashTotal = liquidCashEntries.reduce((sum, entry) => {
       if (String(entry.includedInTotal || "Yes").toLowerCase() === "no") return sum;
       return sum + Math.max(0, toNumber(entry.currentLiquidBalance, 0));
     }, 0);
-    const liquidCashIncludedCount = liquidCashEntries.filter((entry) => String(entry.includedInTotal || "Yes").toLowerCase() !== "no").length;
     const receivableEntries = cfoReceivableEntries.filter((entry) => String(entry.customerName || "").trim());
-    const receivableTotal = receivableEntries.reduce((sum, entry) => sum + Math.max(0, toNumber(entry.amountOwed, 0)), 0);
-    const receivablePastDueTotal = receivableEntries.reduce((sum, entry) => {
-      const periodEnd = String(entry.periodToDate || "").trim();
-      const status = String(entry.paymentStatus || "").toLowerCase();
-      const isPastDue = status === "overdue" || (periodEnd && periodEnd < new Date().toISOString().slice(0, 10));
-      return isPastDue ? sum + Math.max(0, toNumber(entry.amountOwed, 0)) : sum;
-    }, 0);
+    const receivablePaymentTotals = calculateReceivablePaymentTotals(receivableEntries);
+    const receivableTotal = receivablePaymentTotals.accountsReceivable;
+    const receivablePastDueTotal = receivablePaymentTotals.pastDue;
+    const receivablePaidTotal = receivablePaymentTotals.amountPaid;
+    const visibleReceivableEntries = filterReceivablesByPaymentView(receivableEntries, cfoDashboardFilters.currentOverdue);
     const manualCardConfigs = {
       proposalsSent: {
         nameLabel: "Proposal / job number",
@@ -20553,7 +23421,9 @@ function App() {
         helperText: "Enter the payable amount owed to this payee.",
       },
     };
-    const getManualCardEntries = (cardKey) => (Array.isArray(cfoManualEntriesByCard[cardKey]) ? cfoManualEntriesByCard[cardKey] : []);
+    const getManualCardEntries = (cardKey) => cardKey === "approvedJobs"
+      ? cfoApprovedJobsLedger.entries
+      : (Array.isArray(cfoManualEntriesByCard[cardKey]) ? cfoManualEntriesByCard[cardKey] : []);
     const getManualCardTotal = (cardKey) =>
       getManualCardEntries(cardKey).reduce((sum, entry) => sum + Math.max(0, toNumber(entry.amount, 0)), 0);
     const getManualCardCount = (cardKey) =>
@@ -20563,15 +23433,84 @@ function App() {
       }, 0);
     const getManualCardLastUpdated = (cardKey) => {
       const entries = getManualCardEntries(cardKey);
-      return entries.length ? "Updated locally" : "Not connected yet";
+      if (!entries.length) return "No records";
+      if (cfoSyncStatus === "saving") return "Saving to company data";
+      if (cfoSyncStatus === "saved") return "Synced to company data";
+      if (cfoSyncStatus === "error") return "Sync error";
+      return "Draft";
     };
-    const supplierPayableCurrentEntries = getManualCardEntries("supplierTotalsPayable");
-    const supplierPayableOverdueEntries = getManualCardEntries("supplierOverdue");
-    const supplierPayableCurrentTotal = getManualCardTotal("supplierTotalsPayable");
-    const supplierPayableOverdueTotal = getManualCardTotal("supplierOverdue");
+    const supplierPayableEntries = [
+      ...getManualCardEntries("supplierTotalsPayable").map((entry) => ({ ...entry, sourceCardKey: "supplierTotalsPayable" })),
+      ...getManualCardEntries("supplierOverdue").map((entry) => ({ ...entry, sourceCardKey: "supplierOverdue" })),
+    ];
+    const supplierPaymentTotals = calculateSupplierPaymentTotals(supplierPayableEntries);
+    const supplierAmountPaidTotal = supplierPaymentTotals.amountPaid + supplierPaymentHistory.reduce(
+      (sum, payment) => sum + Math.max(0, toNumber(payment.amount_paid, 0)),
+      0,
+    );
+    const visibleSupplierPayableEntries = filterSupplierPayablesByPaymentView(supplierPayableEntries, cfoDashboardFilters.currentOverdue);
     const supplierPayableLastUpdated =
-      supplierPayableCurrentEntries.length || supplierPayableOverdueEntries.length ? "Updated locally" : "Not connected yet";
-    const deleteLiquidCashEntry = (entryId) => {
+      supplierPayableEntries.length
+        ? cfoSyncStatus === "saved"
+          ? "Synced to company data"
+          : cfoSyncStatus === "saving"
+            ? "Saving to company data"
+            : cfoSyncStatus === "error"
+              ? "Sync error"
+              : "Draft"
+        : "No records";
+    const hideLiquidCashNow = async () => {
+      const revealToken = liquidCashAccess.revealToken;
+      setCfoLiquidCashEntries([]);
+      setCfoLiquidCashDraft(createBlankCfoLiquidCashEntry());
+      setCfoLiquidCashEditingId("");
+      setLiquidCashCode("");
+      setLiquidCashAccess((current) => ({ ...current, phase: "hidden", revealToken: "", revealExpiresAt: "", secondsRemaining: 0, error: "" }));
+      if (revealToken) await invokeLiquidCashFunction("liquid-cash-reveal", { action: "hide", revealToken });
+    };
+    const requestLiquidCashCode = async () => {
+      setLiquidCashAccess((current) => ({ ...current, phase: "requesting", error: "" }));
+      const { data, error } = await invokeLiquidCashFunction("request-liquid-cash-code");
+      if (error) {
+        setLiquidCashAccess((current) => ({ ...current, phase: "hidden", error: error.message }));
+        return;
+      }
+      setLiquidCashCode("");
+      setLiquidCashAccess((current) => ({ ...current, phase: "code_sent", challengeId: data.challengeId, challengeExpiresAt: data.expiresAt, maskedEmail: data.email, attemptsRemaining: Number(data.attemptsAllowed || 5), error: "" }));
+    };
+    const verifyLiquidCashCode = async () => {
+      if (!/^[0-9]{4}$/.test(liquidCashCode)) {
+        setLiquidCashAccess((current) => ({ ...current, error: "Enter the 4-digit code from your email." }));
+        return;
+      }
+      setLiquidCashAccess((current) => ({ ...current, phase: "verifying", error: "" }));
+      const verification = await invokeLiquidCashFunction("verify-liquid-cash-code", { challengeId: liquidCashAccess.challengeId, code: liquidCashCode });
+      if (verification.error) {
+        const attemptsRemaining = Number(verification.data?.attemptsRemaining ?? liquidCashAccess.attemptsRemaining);
+        const terminal = ["expired", "exhausted", "already_used", "superseded", "email_failed"].includes(String(verification.data?.outcome || ""));
+        setLiquidCashAccess((current) => ({ ...current, phase: terminal ? "hidden" : "code_sent", attemptsRemaining, error: verification.error.message }));
+        return;
+      }
+      const revealed = await invokeLiquidCashFunction("liquid-cash-reveal", { action: "reveal", revealToken: verification.data.revealToken });
+      if (revealed.error) {
+        setLiquidCashAccess((current) => ({ ...current, phase: "hidden", error: revealed.error.message }));
+        return;
+      }
+      const revealExpiresAt = revealed.data.expiresAt || verification.data.expiresAt;
+      setCfoLiquidCashEntries((revealed.data.entries || []).map((entry) => normalizeCfoLiquidCashEntry({ ...entry, currentLiquidBalance: money2(toNumber(entry.currentLiquidBalance, 0)) })));
+      setLiquidCashCode("");
+      setLiquidCashAccess((current) => ({ ...current, phase: "revealed", revealToken: verification.data.revealToken, revealExpiresAt, secondsRemaining: getRevealSecondsRemaining(revealExpiresAt), error: "" }));
+    };
+    const deleteLiquidCashEntry = async (entryId) => {
+      if (!liquidCashIsRevealed || !liquidCashAccess.revealToken) return;
+      setLiquidCashSaving(true);
+      const result = await invokeLiquidCashFunction("liquid-cash-reveal", { action: "archive", revealToken: liquidCashAccess.revealToken });
+      setLiquidCashSaving(false);
+      if (result.error) {
+        setSessionMessageType("error");
+        setSessionMessage(result.error.message);
+        return;
+      }
       setCfoLiquidCashEntries((current) => current.filter((entry) => entry.id !== entryId));
       if (cfoLiquidCashEditingId === entryId) {
         setCfoLiquidCashEditingId("");
@@ -20586,6 +23525,10 @@ function App() {
       setCfoLiquidCashEditingId(String(entry.id));
     };
     const deleteReceivableEntry = (entryId) => {
+      setCfoDeletedSourceRecordUids((current) => [
+        ...current,
+        buildCfoSourceRecordUid("receivable", "waitingOnPayment", entryId),
+      ]);
       setCfoReceivableEntries((current) => current.filter((entry) => entry.id !== entryId));
       if (cfoReceivableEditingId === entryId) {
         setCfoReceivableEditingId("");
@@ -20598,6 +23541,104 @@ function App() {
         ...normalizeCfoReceivableEntry(entry),
       });
       setCfoReceivableEditingId(String(entry.id));
+    };
+    const markReceivableEntryPaid = (entry) => {
+      const customerName = String(entry?.customerName || "this customer").trim() || "this customer";
+      if (!window.confirm(`Mark ${customerName} as paid and move this payment to Paid history?`)) return;
+
+      setCfoReceivableEntries((current) => current.map((item) => (
+        item.id === entry.id
+          ? normalizeCfoReceivableEntry({ ...item, paymentStatus: "Paid" })
+          : item
+      )));
+      if (cfoReceivableEditingId === entry.id) {
+        setCfoReceivableEditingId("");
+        setCfoReceivableDraft(createBlankCfoReceivableEntry());
+      }
+      setCfoReceivablePaymentMessage(`${customerName} was marked paid and moved to Paid history.`);
+      setSessionMessageType("success");
+      setSessionMessage(`${customerName} was marked paid.`);
+    };
+    const openSupplierPaymentDialog = (entry) => {
+      setCfoSupplierPaymentEntry(entry);
+      setCfoSupplierPaymentMessage("");
+      setCfoSupplierPaymentDraft({
+        ...createBlankSupplierPaymentDraft(),
+        paymentDate: new Date().toISOString().slice(0, 10),
+        amountPaid: money2(toNumber(entry.amount, 0)),
+      });
+    };
+    const recordSupplierPayment = async () => {
+      const entry = cfoSupplierPaymentEntry;
+      if (!entry) return;
+      const supplierName = String(entry.recordName || "this supplier invoice").trim() || "this supplier invoice";
+      const outstandingBalance = Math.max(0, toNumber(entry.amount, 0));
+      const paymentAmount = cfoSupplierPaymentDraft.paymentKind === "Full"
+        ? outstandingBalance
+        : toNumber(cfoSupplierPaymentDraft.amountPaid, 0);
+      if (!cfoSupplierPaymentDraft.paymentDate) {
+        setCfoSupplierPaymentMessage("Please enter the date the payment was made.");
+        return;
+      }
+      if (cfoSupplierPaymentDraft.paymentMethod === "Check" && !cfoSupplierPaymentDraft.checkNumber.trim()) {
+        setCfoSupplierPaymentMessage("Please enter the check number.");
+        return;
+      }
+      if (paymentAmount <= 0 || paymentAmount > outstandingBalance) {
+        setCfoSupplierPaymentMessage("Enter a payment amount greater than zero and no more than the outstanding balance.");
+        return;
+      }
+      if (cfoSupplierPaymentDraft.paymentKind === "Partial" && paymentAmount >= outstandingBalance) {
+        setCfoSupplierPaymentMessage("Choose Full payment when paying the entire outstanding balance.");
+        return;
+      }
+
+      setCfoSupplierPaymentSavingId(String(entry.id));
+      setCfoSupplierPaymentMessage("");
+      const cardKey = entry.sourceCardKey === "supplierOverdue" ? "supplierOverdue" : "supplierTotalsPayable";
+      const sourceRecordUid = buildCfoSourceRecordUid("manual", cardKey, entry.id);
+      const { data, error } = await supabase
+        .rpc("record_supplier_payment", {
+          p_source_record_uid: sourceRecordUid,
+          p_payment_date: cfoSupplierPaymentDraft.paymentDate,
+          p_payment_method: cfoSupplierPaymentDraft.paymentMethod,
+          p_payment_kind: cfoSupplierPaymentDraft.paymentKind,
+          p_amount_paid: paymentAmount,
+          p_check_number: cfoSupplierPaymentDraft.checkNumber.trim(),
+          p_note: cfoSupplierPaymentDraft.note.trim(),
+        });
+      setCfoSupplierPaymentSavingId("");
+
+      if (error || !data?.payable || !data?.payment) {
+        const message = error?.message || "Unable to apply the supplier payment.";
+        setCfoSupplierPaymentMessage(message);
+        setSessionMessageType("error");
+        setSessionMessage(message);
+        return;
+      }
+
+      setCfoManualEntriesByCard((current) => ({
+        ...current,
+        [cardKey]: (current[cardKey] || []).map((item) => (
+          item.id === entry.id
+            ? normalizeCfoManualEntry({
+                ...item,
+                amount: money2(toNumber(data.payable.amount, 0)),
+                status: data.payable.status,
+                rowVersion: data.payable.row_version,
+              }, cardKey)
+            : item
+        )),
+      }));
+      setSupplierPaymentHistory((current) => [data.payment, ...current.filter((payment) => payment.id !== data.payment.id)]);
+      setCfoSupplierPaymentEntry(null);
+      setCfoSupplierPaymentDraft(createBlankSupplierPaymentDraft());
+      const paymentDescription = cfoSupplierPaymentDraft.paymentKind === "Partial"
+        ? `${money2(paymentAmount)} partial payment applied; ${money2(toNumber(data.payable.amount, 0))} remains.`
+        : `${money2(paymentAmount)} paid in full.`;
+      setCfoSupplierPaymentMessage(`${supplierName}: ${paymentDescription} The payment was logged in Administration.`);
+      setSessionMessageType("success");
+      setSessionMessage(`${supplierName}: ${paymentDescription}`);
     };
     const getManualCardDetailSummary = (cardKey) => {
       const total = getManualCardTotal(cardKey);
@@ -20622,7 +23663,21 @@ function App() {
         },
       }));
     };
-    const deleteManualCardEntry = (cardKey, entryId) => {
+    const deleteManualCardEntry = async (cardKey, entryId) => {
+      if (cardKey === "approvedJobs") {
+        const entry = (cfoManualEntriesByCard[cardKey] || []).find((item) => item.id === entryId);
+        if (entry) {
+          const archivedJob = { ...buildCfoApprovedJobSharedJob(entry), workflowStatus: "archived" };
+          const archived = await upsertSharedJobToSupabase(archivedJob, authUser.key, authUser.id || authUser.key);
+          if (archived.error) {
+            setSessionMessageType("error");
+            setSessionMessage(`Could not remove the approved job from the dashboard: ${archived.error.message || archived.error}`);
+            return;
+          }
+          setCompletedJobs((current) => current.filter((job) => job.sourceRecordUid !== archivedJob.sourceRecordUid));
+        }
+      }
+      setCfoDeletedSourceRecordUids((current) => [...current, buildCfoSourceRecordUid("manual", cardKey, entryId)]);
       setCfoManualEntriesByCard((current) => ({
         ...current,
         [cardKey]: (current[cardKey] || []).filter((entry) => entry.id !== entryId),
@@ -20651,7 +23706,25 @@ function App() {
         [cardKey]: String(entry.id),
       }));
     };
-    const addManualCardEntry = (cardKey) => {
+    const editSupplierPayableEntry = (entry) => {
+      const cardKey = entry.sourceCardKey === "supplierOverdue" ? "supplierOverdue" : "supplierTotalsPayable";
+      setCfoManualDraftsByCard((current) => ({
+        ...current,
+        supplierTotalsPayable: createBlankCfoManualEntry("supplierTotalsPayable"),
+        supplierOverdue: createBlankCfoManualEntry("supplierOverdue"),
+        [cardKey]: {
+          ...createBlankCfoManualEntry(cardKey),
+          ...normalizeCfoManualEntry(entry, cardKey),
+        },
+      }));
+      setCfoManualEditingByCard((current) => ({
+        ...current,
+        supplierTotalsPayable: "",
+        supplierOverdue: "",
+        [cardKey]: String(entry.id),
+      }));
+    };
+    const addManualCardEntry = async (cardKey) => {
       const config = manualCardConfigs[cardKey];
       const draft = cfoManualDraftsByCard[cardKey] || createBlankCfoManualEntry(cardKey);
       const recordName = String(draft.recordName || "").trim();
@@ -20680,6 +23753,23 @@ function App() {
         },
         cardKey,
       );
+      if (cardKey === "approvedJobs") {
+        const sharedJob = buildCfoApprovedJobSharedJob(nextEntry);
+        const sharedResult = await upsertSharedJobToSupabase(sharedJob, authUser.key, authUser.id || authUser.key);
+        if (sharedResult.error) {
+          setSessionMessageType("error");
+          setSessionMessage(`Could not update the dashboard approved jobs: ${sharedResult.error.message || sharedResult.error}`);
+          return;
+        }
+        const persistedRow = Array.isArray(sharedResult.data) ? sharedResult.data[0] : null;
+        const normalizedSharedJob = persistedRow
+          ? splitSharedJobsByWorkflow([persistedRow]).approvedJobs[0] || sharedJob
+          : sharedJob;
+        setCompletedJobs((current) => [
+          normalizedSharedJob,
+          ...current.filter((job) => job.sourceRecordUid !== sharedJob.sourceRecordUid),
+        ]);
+      }
       setCfoManualEntriesByCard((current) => {
         const existing = current[cardKey] || [];
         if (editId) {
@@ -20724,23 +23814,38 @@ function App() {
         </td>
       </tr>
     );
+    const renderApprovedJobLedgerRow = (entry) => (
+      <tr key={entry.id}>
+        <td>{entry.recordName || "—"}</td>
+        <td>{entry.recordDate || "—"}</td>
+        <td>{money2(toNumber(entry.amount, 0))}</td>
+        <td>—</td>
+        <td>{entry.status || "—"}</td>
+        <td>{entry.note || "—"}</td>
+        <td>
+          <button type="button" className="secondaryButton" onClick={() => openApprovedJobDetail(entry.sharedJob)}>
+            Open Job
+          </button>
+        </td>
+      </tr>
+    );
     const cfoCards = [
       {
         key: "liquidCash",
         label: "Liquid Cash",
-        primaryValue: money(liquidCashTotal),
-        secondaryValue: liquidCashEntries.length
-          ? `${liquidCashIncludedCount} account${liquidCashIncludedCount === 1 ? "" : "s"} included`
-          : "Total liquid cash currently available in company bank accounts",
-        lastUpdated: liquidCashEntries.length ? "Updated locally" : "Not connected yet",
+        primaryValue: liquidCashIsRevealed ? (liquidCashEntries.length ? money(liquidCashTotal) : "$0.00") : "••••••",
+        secondaryValue: liquidCashIsRevealed ? `${liquidCashCountdown} remaining` : "Email verification required",
+        lastUpdated: liquidCashIsRevealed ? `Automatically hides in ${liquidCashCountdown}` : "Protected server-side",
         detailTitle: "Liquid Cash",
-        detailSubtitle: "Bank and operating cash only. Accounts receivable and unused credit are excluded.",
+        detailSubtitle: liquidCashIsRevealed
+          ? "Bank and operating cash only. This reveal automatically hides at the server expiry."
+          : "The balance stays on the server until a CFO or admin verifies the emailed code.",
         detailSummary: [
-          { label: "Total liquid cash", value: money(liquidCashTotal) },
-          { label: "Accounts included", value: num(liquidCashIncludedCount, 0) },
+          { label: "Total liquid cash", value: liquidCashIsRevealed ? (liquidCashEntries.length ? money(liquidCashTotal) : "$0.00") : "Hidden" },
+          { label: "Reveal status", value: liquidCashIsRevealed ? liquidCashCountdown : "Locked" },
         ],
         columns: ["Bank/account name", "Current liquid balance", "Last updated date", "Included in total?", "Total liquid cash", "Actions"],
-        emptyState: liquidCashEntries.length ? "" : "No company bank accounts are connected yet.",
+        emptyState: liquidCashIsRevealed ? "No company bank accounts are connected yet." : "Liquid cash is hidden and was not included in this client payload.",
       },
       {
         key: "approvedJobs",
@@ -20760,12 +23865,21 @@ function App() {
         label: "Waiting on Payment",
         primaryValue: money(receivableTotal),
         secondaryValue: receivableEntries.length ? `${money(receivablePastDueTotal)} overdue` : "$0 overdue",
-        lastUpdated: receivableEntries.length ? "Updated locally" : "Not connected yet",
+        lastUpdated: receivableEntries.length
+          ? cfoSyncStatus === "saved"
+            ? "Synced to company data"
+            : cfoSyncStatus === "saving"
+              ? "Saving to company data"
+              : cfoSyncStatus === "error"
+                ? "Sync error"
+                : "Draft"
+          : "No records",
         detailTitle: "Waiting on Payment",
         detailSubtitle: "Open customer balances currently unpaid.",
         detailSummary: [
           { label: "Accounts receivable", value: money(receivableTotal) },
           { label: "Past due", value: money(receivablePastDueTotal) },
+          { label: "Amount paid", value: money(receivablePaidTotal) },
         ],
         columns: ["Customer", "Date from", "Date to", "Amount owed", "Payment status", "Note", "Actions"],
         emptyState: receivableEntries.length ? "" : "No accounts receivable records are connected yet.",
@@ -20786,20 +23900,19 @@ function App() {
       {
         key: "supplierTotalsPayable",
         label: "Supplier Totals Payable",
-        primaryValue: money(supplierPayableCurrentTotal),
-        secondaryValue: `${money(supplierPayableOverdueTotal)} overdue`,
+        primaryValue: money(supplierPaymentTotals.totalPayable),
+        secondaryValue: `${money(supplierPaymentTotals.overdue)} overdue`,
         lastUpdated: supplierPayableLastUpdated,
         detailTitle: "Supplier Totals Payable",
-        detailSubtitle: "Current supplier totals and overdue balances shown in one place.",
+        detailSubtitle: "Waiting, overdue, and paid supplier invoices shown in one place.",
         detailSummary: [
-          { label: "Current total", value: money(supplierPayableCurrentTotal) },
-          { label: "Overdue total", value: money(supplierPayableOverdueTotal) },
+          { label: "Total payable", value: money(supplierPaymentTotals.totalPayable) },
+          { label: "Overdue total", value: money(supplierPaymentTotals.overdue) },
+          { label: "Amount paid", value: money(supplierAmountPaidTotal) },
         ],
         columns: ["Supplier / invoice", "Record date", "Amount payable", "Status", "Note", "Actions"],
         emptyState:
-          supplierPayableCurrentEntries.length || supplierPayableOverdueEntries.length
-            ? ""
-            : "No supplier payable records are connected yet.",
+          supplierPayableEntries.length ? "" : "No supplier payable records are connected yet.",
         entryKey: "supplierTotalsPayable",
       },
       {
@@ -20818,15 +23931,66 @@ function App() {
     ];
 
     const selectedCard = cfoCards.find((card) => card.key === selectedCfoCard) || null;
-    const supplierPayablesCardKey = cfoSupplierPayablesView === "overdue" ? "supplierOverdue" : "supplierTotalsPayable";
-    const selectedSupplierPayablesConfig = manualCardConfigs[supplierPayablesCardKey];
-    const selectedSupplierPayablesEntries = getManualCardEntries(supplierPayablesCardKey);
+    const cfoSyncStatusLabel =
+      cfoSyncStatus === "saving"
+        ? "Saving"
+        : cfoSyncStatus === "saved"
+          ? "Saved"
+          : cfoSyncStatus === "error"
+            ? "Error"
+            : cfoSyncStatus === "loading"
+              ? "Loading"
+              : "Idle";
+    const cfoSyncStatusDetail = cfoSyncStatus === "error" && cfoSyncError ? cfoSyncError : cfoSyncStatusLabel;
+    const estimatorSettingsStatusLabel =
+      estimatorSettingsSyncStatus === "saving"
+        ? "Saving"
+        : estimatorSettingsSyncStatus === "saved"
+          ? "Saved"
+          : estimatorSettingsSyncStatus === "error"
+            ? "Error"
+            : estimatorSettingsSyncStatus === "loading"
+              ? "Loading"
+              : "Idle";
+    const supplierPayablesCardKey = cfoManualEditingByCard.supplierOverdue ? "supplierOverdue" : "supplierTotalsPayable";
+    const selectedSupplierPayablesConfig = manualCardConfigs.supplierTotalsPayable;
+    const selectedCardRecordCount = selectedCard
+      ? selectedCard.key === "liquidCash"
+        ? liquidCashEntries.length
+        : selectedCard.key === "waitingOnPayment"
+          ? visibleReceivableEntries.length
+          : selectedCard.key === "supplierTotalsPayable"
+            ? visibleSupplierPayableEntries.length
+            : getManualCardEntries(selectedCard.key).length
+      : 0;
 
     const updateCfoFilter = (key, value) => {
       setCfoDashboardFilters((current) => ({
         ...current,
         [key]: value,
       }));
+    };
+
+    const openReceivablePaymentDiscussion = async (entry) => {
+      if (!entry?.id || cfoPaymentDiscussionOpeningId) return;
+      setCfoPaymentDiscussionOpeningId(entry.id);
+      setCfoPaymentDiscussionError("");
+      const sourceRecordUid = buildCfoSourceRecordUid("receivable", "waitingOnPayment", entry.id);
+      const { data, error } = await supabase
+        .rpc("get_or_create_receivable_payment_followup", { p_source_record_uid: sourceRecordUid })
+        .single();
+
+      if (error || !data?.id) {
+        setCfoPaymentDiscussionError(error?.message || "Unable to open the payment discussion.");
+        setCfoPaymentDiscussionOpeningId("");
+        return;
+      }
+
+      setWorkHubInitialTaskId(data.id);
+      setCfoPaymentDiscussionOpeningId("");
+      setSelectedCfoCard("");
+      setActiveTemplate("workHub");
+      if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
     };
 
     const renderCfoDetailModal = () => {
@@ -20844,8 +24008,11 @@ function App() {
                 <p>{selectedCard.detailSubtitle}</p>
                 <div className="cfoDetailMeta">
                   <span className="cfoDetailChip">Last updated: {selectedCard.lastUpdated}</span>
-                  <span className="cfoDetailChip">Records connected: 0</span>
-                  <span className="cfoDetailChip">Data tables not connected yet</span>
+                  <span className="cfoDetailChip">Records connected: {selectedCardRecordCount}</span>
+                  <span className="cfoDetailChip">Company finance sync: {cfoSyncStatusDetail}</span>
+                  {cfoSyncStatus === "error" && cfoSyncError ? (
+                    <span className="cfoDetailChip">Save error: {cfoSyncError}</span>
+                  ) : null}
                 </div>
               </div>
               <div className="actionRow">
@@ -20864,7 +24031,55 @@ function App() {
               ))}
             </div>
 
-            {selectedCard.key === "liquidCash" ? (
+            {selectedCard.key === "liquidCash" && !liquidCashIsRevealed ? (
+              <Section title="Liquid cash is locked" subtitle="The amount has not been downloaded to this browser.">
+                <div className="detailList">
+                  <DetailRow label="Access" value="CFO / admin only" note="Your signed-in role is checked again on the server." />
+                  <DetailRow label="Code lifetime" value="5 minutes" note="A maximum of five verification attempts is allowed." />
+                  <DetailRow label="Reveal lifetime" value="60 seconds" note="The server rejects the reveal token at expiry and the screen automatically hides it." />
+                </div>
+                {liquidCashAccess.phase === "code_sent" || liquidCashAccess.phase === "verifying" ? (
+                  <div className="formGrid" style={{ marginTop: 16 }}>
+                    <Field label={`4-digit code sent to ${liquidCashAccess.maskedEmail || "your email"}`}>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={4}
+                        value={liquidCashCode}
+                        onChange={(event) => setLiquidCashCode(event.target.value.replace(/\D/g, "").slice(0, 4))}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") verifyLiquidCashCode();
+                        }}
+                        placeholder="0000"
+                      />
+                    </Field>
+                    <div className="actionRow" style={{ alignItems: "end" }}>
+                      <button type="button" className="primaryButton" onClick={verifyLiquidCashCode} disabled={liquidCashAccess.phase === "verifying"}>
+                        {liquidCashAccess.phase === "verifying" ? "Verifying…" : "Verify and reveal"}
+                      </button>
+                      <button type="button" className="secondaryButton" onClick={requestLiquidCashCode} disabled={liquidCashAccess.phase === "verifying"}>
+                        Send a new code
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="actionRow" style={{ marginTop: 16 }}>
+                    <button type="button" className="primaryButton" onClick={requestLiquidCashCode} disabled={liquidCashAccess.phase === "requesting"}>
+                      {liquidCashAccess.phase === "requesting" ? "Sending code…" : "Email me a 4-digit code"}
+                    </button>
+                  </div>
+                )}
+                {liquidCashAccess.phase === "code_sent" ? (
+                  <p className="smallNote" style={{ marginTop: 10 }}>{liquidCashAccess.attemptsRemaining} verification attempt{liquidCashAccess.attemptsRemaining === 1 ? "" : "s"} remaining.</p>
+                ) : null}
+                {liquidCashAccess.error ? <p className="smallNote" style={{ marginTop: 10, color: "var(--bad)" }}>{liquidCashAccess.error}</p> : null}
+              </Section>
+            ) : selectedCard.key === "liquidCash" ? (
+              <>
+              <Section title={`Liquid cash visible for ${liquidCashCountdown}`} subtitle="This countdown uses the server-issued expiry time.">
+                <div className="actionRow"><button type="button" className="secondaryButton" onClick={hideLiquidCashNow}>Hide now</button></div>
+              </Section>
               <Section
                 title="Add bank account"
                 subtitle="Type dollar amounts directly here. Dollar signs and commas are allowed."
@@ -20928,7 +24143,8 @@ function App() {
                   <button
                     type="button"
                     className="primaryButton"
-                    onClick={() => {
+                    disabled={liquidCashSaving}
+                    onClick={async () => {
                       const bankAccountName = cfoLiquidCashDraft.bankAccountName.trim();
                       if (!bankAccountName) {
                         setSessionMessageType("error");
@@ -20941,19 +24157,26 @@ function App() {
                         currentLiquidBalance: money2(toNumber(cfoLiquidCashDraft.currentLiquidBalance, 0)),
                         lastUpdatedDate: cfoLiquidCashDraft.lastUpdatedDate || new Date().toISOString().slice(0, 10),
                       });
-                      setCfoLiquidCashEntries((current) => {
-                        if (cfoLiquidCashEditingId) {
-                          return current.map((entry) => (entry.id === cfoLiquidCashEditingId ? nextEntry : entry));
-                        }
-                        return [...current, nextEntry];
+                      setLiquidCashSaving(true);
+                      const saved = await invokeLiquidCashFunction("liquid-cash-reveal", {
+                        action: "save",
+                        revealToken: liquidCashAccess.revealToken,
+                        entry: nextEntry,
                       });
+                      setLiquidCashSaving(false);
+                      if (saved.error) {
+                        setSessionMessageType("error");
+                        setSessionMessage(saved.error.message);
+                        return;
+                      }
+                      setCfoLiquidCashEntries((saved.data.entries || []).map((entry) => normalizeCfoLiquidCashEntry({ ...entry, currentLiquidBalance: money2(toNumber(entry.currentLiquidBalance, 0)) })));
                       setCfoLiquidCashDraft(createBlankCfoLiquidCashEntry());
                       setCfoLiquidCashEditingId("");
                       setSessionMessageType("success");
                       setSessionMessage(`${cfoLiquidCashEditingId ? "Updated" : "Added"} ${bankAccountName} in Liquid Cash.`);
                     }}
                   >
-                    {cfoLiquidCashEditingId ? "Update bank account" : "Add bank account"}
+                    {liquidCashSaving ? "Saving…" : cfoLiquidCashEditingId ? "Update bank account" : "Add bank account"}
                   </button>
                   {cfoLiquidCashEditingId ? (
                     <button
@@ -20969,6 +24192,7 @@ function App() {
                   ) : null}
                 </div>
               </Section>
+              </>
             ) : selectedCard.key === "waitingOnPayment" ? (
               <Section
                 title="Add amount owed"
@@ -21036,8 +24260,9 @@ function App() {
                         }))
                       }
                     >
-                      <option value="Current">Current</option>
+                      <option value="Waiting on Payment">Waiting on Payment</option>
                       <option value="Overdue">Overdue</option>
+                      <option value="Paid">Paid</option>
                     </select>
                   </Field>
                   <Field label="Note">
@@ -21101,15 +24326,9 @@ function App() {
             ) : selectedCard.key === "supplierTotalsPayable" ? (
               <Section
                 title="Add supplier payable"
-                subtitle="Use the selector to switch between current and overdue supplier balances."
+                subtitle="Add or update outstanding supplier invoices. Use the green payment button below to record payments."
               >
                 <div className="formGrid">
-                  <Field label="View">
-                    <select value={cfoSupplierPayablesView} onChange={(e) => setCfoSupplierPayablesView(e.target.value)}>
-                      <option value="current">Current</option>
-                      <option value="overdue">Overdue</option>
-                    </select>
-                  </Field>
                   <Field label={selectedSupplierPayablesConfig.nameLabel}>
                     <input
                       type="text"
@@ -21135,12 +24354,13 @@ function App() {
                     />
                   </Field>
                   <Field label="Status">
-                    <input
-                      type="text"
+                    <select
                       value={cfoManualDraftsByCard[supplierPayablesCardKey]?.status || ""}
                       onChange={(e) => updateManualCardDraft(supplierPayablesCardKey, "status", e.target.value)}
-                      placeholder={cfoSupplierPayablesView === "overdue" ? "Overdue" : "Current"}
-                    />
+                    >
+                      <option value="Waiting on Payment">Waiting on Payment</option>
+                      <option value="Overdue">Overdue</option>
+                    </select>
                   </Field>
                   <Field label="Note">
                     <input
@@ -21162,11 +24382,13 @@ function App() {
                       onClick={() => {
                         setCfoManualEditingByCard((current) => ({
                           ...current,
-                          [supplierPayablesCardKey]: "",
+                          supplierTotalsPayable: "",
+                          supplierOverdue: "",
                         }));
                         setCfoManualDraftsByCard((current) => ({
                           ...current,
-                          [supplierPayablesCardKey]: createBlankCfoManualEntry(supplierPayablesCardKey),
+                          supplierTotalsPayable: createBlankCfoManualEntry("supplierTotalsPayable"),
+                          supplierOverdue: createBlankCfoManualEntry("supplierOverdue"),
                         }));
                       }}
                     >
@@ -21315,14 +24537,15 @@ function App() {
                   placeholder="Filter job"
                 />
               </Field>
-              <Field label="Current / Overdue">
+              <Field label="Payment status">
                 <select
                   value={cfoDashboardFilters.currentOverdue}
                   onChange={(e) => updateCfoFilter("currentOverdue", e.target.value)}
                 >
-                  <option value="all">All</option>
-                  <option value="current">Current</option>
+                  <option value="all">{["waitingOnPayment", "supplierTotalsPayable"].includes(selectedCard.key) ? "Outstanding only" : "All"}</option>
+                  <option value="waiting-on-payment">Waiting on Payment</option>
                   <option value="overdue">Overdue</option>
+                  <option value="paid">{["waitingOnPayment", "supplierTotalsPayable"].includes(selectedCard.key) ? "Paid history" : "Paid"}</option>
                 </select>
               </Field>
               <Field label="Aging bucket">
@@ -21359,6 +24582,15 @@ function App() {
             </div>
 
             <div className="cfoDetailBody">
+              {selectedCard.key === "waitingOnPayment" && cfoReceivablePaymentMessage ? (
+                <p className="statusMessage">{cfoReceivablePaymentMessage}</p>
+              ) : null}
+              {selectedCard.key === "supplierTotalsPayable" && cfoSupplierPaymentMessage ? (
+                <p className="statusMessage">{cfoSupplierPaymentMessage}</p>
+              ) : null}
+              {selectedCard.key === "waitingOnPayment" && cfoPaymentDiscussionError ? (
+                <p className="statusMessage dangerMessage">{cfoPaymentDiscussionError}</p>
+              ) : null}
               <div className="cfoDetailTableWrap">
                 <table className="cfoDetailTable">
                   <thead>
@@ -21369,23 +24601,37 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {selectedCard.key === "waitingOnPayment" && receivableEntries.length ? (
-                      receivableEntries.map((entry) => {
-                        const periodTo = String(entry.periodToDate || "").trim();
-                        const isPastDue = String(entry.paymentStatus || "").toLowerCase() === "overdue" || (periodTo && periodTo < new Date().toISOString().slice(0, 10));
+                    {selectedCard.key === "waitingOnPayment" && visibleReceivableEntries.length ? (
+                      visibleReceivableEntries.map((entry) => {
+                        const paymentStatus = getReceivablePaymentStatus(entry);
                         return (
                           <tr key={entry.id}>
                             <td>{entry.customerName || "—"}</td>
                             <td>{entry.periodFromDate || "—"}</td>
                             <td>{entry.periodToDate || "—"}</td>
                             <td>{money2(toNumber(entry.amountOwed, 0))}</td>
-                            <td>{isPastDue ? "Overdue" : "Current"}</td>
+                            <td>{paymentStatus}</td>
                             <td>{entry.note || "—"}</td>
                             <td>
                               <div className="actionRow">
                                 <button type="button" className="secondaryButton" onClick={() => editReceivableEntry(entry)}>
                                   Edit
                                 </button>
+                                {paymentStatus !== "Paid" ? (
+                                  <button type="button" className="successButton" onClick={() => markReceivableEntryPaid(entry)}>
+                                    Mark Paid
+                                  </button>
+                                ) : null}
+                                {paymentStatus === "Overdue" ? (
+                                  <button
+                                    type="button"
+                                    className="secondaryButton"
+                                    disabled={Boolean(cfoPaymentDiscussionOpeningId)}
+                                    onClick={() => openReceivablePaymentDiscussion(entry)}
+                                  >
+                                    {cfoPaymentDiscussionOpeningId === entry.id ? "Opening…" : "Ask Natalia / Discussion"}
+                                  </button>
+                                ) : null}
                                 <button type="button" className="dangerButton" onClick={() => deleteReceivableEntry(entry.id)}>
                                   Delete
                                 </button>
@@ -21394,27 +24640,46 @@ function App() {
                           </tr>
                         );
                       })
-                    ) : selectedCard.key === "supplierTotalsPayable" && selectedSupplierPayablesEntries.length ? (
-                      selectedSupplierPayablesEntries.map((entry) => (
-                        <tr key={entry.id}>
+                    ) : selectedCard.key === "supplierTotalsPayable" && visibleSupplierPayableEntries.length ? (
+                      visibleSupplierPayableEntries.map((entry) => {
+                        const paymentStatus = getSupplierPaymentStatus(entry);
+                        return (
+                        <tr key={`${entry.sourceCardKey}:${entry.id}`}>
                           <td>{entry.recordName || "—"}</td>
                           <td>{entry.recordDate || "—"}</td>
                           <td>{money2(toNumber(entry.amount, 0))}</td>
-                          <td>{cfoSupplierPayablesView === "overdue" ? "Overdue" : "Current"}</td>
+                          <td>{paymentStatus}</td>
                           <td>{entry.note || "—"}</td>
                           <td>
                             <div className="actionRow">
-                              <button type="button" className="secondaryButton" onClick={() => editManualCardEntry(supplierPayablesCardKey, entry)}>
-                                Edit
-                              </button>
-                              <button type="button" className="dangerButton" onClick={() => deleteManualCardEntry(supplierPayablesCardKey, entry.id)}>
-                                Delete
-                              </button>
+                              {paymentStatus !== "Paid" ? (
+                                <button type="button" className="secondaryButton" onClick={() => editSupplierPayableEntry(entry)}>
+                                  Edit
+                                </button>
+                              ) : null}
+                              {paymentStatus !== "Paid" ? (
+                                <button
+                                  type="button"
+                                  className="successButton"
+                                  disabled={Boolean(cfoSupplierPaymentSavingId)}
+                                  onClick={() => openSupplierPaymentDialog(entry)}
+                                >
+                                  {cfoSupplierPaymentSavingId === entry.id ? "Applying…" : "Mark Paid"}
+                                </button>
+                              ) : null}
+                              {paymentStatus !== "Paid" ? (
+                                <button type="button" className="dangerButton" onClick={() => deleteManualCardEntry(entry.sourceCardKey, entry.id)}>
+                                  Delete
+                                </button>
+                              ) : null}
                             </div>
                           </td>
                         </tr>
-                      ))
-                    ) : manualCardConfigs[selectedCard.key] && getManualCardEntries(selectedCard.key).length ? (
+                        );
+                      })
+                    ) : selectedCard.key === "approvedJobs" && getManualCardEntries("approvedJobs").length ? (
+                      getManualCardEntries("approvedJobs").map(renderApprovedJobLedgerRow)
+                    ) : selectedCard.key !== "supplierTotalsPayable" && manualCardConfigs[selectedCard.key] && getManualCardEntries(selectedCard.key).length ? (
                       getManualCardEntries(selectedCard.key).map((entry) => renderManualCardRow(entry, selectedCard.key))
                     ) : selectedCard.key === "liquidCash" && liquidCashEntries.length ? (
                       liquidCashEntries.map((entry) => (
@@ -21440,9 +24705,9 @@ function App() {
                       <tr>
                         <td colSpan={selectedCard.columns.length}>
                           <div className="cfoDetailEmpty">
-                            <strong>{selectedCard.emptyState}</strong>
+                            <strong>{selectedCard.emptyState || "No records match the current filters."}</strong>
                             <p style={{ margin: "8px 0 0", color: "#a7c7d6" }}>
-                              No financial data has been connected yet. Once the data tables are available, this view will show the records that create the card total.
+                              No records match this view yet. Add entries and they will sync to shared company data.
                             </p>
                           </div>
                         </td>
@@ -21455,13 +24720,13 @@ function App() {
               <div className="detailList">
                 <DetailRow
                   label="Filtered records"
-                  value="0"
-                  note="Search, filters, and sorting are ready for when finance records are connected."
+                  value={num(selectedCardRecordCount, 0)}
+                  note="Search, filters, and sorting are ready for shared finance records."
                 />
                 <DetailRow
                   label="Primary total"
                   value={selectedCard.primaryValue}
-                  note="This total will be calculated from the detail records once the data tables are connected."
+                  note="This total is calculated from the connected detail records."
                 />
                 <DetailRow
                   label="Secondary summary"
@@ -21502,11 +24767,13 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
+            <p>{authRole === "admin" ? "Admin" : authRole === "cfo" ? "CFO" : "Salesperson"}</p>
+            <p className="smallNote" style={{ marginTop: 8 }}>CFO sync: {cfoSyncStatusLabel}</p>
+            <p className="smallNote" style={{ marginTop: 4 }}>Estimator settings sync: {estimatorSettingsStatusLabel}</p>
           </div>
         </header>
 
-        <Section title="Financial overview" subtitle="Placeholder KPI cards only. Live reporting will be added later.">
+        <Section title="Financial overview" subtitle="Shared company financial cards with realtime synchronization.">
           <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginTop: 0 }}>
             {cfoCards.map((card) => (
               <button
@@ -21514,8 +24781,10 @@ function App() {
                 type="button"
                 className="summaryCard cfoKpiCard"
                 onClick={() => {
-                  if (card.key === "supplierTotalsPayable") {
-                    setCfoSupplierPayablesView("current");
+                  if (card.key === "waitingOnPayment") setCfoReceivablePaymentMessage("");
+                  if (card.key === "supplierTotalsPayable") setCfoSupplierPaymentMessage("");
+                  if (["waitingOnPayment", "supplierTotalsPayable"].includes(card.key)) {
+                    setCfoDashboardFilters((current) => ({ ...current, currentOverdue: "all" }));
                   }
                   setSelectedCfoCard(card.key);
                 }}
@@ -21528,11 +24797,121 @@ function App() {
             ))}
           </div>
           <p className="smallNote" style={{ marginTop: 14 }}>
-            CFO Dashboard is under construction. Data connections and live reporting will be added later.
+            Company records refresh on realtime events, browser focus, and reconnect.
           </p>
         </Section>
 
         {renderCfoDetailModal()}
+        {cfoSupplierPaymentEntry ? (
+          <div className="activeJobOverlay" role="presentation">
+            <div className="activeJobPanel" role="dialog" aria-modal="true" aria-labelledby="supplier-payment-title">
+              <div className="activeJobPanelHeader">
+                <div>
+                  <p className="eyebrow">Supplier payment</p>
+                  <h2 id="supplier-payment-title">Record payment</h2>
+                  <p>{cfoSupplierPaymentEntry.recordName || "Supplier invoice"}</p>
+                </div>
+                <button
+                  type="button"
+                  className="secondaryButton"
+                  disabled={Boolean(cfoSupplierPaymentSavingId)}
+                  onClick={() => {
+                    setCfoSupplierPaymentEntry(null);
+                    setCfoSupplierPaymentDraft(createBlankSupplierPaymentDraft());
+                    setCfoSupplierPaymentMessage("");
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+
+              <div className="detailList" style={{ marginBottom: 16 }}>
+                <DetailRow label="Outstanding balance" value={money2(toNumber(cfoSupplierPaymentEntry.amount, 0))} />
+              </div>
+
+              <div className="formGrid">
+                <Field label="When was it paid?">
+                  <input
+                    type="date"
+                    value={cfoSupplierPaymentDraft.paymentDate}
+                    onChange={(event) => setCfoSupplierPaymentDraft((current) => ({ ...current, paymentDate: event.target.value }))}
+                  />
+                </Field>
+                <Field label="How was it paid?">
+                  <select
+                    value={cfoSupplierPaymentDraft.paymentMethod}
+                    onChange={(event) => setCfoSupplierPaymentDraft((current) => ({
+                      ...current,
+                      paymentMethod: event.target.value,
+                      checkNumber: event.target.value === "Check" ? current.checkNumber : "",
+                    }))}
+                  >
+                    {['ACH', 'Check', 'Credit Card', 'Cash', 'Wire', 'Other'].map((method) => (
+                      <option key={method} value={method}>{method}</option>
+                    ))}
+                  </select>
+                </Field>
+                {cfoSupplierPaymentDraft.paymentMethod === "Check" ? (
+                  <Field label="Check number">
+                    <input
+                      type="text"
+                      value={cfoSupplierPaymentDraft.checkNumber}
+                      onChange={(event) => setCfoSupplierPaymentDraft((current) => ({ ...current, checkNumber: event.target.value }))}
+                      placeholder="Enter check number"
+                    />
+                  </Field>
+                ) : null}
+                <Field label="Was it fully or partially paid?">
+                  <select
+                    value={cfoSupplierPaymentDraft.paymentKind}
+                    onChange={(event) => setCfoSupplierPaymentDraft((current) => ({
+                      ...current,
+                      paymentKind: event.target.value,
+                      amountPaid: event.target.value === "Full" ? money2(toNumber(cfoSupplierPaymentEntry.amount, 0)) : "",
+                    }))}
+                  >
+                    <option value="Full">Paid in full</option>
+                    <option value="Partial">Partially paid</option>
+                  </select>
+                </Field>
+                {cfoSupplierPaymentDraft.paymentKind === "Partial" ? (
+                  <Field label="Partial payment amount">
+                    <input
+                      type="number"
+                      onWheel={handleNumberInputWheel}
+                      min="0.01"
+                      max={toNumber(cfoSupplierPaymentEntry.amount, 0)}
+                      step="0.01"
+                      value={cfoSupplierPaymentDraft.amountPaid}
+                      onChange={(event) => setCfoSupplierPaymentDraft((current) => ({ ...current, amountPaid: event.target.value }))}
+                      placeholder="$0.00"
+                    />
+                  </Field>
+                ) : null}
+                <Field label="Payment note (optional)">
+                  <textarea
+                    rows="3"
+                    value={cfoSupplierPaymentDraft.note}
+                    onChange={(event) => setCfoSupplierPaymentDraft((current) => ({ ...current, note: event.target.value }))}
+                    placeholder="Confirmation number or other details"
+                  />
+                </Field>
+              </div>
+
+              {cfoSupplierPaymentMessage ? <p className="statusMessage dangerMessage">{cfoSupplierPaymentMessage}</p> : null}
+              <div className="actionRow" style={{ marginTop: 16 }}>
+                <button
+                  type="button"
+                  className="successButton"
+                  disabled={Boolean(cfoSupplierPaymentSavingId)}
+                  onClick={recordSupplierPayment}
+                >
+                  {cfoSupplierPaymentSavingId ? "Applying payment…" : "Apply Payment"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -21649,18 +25028,13 @@ function App() {
           <table className="dataTable">
             <thead>
               <tr>
-                <th>Job number</th>
-                <th>Customer name</th>
-                <th>Property or project name</th>
-                <th>Project address</th>
+                <th>Job / project</th>
+                <th>Customer / location</th>
                 <th>Contract amount</th>
-                <th>Approval date</th>
-                <th>Anticipated start date</th>
-                <th>Project status</th>
-                <th>Assigned project contact</th>
-                <th>Assigned field supervisor</th>
-                <th>Permit status</th>
-                <th>Action button</th>
+                <th>Schedule</th>
+                <th>Status / checklist</th>
+                <th>Team / permit</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -21687,15 +25061,17 @@ function App() {
                     >
                       <td>
                         <strong>{job.jobNumber || "—"}</strong>
+                        <div className="smallNote">{job.projectName || "Untitled project"}</div>
                       </td>
-                      <td>{job.customerName || "—"}</td>
-                      <td>{job.projectName || "—"}</td>
-                      <td>{job.projectAddress || "—"}</td>
+                      <td>
+                        <strong>{job.customerName || job.customer || "—"}</strong>
+                        <div className="smallNote">{job.projectAddress || job.jobAddress || "No address"}</div>
+                      </td>
                       <td>{money(job.contractAmount || 0)}</td>
-                      <td>{job.approvalDate || "—"}</td>
                       <td>
                         <div style={{ display: "grid", gap: 4 }}>
-                          <span>{getApprovedJobStartDateLabel(job)}</span>
+                          <span>Approved: {job.approvalDate || "—"}</span>
+                          <span>Starts: {getApprovedJobStartDateLabel(job)}</span>
                           {startDays != null && startDays >= 0 ? (
                             <span className="smallNote">{startDays === 0 ? "Starts today" : `${startDays} day${startDays === 1 ? "" : "s"} away`}</span>
                           ) : null}
@@ -21713,27 +25089,57 @@ function App() {
                           ) : null}
                         </div>
                       </td>
-                      <td>{job.projectContact || "—"}</td>
-                      <td>{job.fieldSupervisor || "—"}</td>
-                      <td>{job.permitStatus || "—"}</td>
                       <td>
-                        <button
-                          type="button"
-                          className="secondaryButton"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openApprovedJobDetail(job);
-                          }}
-                        >
-                          Open
-                        </button>
+                        <div style={{ display: "grid", gap: 4 }}>
+                          <span>Contact: {job.projectContact || "—"}</span>
+                          <span>Supervisor: {job.fieldSupervisor || "—"}</span>
+                          <span>Permit: {job.permitStatus || "—"}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="savedActions">
+                          <button
+                            type="button"
+                            className="secondaryButton"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openApprovedJobDetail(job);
+                            }}
+                          >
+                            Open
+                          </button>
+                          {canManageSharedJobData ? (
+                            <>
+                              <button
+                                type="button"
+                                className="primaryButton"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleMoveApprovedJobToActive(job);
+                                }}
+                              >
+                                Move to Active Jobs
+                              </button>
+                              <button
+                                type="button"
+                                className="secondaryButton"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleArchiveActiveJob(job);
+                                }}
+                              >
+                                Archive
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan={12}>
+                  <td colSpan={7}>
                     <div className="cfoDetailEmpty">
                       <strong>No approved jobs match the current filters.</strong>
                       <p style={{ margin: "8px 0 0", color: "#a7c7d6" }}>
@@ -21811,8 +25217,8 @@ function App() {
           <button type="button" className="secondaryButton" onClick={handleSendProposal}>
             Send Proposal
           </button>
-          <button type="button" className="secondaryButton" onClick={() => handleConvertProposalToApprovedJob(proposalDraft)}>
-            Accept &amp; Convert to Approved Job
+          <button type="button" className="secondaryButton" disabled title="Use Proposal Requests → Production Release after signed scope approval">
+            Production release requires signed scope
           </button>
         </div>
 
@@ -22182,6 +25588,318 @@ function App() {
     );
   }
 
+  const getAccountDisplayName = () => {
+    const displayName = String(authUser?.displayName || "").trim();
+    return displayName && !displayName.includes("@") ? displayName : String(authUser?.email || "Employee").split("@")[0];
+  };
+
+  const getAccountInitials = () => {
+    const words = getAccountDisplayName().split(/\s+/).filter(Boolean);
+    if (!words.length) return "CR";
+    return words.slice(0, 2).map((word) => word.charAt(0).toUpperCase()).join("");
+  };
+
+  const navigateFromSidebar = (destination) => {
+    setActiveTemplate(destination);
+    setSidebarMobileOpen(false);
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleProfilePhotoSelected = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file || !authUser?.key || profilePhotoUploading) return;
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+    if (!allowedTypes.includes(String(file.type || "").toLowerCase())) {
+      setProfilePhotoMessageType("error");
+      setProfilePhotoMessage("Choose a JPG, PNG, or WebP image.");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > PROFILE_PHOTO_MAX_BYTES) {
+      setProfilePhotoMessageType("error");
+      setProfilePhotoMessage("Profile photos must be 5 MB or smaller.");
+      event.target.value = "";
+      return;
+    }
+
+    setProfilePhotoUploading(true);
+    setProfilePhotoMessage("");
+    setProfilePhotoMessageType("");
+    const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
+    const uploadPath = `${authUser.key}/avatar-${Date.now()}.${extension}`;
+    const previousPath = String(authUser.avatarPath || "");
+
+    try {
+      const { error: uploadError } = await supabase.storage
+        .from(PROFILE_PHOTO_BUCKET)
+        .upload(uploadPath, file, { cacheControl: "3600", contentType: file.type, upsert: false });
+      if (uploadError) throw uploadError;
+
+      const { data: updatedProfile, error: profileError } = await supabase
+        .from("user_profiles")
+        .update({ avatar_path: uploadPath, updated_at: new Date().toISOString() })
+        .eq("id", authUser.key)
+        .select("id, full_name, email, role, avatar_path")
+        .maybeSingle();
+      if (profileError) {
+        await supabase.storage.from(PROFILE_PHOTO_BUCKET).remove([uploadPath]);
+        throw profileError;
+      }
+
+      const avatarUrl = await createProfilePhotoSignedUrl(uploadPath);
+      setAuthUser((current) => current ? { ...current, avatarPath: uploadPath, avatarUrl } : current);
+      setCompanyUserProfiles((current) => current.map((profile) => profile.id === authUser.key ? { ...profile, ...updatedProfile } : profile));
+      if (previousPath && previousPath !== uploadPath) {
+        await supabase.storage.from(PROFILE_PHOTO_BUCKET).remove([previousPath]);
+      }
+      setProfilePhotoMessageType("success");
+      setProfilePhotoMessage("Profile photo updated.");
+    } catch (error) {
+      setProfilePhotoMessageType("error");
+      setProfilePhotoMessage(`Photo upload failed: ${error?.message || error}`);
+    } finally {
+      setProfilePhotoUploading(false);
+      if (profilePhotoInputRef.current) profilePhotoInputRef.current.value = "";
+    }
+  };
+
+  const handleRemoveProfilePhoto = async () => {
+    const avatarPath = String(authUser?.avatarPath || "");
+    if (!avatarPath || !authUser?.key || profilePhotoUploading) return;
+    if (typeof window !== "undefined" && !window.confirm("Remove your profile photo?")) return;
+    setProfilePhotoUploading(true);
+    setProfilePhotoMessage("");
+    setProfilePhotoMessageType("");
+    try {
+      const { error: profileError } = await supabase
+        .from("user_profiles")
+        .update({ avatar_path: null, updated_at: new Date().toISOString() })
+        .eq("id", authUser.key);
+      if (profileError) throw profileError;
+      const { error: removeError } = await supabase.storage.from(PROFILE_PHOTO_BUCKET).remove([avatarPath]);
+      if (removeError) console.warn("Profile photo file cleanup failed:", removeError.message || removeError);
+      setAuthUser((current) => current ? { ...current, avatarPath: "", avatarUrl: "" } : current);
+      setCompanyUserProfiles((current) => current.map((profile) => profile.id === authUser.key ? { ...profile, avatar_path: null } : profile));
+      setProfilePhotoMessageType("success");
+      setProfilePhotoMessage("Profile photo removed.");
+    } catch (error) {
+      setProfilePhotoMessageType("error");
+      setProfilePhotoMessage(`Unable to remove photo: ${error?.message || error}`);
+    } finally {
+      setProfilePhotoUploading(false);
+    }
+  };
+
+  const renderProfileScreen = () => (
+    <div className="appShell">
+      <style>{css}</style>
+      <header className="hero">
+        <div className="brandRow">
+          <div className="brandMark"><img src={LOGO_SRC} alt="CRT Roofing logo" /></div>
+          <div>
+            <p className="eyebrow">Account</p>
+            <h1>User Profile</h1>
+            <p className="intro">Your CRT Roofing employee account and access level.</p>
+          </div>
+        </div>
+      </header>
+      <Section title="Profile photo" subtitle="This photo appears throughout the employee portal.">
+        <div className="profilePhotoManager">
+          <div className="profilePhotoPreview" aria-label="Profile photo preview">
+            {authUser?.avatarUrl ? <img src={authUser.avatarUrl} alt={`${getAccountDisplayName()} profile`} /> : <span>{getAccountInitials()}</span>}
+          </div>
+          <div className="profilePhotoControls">
+            <p>Choose a centered JPG, PNG, or WebP image up to 5 MB. The app displays it as a circular photo.</p>
+            <input
+              ref={profilePhotoInputRef}
+              className="profilePhotoInput"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onChange={handleProfilePhotoSelected}
+            />
+            <div className="actionRow">
+              <button type="button" className="primaryButton" disabled={profilePhotoUploading} onClick={() => profilePhotoInputRef.current?.click()}>
+                {profilePhotoUploading ? "Saving…" : authUser?.avatarPath ? "Replace Photo" : "Upload Photo"}
+              </button>
+              {authUser?.avatarPath ? (
+                <button type="button" className="dangerButton" disabled={profilePhotoUploading} onClick={handleRemoveProfilePhoto}>Remove Photo</button>
+              ) : null}
+            </div>
+            {profilePhotoMessage ? <p className={`statusMessage ${profilePhotoMessageType === "error" ? "dangerMessage" : ""}`}>{profilePhotoMessage}</p> : null}
+          </div>
+        </div>
+      </Section>
+      <Section title="Profile details" subtitle="Account information is managed through your company login.">
+        <div className="summaryGrid">
+          <div className="summaryCard"><span>Name</span><strong>{getAccountDisplayName()}</strong></div>
+          <div className="summaryCard"><span>Email</span><strong>{authUser?.email || "Not available"}</strong></div>
+          <div className="summaryCard"><span>Role</span><strong>{normalizeAppRole(authRole)}</strong></div>
+          <div className="summaryCard"><span>Title</span><strong>{authUser?.title || "Employee"}</strong></div>
+        </div>
+        <div className="actionRow" style={{ marginTop: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => navigateFromSidebar("settings")}>Open Settings</button>
+          <button type="button" className="dangerButton" onClick={handleLogout}>Sign Out</button>
+        </div>
+      </Section>
+    </div>
+  );
+
+  const renderSettingsScreen = () => (
+    <div className="appShell">
+      <style>{css}</style>
+      <header className="hero">
+        <div className="brandRow">
+          <div className="brandMark"><img src={LOGO_SRC} alt="CRT Roofing logo" /></div>
+          <div>
+            <p className="eyebrow">Account</p>
+            <h1>Settings</h1>
+            <p className="intro">Personal preferences and company administration tools.</p>
+          </div>
+        </div>
+      </header>
+      <Section title="Personal preferences" subtitle="These settings follow this browser.">
+        {renderAppearanceControl()}
+        <div className="actionRow" style={{ marginTop: 16 }}>
+          <button type="button" className="secondaryButton" onClick={() => setSidebarCollapsed((current) => !current)}>
+            {sidebarCollapsed ? "Keep sidebar expanded" : "Keep sidebar compact"}
+          </button>
+        </div>
+      </Section>
+      {isAdminUser || isFinanceUser ? (
+        <Section title="Company settings" subtitle="Configuration tools shown according to your role.">
+          <div className="templateGrid">
+            {canManageEmployeeWages ? (
+              <button type="button" className="templateCard" onClick={() => navigateFromSidebar("administration")}>
+                <span className="eyebrow">Payroll</span><strong>Team & Wages</strong><p>Manage employees and wage information.</p>
+              </button>
+            ) : null}
+            {isFinanceUser ? (
+              <button type="button" className="templateCard" onClick={() => navigateFromSidebar("adminPricing")}>
+                <span className="eyebrow">Company</span><strong>Pricing & Defaults</strong><p>Manage estimate pricing and operating defaults.</p>
+              </button>
+            ) : null}
+            <button type="button" className="templateCard" onClick={() => navigateFromSidebar("proposalRequests")}>
+              <span className="eyebrow">Proposals</span><strong>Proposal Requests</strong><p>Open the estimating queue and proposal document workspace.</p>
+            </button>
+            <button type="button" className="templateCard" onClick={() => navigateFromSidebar("accountAccess")}>
+              <span className="eyebrow">Security</span><strong>Account Access</strong><p>Request approved access to company websites and logins.</p>
+            </button>
+          </div>
+        </Section>
+      ) : null}
+    </div>
+  );
+
+  const renderArchiveScreen = () => (
+    <div className="appShell">
+      <style>{css}</style>
+      <header className="hero">
+        <div className="brandRow">
+          <div className="brandMark"><img src={LOGO_SRC} alt="CRT Roofing logo" /></div>
+          <div>
+            <p className="eyebrow">Jobs</p>
+            <h1>Archive</h1>
+            <p className="intro">Completed or inactive jobs saved outside the active workflow.</p>
+          </div>
+        </div>
+      </header>
+      <Section title={`Archived jobs (${archivedJobs.length})`} subtitle="Open archived job history or restore work to its previous workflow.">
+        {archivedJobs.length ? (
+          <div className="savedList">
+            {archivedJobs.map((job) => (
+              <div className="savedCard" key={job.id}>
+                <div>
+                  <span className="statusTag">Archived</span>
+                  <strong>{job.projectName || "Untitled project"}</strong>
+                  <p>
+                    {job.jobNumber ? `Job ${job.jobNumber} | ` : ""}
+                    {job.customer || job.propertyOwner || "No customer"}
+                    {job.archivedAt ? ` | Archived ${new Date(job.archivedAt).toLocaleString()}` : ""}
+                  </p>
+                </div>
+                <div className="savedActions">
+                  {canManageSharedJobData ? (
+                    <button type="button" className="primaryButton" onClick={() => handleRestoreArchivedJob(job)}>Restore</button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : <p className="emptyState">No archived jobs yet.</p>}
+      </Section>
+    </div>
+  );
+
+  const renderAuthenticatedLayout = (screen) => {
+    const mainNavigation = [
+      { key: "dashboard", label: "Dashboard", icon: "D", matches: ["dashboard"] },
+      { key: "workHub", label: "Tasks & Messages", icon: "T", matches: ["workHub"] },
+      { key: "crm", label: "Customers", icon: "C", matches: ["crm"] },
+      { key: "fieldNotes", label: "Inspections", icon: "I", matches: ["fieldNotes"] },
+      { key: "estimateTemplates", label: "Estimates", icon: "E", matches: ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"] },
+      { key: "proposalRequests", label: "Proposals", icon: "P", matches: ["proposalRequests"] },
+      { key: "subcontractors", label: "Subcontractors", icon: "SC", matches: ["subcontractors"] },
+      { key: "approvedJobs", label: "Approved Jobs", icon: "AJ", matches: ["approvedJobs", "approvedJob", "jobMetrics", "pastJobInsights"] },
+      { key: "activeJobs", label: "Active Jobs", icon: "J", matches: ["activeJobs", "activeJob", "fieldOperations"] },
+      ...(canAccessInvoiceQueue ? [{ key: "invoices", label: "Invoices", icon: "I$", matches: ["invoices"] }] : []),
+      { key: "archive", label: "Archive", icon: "A", matches: ["archive"] },
+      ...(canAccessCfoDashboard ? [{ key: "cfoDashboard", label: "Finance", icon: "$", matches: ["cfoDashboard"] }] : []),
+    ];
+    const accountNavigation = [
+      { key: "profile", label: "User Profile", icon: "U", matches: ["profile"] },
+      { key: "accountAccess", label: "Account Access", icon: "K", matches: ["accountAccess"] },
+      { key: "settings", label: "Settings", icon: "S", matches: ["settings", "administration", "adminPricing"] },
+    ];
+    const renderSidebarButton = (item) => (
+      <button
+        key={item.key}
+        type="button"
+        className={`portalSidebarButton ${item.matches.includes(activeTemplate) ? "active" : ""}`}
+        onClick={() => navigateFromSidebar(item.key)}
+        title={sidebarCollapsed ? item.label : undefined}
+        aria-current={item.matches.includes(activeTemplate) ? "page" : undefined}
+      >
+        <span className="portalSidebarIcon" aria-hidden="true">{item.icon}</span>
+        <span className="portalSidebarLabel">{item.label}</span>
+      </button>
+    );
+
+    return (
+      <div className={`portalLayout ${sidebarCollapsed ? "sidebarCollapsed" : ""} ${sidebarMobileOpen ? "sidebarMobileOpen" : ""}`}>
+        <style>{css}</style>
+        {sidebarMobileOpen ? <button type="button" className="portalSidebarBackdrop" aria-label="Close navigation" onClick={() => setSidebarMobileOpen(false)} /> : null}
+        <aside className="portalSidebar" aria-label="Main navigation">
+          <div className="portalSidebarBrand">
+            <img src={LOGO_SRC} alt="CRT Roofing" />
+            <div className="portalSidebarBrandText"><strong>CRT Roofing</strong><span>Employee Portal</span></div>
+          </div>
+          <button type="button" className="portalSidebarToggle" onClick={() => setSidebarCollapsed((current) => !current)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>
+            {sidebarCollapsed ? "›" : "‹  Collapse"}
+          </button>
+          <nav className="portalSidebarNav">
+            <p className="portalSidebarSectionLabel">Workspace</p>
+            {mainNavigation.map(renderSidebarButton)}
+          </nav>
+          <div className="portalSidebarFooter">
+            <div className="portalSidebarAccount">
+              <span className="portalSidebarAvatar" aria-hidden="true">
+                {authUser?.avatarUrl ? <img src={authUser.avatarUrl} alt="" /> : getAccountInitials()}
+              </span>
+              <div className="portalSidebarAccountText"><strong>{getAccountDisplayName()}</strong><span>{normalizeAppRole(authRole)}</span></div>
+            </div>
+            {accountNavigation.map(renderSidebarButton)}
+            <button type="button" className="portalSidebarButton" onClick={handleLogout} title={sidebarCollapsed ? "Sign Out" : undefined}>
+              <span className="portalSidebarIcon" aria-hidden="true">↪</span><span className="portalSidebarLabel">Sign Out</span>
+            </button>
+          </div>
+        </aside>
+        <button type="button" className="portalDesktopLauncher" onClick={() => setSidebarCollapsed(false)} aria-label="Open sidebar" title="Open sidebar">☰</button>
+        <button type="button" className="portalMobileMenu" onClick={() => setSidebarMobileOpen(true)} aria-label="Open navigation">Menu</button>
+        <main className="portalMain">{screen}</main>
+      </div>
+    );
+  };
+
   if (authLoading) {
     return (
       <div className="loginShell">
@@ -22305,38 +26023,51 @@ function App() {
   }
 
   if (activeTemplate === "dashboard") {
-    return renderDashboard();
+    return renderAuthenticatedLayout(renderDashboard());
   }
 
-  if (!isAdminUser && (activeTemplate === "adminPricing" || activeTemplate === "administration")) {
-    return renderDashboard();
+  if ((!isFinanceUser && activeTemplate === "adminPricing") || (!canManageEmployeeWages && activeTemplate === "administration")) {
+    return renderAuthenticatedLayout(renderDashboard());
   }
 
   if (!canAccessCfoDashboard && activeTemplate === "cfoDashboard") {
-    return renderDashboard();
+    return renderAuthenticatedLayout(renderDashboard());
   }
 
-  if (activeTemplate === "cfoDashboard") return renderCfoDashboardScreen();
-  if (activeTemplate === "administration") return renderAdministrationScreen();
-  if (activeTemplate === "activeJobs") return renderActiveJobsScreen();
-  if (activeTemplate === "activeJob") return renderActiveJobScreen();
-  if (activeTemplate === "fieldOperations") return renderFieldOperationsScreen();
-  if (activeTemplate === "fieldNotes") return renderFieldNotesScreen();
-  if (activeTemplate === "estimateTemplates") return renderEstimateTemplatesScreen();
-  if (activeTemplate === "approvedJobs") return renderApprovedJobsScreen();
-  if (activeTemplate === "approvedJob") return renderApprovedJobScreen();
-  if (activeTemplate === "proposalBuilder") return renderProposalBuilderScreen();
-  if (activeTemplate === "jobMetrics") return renderJobMetricsScreen();
-  if (activeTemplate === "pastJobInsights") return renderPastJobInsightsScreen();
-  if (activeTemplate === "sprayFoam") return renderSprayFoamScreen();
-  if (activeTemplate === "shingle") return renderShingleScreen();
-  if (activeTemplate === "tile") return renderTileScreen();
-  if (activeTemplate === "coating") return renderTemplateScreen("Coating Estimate");
-  if (activeTemplate === "maintenance") return renderMaintenanceScreen();
-  if (activeTemplate === "repair") return renderTemplateScreen("Repair / Service Estimate");
-  if (activeTemplate === "adminPricing") return renderAdminPricingScreen();
+  if (!canAccessInvoiceQueue && activeTemplate === "invoices") {
+    return renderAuthenticatedLayout(renderDashboard());
+  }
 
-  return (
+  if (activeTemplate === "cfoDashboard") return renderAuthenticatedLayout(renderCfoDashboardScreen());
+  if (activeTemplate === "invoices") return renderAuthenticatedLayout(<InvoiceQueue supabase={supabase} authUser={authUser} onClose={() => setActiveTemplate("dashboard")} />);
+  if (activeTemplate === "accountAccess") return renderAuthenticatedLayout(<AccountAccessVault supabase={supabase} onClose={() => setActiveTemplate("dashboard")} />);
+  if (activeTemplate === "administration") return renderAuthenticatedLayout(renderAdministrationScreen());
+  if (activeTemplate === "activeJobs") return renderAuthenticatedLayout(renderActiveJobsScreen());
+  if (activeTemplate === "activeJob") return renderAuthenticatedLayout(renderActiveJobScreen());
+  if (activeTemplate === "fieldOperations") return renderAuthenticatedLayout(renderFieldOperationsScreen());
+  if (activeTemplate === "fieldNotes") return renderAuthenticatedLayout(renderFieldNotesScreen());
+  if (activeTemplate === "estimateTemplates") return renderAuthenticatedLayout(renderEstimateTemplatesScreen());
+  if (activeTemplate === "approvedJobs") return renderAuthenticatedLayout(renderApprovedJobsScreen());
+  if (activeTemplate === "approvedJob") return renderAuthenticatedLayout(renderApprovedJobScreen());
+  if (activeTemplate === "proposalBuilder") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTab="proposals" />);
+  if (activeTemplate === "jobMetrics") return renderAuthenticatedLayout(renderJobMetricsScreen());
+  if (activeTemplate === "pastJobInsights") return renderAuthenticatedLayout(renderPastJobInsightsScreen());
+  if (activeTemplate === "crm") return renderAuthenticatedLayout(renderCrmLeadsScreen());
+  if (activeTemplate === "archive") return renderAuthenticatedLayout(renderArchiveScreen());
+  if (activeTemplate === "profile") return renderAuthenticatedLayout(renderProfileScreen());
+  if (activeTemplate === "settings") return renderAuthenticatedLayout(renderSettingsScreen());
+  if (activeTemplate === "workHub") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTaskId={workHubInitialTaskId} />);
+  if (activeTemplate === "proposalRequests") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTab="proposals" />);
+  if (activeTemplate === "subcontractors") return renderAuthenticatedLayout(renderSubcontractorDirectoryScreen());
+  if (activeTemplate === "sprayFoam") return renderAuthenticatedLayout(renderSprayFoamScreen());
+  if (activeTemplate === "shingle") return renderAuthenticatedLayout(renderShingleScreen());
+  if (activeTemplate === "tile") return renderAuthenticatedLayout(renderTileScreen());
+  if (activeTemplate === "coating") return renderAuthenticatedLayout(renderTemplateScreen("Coating Estimate"));
+  if (activeTemplate === "maintenance") return renderAuthenticatedLayout(renderMaintenanceScreen());
+  if (activeTemplate === "repair") return renderAuthenticatedLayout(renderTemplateScreen("Repair / Service Estimate"));
+  if (activeTemplate === "adminPricing") return renderAuthenticatedLayout(renderAdminPricingScreen());
+
+  return renderAuthenticatedLayout((
     <div className="appShell">
       <style>{css}</style>
 
@@ -23045,19 +26776,83 @@ function App() {
           ) : null}
 
           {inputs.laborType === "inHouse" ? (
-            <div className="formGrid" style={{ marginTop: 12 }}>
-              <Field label="Number of workers">
-                <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.laborWorkers} onChange={(e) => setField("laborWorkers", e.target.value)} />
-              </Field>
-              <Field label="Hourly rate">
-                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={inputs.laborHourlyRate} onChange={(e) => setField("laborHourlyRate", e.target.value)} />
-              </Field>
-              <Field label="Estimated hours per worker">
-                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.laborHoursPerWorker} onChange={(e) => setField("laborHoursPerWorker", e.target.value)} />
-              </Field>
-              <Field label="Payroll burden percentage">
-                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.payrollBurdenPercent} onChange={(e) => setField("payrollBurdenPercent", e.target.value)} />
-              </Field>
+            <div className="estimateLaborCrew" style={{ marginTop: 12 }}>
+              <div className="summaryGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", marginTop: 0 }}>
+                <div className="summaryCard">
+                  <span>Workers’ compensation</span>
+                  <strong>{num(WORKERS_COMP_RATE * 100, 1)}%</strong>
+                  <p>Calculated from base employee wages.</p>
+                </div>
+                <div className="summaryCard">
+                  <span>Payroll tax</span>
+                  <strong>{num(PAYROLL_TAX_RATE * 100, 1)}%</strong>
+                  <p>Calculated separately from base wages.</p>
+                </div>
+                <div className="summaryCard">
+                  <span>Total labor burden</span>
+                  <strong>{num(TOTAL_LABOR_BURDEN_RATE * 100, 1)}%</strong>
+                  <p>Loaded wage equals 159.25% of base wage.</p>
+                </div>
+              </div>
+
+              <div className="actionRow">
+                <button type="button" className="secondaryButton" onClick={addEstimateLaborEmployee}>+ Add employee to estimate</button>
+                {canManageEmployeeWages ? <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("administration")}>Manage employees and wages</button> : null}
+              </div>
+
+              {normalizeEstimateLaborEmployeeRows(inputs.laborEmployeeRows).length ? (
+                <div className="savedList">
+                  {normalizeEstimateLaborEmployeeRows(inputs.laborEmployeeRows).map((row) => {
+                    const loadedWage = calculateLoadedHourlyWage(row.hourlyRate);
+                    return (
+                      <div className="savedCard" key={row.id}>
+                        <div className="formGrid">
+                          <Field label="Employee">
+                            <select value={row.employeeId} onChange={(e) => updateEstimateLaborEmployee(row.id, "employeeId", e.target.value)}>
+                              <option value="">Select employee</option>
+                              {employeeDirectory.filter((employee) => employee.isActive).map((employee) => (
+                                <option key={employee.id} value={employee.id}>
+                                  {employee.displayName || buildEmployeeDisplayName(employee)} · {money2(employee.hourlyRate || 0)}/hr
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                          <Field label="Base hourly wage">
+                            <input type="number" value={row.hourlyRate} disabled />
+                          </Field>
+                          <Field label="Estimated hours">
+                            <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.5" value={row.estimatedHours} onChange={(e) => updateEstimateLaborEmployee(row.id, "estimatedHours", e.target.value)} />
+                          </Field>
+                          <Field label="Loaded hourly cost">
+                            <input type="text" value={money2(loadedWage.loadedHourlyCost)} disabled />
+                          </Field>
+                        </div>
+                        <div className="actionRow">
+                          <button type="button" className="dangerButton" onClick={() => removeEstimateLaborEmployee(row.id)}>Remove employee</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="emptyState">No employees selected. Add employees above, or use the manual crew fallback below.</p>
+              )}
+
+              <div className="inputSection">
+                <h3>Manual crew fallback</h3>
+                <p className="smallNote">Used only when no saved employees are selected.</p>
+                <div className="formGrid">
+                  <Field label="Number of workers">
+                    <input type="number" onWheel={handleNumberInputWheel} min="0" step="1" value={inputs.laborWorkers} onChange={(e) => setField("laborWorkers", e.target.value)} />
+                  </Field>
+                  <Field label="Average hourly wage">
+                    <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={inputs.laborHourlyRate} onChange={(e) => setField("laborHourlyRate", e.target.value)} />
+                  </Field>
+                  <Field label="Estimated hours per worker">
+                    <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={inputs.laborHoursPerWorker} onChange={(e) => setField("laborHoursPerWorker", e.target.value)} />
+                  </Field>
+                </div>
+              </div>
             </div>
           ) : null}
         </div>
@@ -23075,11 +26870,11 @@ function App() {
           {calculation.labor.laborType === "inHouse" ? (
             <>
               <DetailRow label="Workers" value={num(calculation.labor.workers, 0)} />
-              <DetailRow label="Hourly rate" value={money2(calculation.labor.hourlyRate)} />
-              <DetailRow label="Hours per worker" value={num(calculation.labor.hoursPerWorker, 1)} />
-              <DetailRow label="Payroll burden" value={`${num(calculation.labor.payrollBurdenPercent, 1)}%`} />
+              <DetailRow label="Wage source" value={calculation.labor.usesEmployeeWages ? "Selected employee wages" : "Manual crew average"} />
               <DetailRow label="Base payroll" value={money(calculation.labor.basePayroll)} />
-              <DetailRow label="Payroll burden cost" value={money(calculation.labor.payrollBurden)} />
+              <DetailRow label="Workers’ compensation (50%)" value={money(calculation.labor.workersCompCost)} />
+              <DetailRow label="Payroll tax (9.25%)" value={money(calculation.labor.payrollTaxCost)} />
+              <DetailRow label="Total labor burden (59.25%)" value={money(calculation.labor.payrollBurden)} />
             </>
           ) : null}
           <DetailRow label="Total labor cost" value={money(calculation.labor.totalLaborCost)} />
@@ -23555,7 +27350,7 @@ function App() {
       </Section>
       </SafeTileSection>
     </div>
-  );
+  ));
 }
 
 export default App;

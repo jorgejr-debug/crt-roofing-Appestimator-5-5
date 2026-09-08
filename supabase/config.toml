@@ -1,0 +1,29 @@
+[functions.send-task-assignment-email]
+verify_jwt = false
+
+[functions.request-liquid-cash-code]
+verify_jwt = false
+
+[functions.verify-liquid-cash-code]
+verify_jwt = false
+
+[functions.liquid-cash-reveal]
+verify_jwt = false
+
+[functions.execute-proposal]
+verify_jwt = false
+
+[functions.send-proposal-notification-email]
+verify_jwt = false
+
+[functions.send-subcontractor-compliance-email]
+verify_jwt = false
+
+[functions.send-invoice-notification-email]
+verify_jwt = false
+
+[functions.send-customer-invoice]
+verify_jwt = false
+
+[functions.account-access-vault]
+verify_jwt = false
