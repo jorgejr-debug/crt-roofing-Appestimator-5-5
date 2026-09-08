@@ -9,6 +9,7 @@ import {
   validateProposalRequest,
 } from "./proposalRequestWorkflow.js";
 import { downloadProposalRequestPdf, downloadProposalRequestZip } from "./proposalRequestExport.js";
+import FileDropZone from "./FileDropZone.jsx";
 import {
   PROPOSAL_REQUEST_FILE_ACCEPT,
   buildProposalRequestAttachmentPath,
@@ -263,20 +264,17 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
     return new Date(a.target_completion_at || "9999-12-31") - new Date(b.target_completion_at || "9999-12-31");
   }), [filters, requests]);
 
-  const selectPendingAttachments = (event) => {
-    const files = Array.from(event.target.files || []);
+  const addPendingAttachments = (files) => {
     const invalid = files.map(validateProposalRequestAttachment).filter(Boolean);
     if (invalid.length) setError(invalid.join(" "));
     const valid = files.filter((file) => !validateProposalRequestAttachment(file));
     setPendingAttachments((current) => [...current, ...valid.filter((file) => !current.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified))]);
-    event.target.value = "";
   };
 
-  const uploadAttachment = async (event) => {
-    const files = Array.from(event.target.files || []);
+  const uploadAttachments = async (files) => {
     if (!files.length || !selectedId) return;
     const invalid = files.map(validateProposalRequestAttachment).find(Boolean);
-    if (invalid) { setError(invalid); event.target.value = ""; return; }
+    if (invalid) { setError(invalid); return; }
     setBusy(true); setError(""); setMessage("");
     try {
       const result = await uploadFilesToRequest(selectedId, files);
@@ -284,7 +282,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
       if (result.failed.length) setError(`${result.failed.length} file${result.failed.length === 1 ? "" : "s"} failed: ${result.failed.map((item) => `${item.file.name} (${item.error})`).join("; ")}`);
       await load();
     } finally {
-      setBusy(false); setUploadProgress(""); event.target.value = "";
+      setBusy(false); setUploadProgress("");
     }
   };
 
@@ -407,7 +405,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
       <section className="panel proposalIntakeAttachments">
         <h3>Photos & supporting files</h3>
         <p>Attach roof photos, measurements, roof reports, drawings, RFPs, customer documents, Word files, spreadsheets, or PDFs. Each file may be up to 25 MB.</p>
-        <label className="proposalFilePicker"><span>{pendingAttachments.length ? "Add More Photos & Files" : "Choose Photos & Files"}</span><input type="file" multiple accept={PROPOSAL_REQUEST_FILE_ACCEPT} onChange={selectPendingAttachments} disabled={busy} /></label>
+        <FileDropZone accept={PROPOSAL_REQUEST_FILE_ACCEPT} label={pendingAttachments.length ? "Add More Photos & Files" : "Choose Photos & Files"} help="You can select, drop, or paste multiple files at once." onFiles={addPendingAttachments} disabled={busy} />
         {uploadProgress ? <p className="proposalUploadProgress" role="status">{uploadProgress}</p> : null}
         {pendingAttachments.length ? <div className="proposalPendingFiles"><strong>Ready to upload when you save or submit:</strong>{pendingAttachments.map((file, index) => <div key={`${file.name}-${file.size}-${file.lastModified}`}><span>{file.name}</span><button type="button" className="secondaryButton" onClick={() => setPendingAttachments((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></div>)}</div> : <p className="emptyState">No new files selected.</p>}
         {selectedAttachments.length ? <div className="proposalDocumentLinks"><strong>Already uploaded:</strong>{selectedAttachments.map((item) => <button type="button" className="secondaryButton" key={item.id} onClick={() => void openDocument(item.storage_path)}>Open {item.file_name}</button>)}</div> : null}
@@ -439,7 +437,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
       </div></section> : null}
       {isEstimator && ["submitted","under_review"].includes(selected.status) ? <section className="panel"><h3>Estimator review</h3><div className="proposalRequestActions"><button type="button" className="primaryButton" disabled={busy} onClick={() => run(() => supabase.rpc("review_proposal_request", { p_request_id: selected.id, p_action: "accept", p_missing_notes: "", p_target_at: selected.target_completion_at }), "Accepted into the estimating queue.")}>Accept into queue</button><input value={missingNotes} onChange={(e) => setMissingNotes(e.target.value)} placeholder="Describe exactly what is missing" /><button type="button" className="secondaryButton" disabled={busy || !missingNotes.trim()} onClick={() => run(() => supabase.rpc("review_proposal_request", { p_request_id: selected.id, p_action: "missing_information", p_missing_notes: missingNotes, p_target_at: null }), "Returned to salesperson; SLA paused.")}>Request information</button></div></section> : null}
       {isManager && selected.priority === "rush" && selected.rush_approval_status === "pending" ? <section className="panel"><h3>Rush approval</h3><div className="proposalRequestActions"><button className="primaryButton" onClick={() => run(() => supabase.rpc("approve_rush_proposal_request", { p_request_id: selected.id, p_approved: true, p_notes: "" }), "Rush approved.")}>Approve Rush</button><button className="secondaryButton" onClick={() => run(() => supabase.rpc("approve_rush_proposal_request", { p_request_id: selected.id, p_approved: false, p_notes: "" }), "Rush rejected; priority set to High.")}>Reject Rush</button></div></section> : null}
-      <section className="panel"><h3>Documentation / attachments</h3><input type="file" multiple accept={PROPOSAL_REQUEST_FILE_ACCEPT} onChange={uploadAttachment} disabled={busy} /> <small>{selectedAttachments.length} file(s) attached</small>{uploadProgress ? <p className="proposalUploadProgress" role="status">{uploadProgress}</p> : null}{selectedAttachments.length ? <div className="proposalDocumentLinks">{selectedAttachments.map((item) => <button type="button" className="secondaryButton" key={item.id} onClick={() => void openDocument(item.storage_path)}>Open {item.file_name}</button>)}</div> : <p className="emptyState">No supporting files were attached.</p>}</section>
+      <section className="panel proposalIntakeAttachments"><h3>Documentation / attachments</h3><FileDropZone accept={PROPOSAL_REQUEST_FILE_ACCEPT} label="Add Photos & Files" help="Drop or paste multiple photos and documents here." onFiles={uploadAttachments} disabled={busy} /> <small>{selectedAttachments.length} file(s) attached</small>{uploadProgress ? <p className="proposalUploadProgress" role="status">{uploadProgress}</p> : null}{selectedAttachments.length ? <div className="proposalDocumentLinks">{selectedAttachments.map((item) => <button type="button" className="secondaryButton" key={item.id} onClick={() => void openDocument(item.storage_path)}>Open {item.file_name}</button>)}</div> : <p className="emptyState">No supporting files were attached.</p>}</section>
       {isEstimator ? <section className="panel"><h3>Proposal documents</h3><p>Prepare the proposal in Microsoft Word. Upload the working Word file as the editable source, then upload the finalized PDF for Sales Review. The app tracks the workflow and documents; it does not build the proposal.</p><label className="proposalWide"><span>Proposal sections / alternates (one per line)</span><textarea rows="5" value={sectionDraft} onChange={(e) => setSectionDraft(e.target.value)} /></label><div className="proposalFieldGrid proposalDocumentInputs"><label><span>Working Word proposal (.docx) *</span><input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(e) => setWordFile(e.target.files?.[0] || null)} /></label><label><span>Final customer PDF (required for Sales Review)</span><input type="file" accept=".pdf,application/pdf" onChange={(e) => setFinalPdfFile(e.target.files?.[0] || null)} /></label></div><div className="proposalRequestActions"><button className="secondaryButton" disabled={busy || !wordFile} onClick={() => void saveExternalVersion(false)}>Save Word version</button><button className="primaryButton" disabled={busy || !wordFile || !finalPdfFile} onClick={() => void saveExternalVersion(true)}>Finalize PDF for Sales Review</button></div></section> : null}
       {latestVersion ? <section className="panel"><h3>Proposal document version {latestVersion.version_number}</h3><div className="proposalDocumentLinks">{latestVersion.source_document_storage_path ? <button className="secondaryButton" onClick={() => void openDocument(latestVersion.source_document_storage_path)}>Open Word: {latestVersion.source_document_file_name}</button> : null}{latestVersion.final_pdf_storage_path ? <button className="secondaryButton" onClick={() => void openDocument(latestVersion.final_pdf_storage_path)}>Open final PDF: {latestVersion.final_pdf_file_name}</button> : null}{latestVersion.signed_pdf_storage_path ? <button className="secondaryButton" onClick={() => void openDocument(latestVersion.signed_pdf_storage_path)}>Open signed PDF: {latestVersion.signed_pdf_file_name}</button> : null}</div><div className="proposalSections">{(latestVersion.sections || []).map((section) => <div key={section.id} className={section.customer_approved ? "authorized" : ""}><strong>{section.title}</strong><p>{section.scope}</p><span>{section.customer_approved ? "APPROVED" : latestVersion.customer_decision === "signed" ? "NOT APPROVED" : "Pending customer selection"}</span></div>)}</div>
         {selected.status === "sales_review" && selected.salesperson_id === authUser.key ? <label className="proposalAcknowledgement"><input type="checkbox" onChange={(e) => e.target.checked && run(() => supabase.rpc("approve_proposal_scope", { p_version_id: latestVersion.id, p_acknowledgement: SALES_APPROVAL_ACKNOWLEDGEMENT }), "Scope approved. Daniela may send the proposal.")} />{SALES_APPROVAL_ACKNOWLEDGEMENT}</label> : null}

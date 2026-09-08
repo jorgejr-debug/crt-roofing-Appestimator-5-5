@@ -33,7 +33,8 @@ test("proposal request attachment paths remain scoped to the request", () => {
 test("new Proposal Request form exposes multi-file upload before submission", () => {
   assert.match(proposalRequestUi, /Photos & supporting files/);
   assert.match(proposalRequestUi, /Choose Photos & Files/);
-  assert.match(proposalRequestUi, /multiple accept=\{PROPOSAL_REQUEST_FILE_ACCEPT\} onChange=\{selectPendingAttachments\}/);
+  assert.match(proposalRequestUi, /FileDropZone accept=\{PROPOSAL_REQUEST_FILE_ACCEPT\}/);
+  assert.match(proposalRequestUi, /onFiles=\{addPendingAttachments\}/);
   assert.match(proposalRequestUi, /uploadFilesToRequest\(saved\.id, filesToUpload\)/);
   assert.match(proposalRequestUi, /Uploading \$\{index \+ 1\} of \$\{files\.length\}/);
   assert.match(proposalRequestUi, /remain selected for retry/);
