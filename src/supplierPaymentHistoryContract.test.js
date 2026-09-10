@@ -35,3 +35,12 @@ test("payment dialog supports check references and partial payment balances", ()
   assert.match(migrationSource, /balance_after := balance_before - applied_amount/);
   assert.match(migrationSource, /status = CASE WHEN balance_after = 0 THEN 'Paid' ELSE status END/);
 });
+
+test("supplier payable rows show database-backed last activity and expose payment application", () => {
+  assert.match(appSource, /updatedAt: row\.updated_at \|\| ""/);
+  assert.match(appSource, /formatCfoRecordUpdatedAt\(entry\.updatedAt\)/);
+  assert.match(appSource, /columns: \["Supplier \/ invoice", "Record date", "Last updated"/);
+  assert.match(appSource, /"Apply Payment"/);
+  assert.match(appSource, /updatedAt: data\.payable\.updated_at/);
+  assert.match(appSource, /Remaining after this payment/);
+});

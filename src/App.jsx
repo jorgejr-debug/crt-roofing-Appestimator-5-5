@@ -3081,6 +3081,7 @@ function hydrateCfoStateFromSupabaseRecords(rows = []) {
             status: row.status || "",
             note: row.note || "",
             rowVersion: toNumber(row.row_version, 1),
+            updatedAt: row.updated_at || "",
           },
           cardKey,
         ),
@@ -3179,7 +3180,21 @@ function normalizeCfoManualEntry(entry = {}, cardKey = "") {
       : rawStatus,
     note: String(entry.note || ""),
     rowVersion: Math.max(1, toNumber(entry.rowVersion ?? entry.row_version, 1)),
+    updatedAt: String(entry.updatedAt || entry.updated_at || ""),
   };
+}
+
+function formatCfoRecordUpdatedAt(value) {
+  if (!value) return "—";
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return "—";
+  return timestamp.toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function createBlankSupplierPaymentDraft() {
@@ -23626,6 +23641,7 @@ function App() {
                 amount: money2(toNumber(data.payable.amount, 0)),
                 status: data.payable.status,
                 rowVersion: data.payable.row_version,
+                updatedAt: data.payable.updated_at,
               }, cardKey)
             : item
         )),
@@ -23750,6 +23766,7 @@ function App() {
           recordDate: draft.recordDate || new Date().toISOString().slice(0, 10),
           status: draft.status || "",
           note: draft.note || "",
+          updatedAt: new Date().toISOString(),
         },
         cardKey,
       );
@@ -23910,7 +23927,7 @@ function App() {
           { label: "Overdue total", value: money(supplierPaymentTotals.overdue) },
           { label: "Amount paid", value: money(supplierAmountPaidTotal) },
         ],
-        columns: ["Supplier / invoice", "Record date", "Amount payable", "Status", "Note", "Actions"],
+        columns: ["Supplier / invoice", "Record date", "Last updated", "Amount payable", "Status", "Note", "Actions"],
         emptyState:
           supplierPayableEntries.length ? "" : "No supplier payable records are connected yet.",
         entryKey: "supplierTotalsPayable",
@@ -24647,6 +24664,7 @@ function App() {
                         <tr key={`${entry.sourceCardKey}:${entry.id}`}>
                           <td>{entry.recordName || "—"}</td>
                           <td>{entry.recordDate || "—"}</td>
+                          <td>{formatCfoRecordUpdatedAt(entry.updatedAt)}</td>
                           <td>{money2(toNumber(entry.amount, 0))}</td>
                           <td>{paymentStatus}</td>
                           <td>{entry.note || "—"}</td>
@@ -24664,7 +24682,7 @@ function App() {
                                   disabled={Boolean(cfoSupplierPaymentSavingId)}
                                   onClick={() => openSupplierPaymentDialog(entry)}
                                 >
-                                  {cfoSupplierPaymentSavingId === entry.id ? "Applying…" : "Mark Paid"}
+                                  {cfoSupplierPaymentSavingId === entry.id ? "Applying…" : "Apply Payment"}
                                 </button>
                               ) : null}
                               {paymentStatus !== "Paid" ? (
@@ -24827,6 +24845,16 @@ function App() {
 
               <div className="detailList" style={{ marginBottom: 16 }}>
                 <DetailRow label="Outstanding balance" value={money2(toNumber(cfoSupplierPaymentEntry.amount, 0))} />
+                <DetailRow label="Last updated" value={formatCfoRecordUpdatedAt(cfoSupplierPaymentEntry.updatedAt)} />
+                {cfoSupplierPaymentDraft.paymentKind === "Partial" ? (
+                  <DetailRow
+                    label="Remaining after this payment"
+                    value={money2(Math.max(
+                      0,
+                      toNumber(cfoSupplierPaymentEntry.amount, 0) - toNumber(cfoSupplierPaymentDraft.amountPaid, 0),
+                    ))}
+                  />
+                ) : null}
               </div>
 
               <div className="formGrid">
