@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { SUBCONTRACTOR_COI_BUCKET, buildCoiStoragePath, getSubcontractorComplianceStatus, validateSubcontractor } from "./subcontractorCompliance.js";
+import { SUBCONTRACTOR_COI_BUCKET, buildCoiStoragePath, getSubcontractorComplianceStatus, normalizeSubcontractorPayload, validateSubcontractor } from "./subcontractorCompliance.js";
 import FileDropZone from "./FileDropZone.jsx";
 import "./SubcontractorCompliance.css";
 
@@ -61,7 +61,7 @@ export default function SubcontractorCompliance({ supabase, authUser, readOnly =
         coiPath = uploadedDocuments[0].storage_path;
         coiName = uploadedDocuments[0].file_name;
       }
-      const payload = { ...draft, coi_storage_path: coiPath, coi_file_name: coiName, coi_uploaded_at: uploadedDocuments.length ? new Date().toISOString() : (draft.coi_uploaded_at || null), updated_by: authUser.key, updated_at: new Date().toISOString() };
+      const payload = normalizeSubcontractorPayload({ ...draft, coi_storage_path: coiPath, coi_file_name: coiName, coi_uploaded_at: uploadedDocuments.length ? new Date().toISOString() : (draft.coi_uploaded_at || null), updated_by: authUser.key, updated_at: new Date().toISOString() });
       const { error: saveError } = await supabase.from("subcontractors").upsert(payload, { onConflict: "id" });
       if (saveError) throw saveError;
       if (uploadedDocuments.length) {

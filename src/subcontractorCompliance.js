@@ -30,8 +30,17 @@ export function validateSubcontractor(record = {}) {
   return { valid: missing.length === 0, missing };
 }
 
+export function normalizeSubcontractorPayload(record = {}) {
+  return {
+    ...record,
+    license_expiration_date: String(record.license_expiration_date || "").trim() || null,
+    workers_comp_expiration_date: record.workers_comp_active
+      ? (String(record.workers_comp_expiration_date || "").trim() || null)
+      : null,
+  };
+}
+
 export function buildCoiStoragePath(userId, subcontractorId, fileName) {
   const safeName = String(fileName || "coi.pdf").replace(/[^a-z0-9._-]/gi, "_");
   return `${userId}/${subcontractorId}/${Date.now()}-${safeName}`;
 }
-

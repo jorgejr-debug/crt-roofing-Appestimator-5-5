@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { daysUntilDate, getSubcontractorComplianceStatus, validateSubcontractor } from "./subcontractorCompliance.js";
+import { daysUntilDate, getSubcontractorComplianceStatus, normalizeSubcontractorPayload, validateSubcontractor } from "./subcontractorCompliance.js";
 
 const now = new Date("2026-09-02T12:00:00");
 
@@ -19,3 +19,11 @@ test("licensed subcontractors require a license and active workers comp requires
   assert.ok(result.missing.includes("Workers' compensation expiration date"));
 });
 
+test("optional subcontractor dates are stored as null instead of invalid empty strings", () => {
+  const inactive = normalizeSubcontractorPayload({ license_expiration_date: "", workers_comp_active: false, workers_comp_expiration_date: "" });
+  assert.equal(inactive.license_expiration_date, null);
+  assert.equal(inactive.workers_comp_expiration_date, null);
+
+  const active = normalizeSubcontractorPayload({ workers_comp_active: true, workers_comp_expiration_date: "2027-01-15" });
+  assert.equal(active.workers_comp_expiration_date, "2027-01-15");
+});
