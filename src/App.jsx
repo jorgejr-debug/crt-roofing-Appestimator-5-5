@@ -21298,7 +21298,7 @@ function App() {
 
       {renderQuickMeasureReviewPanel()}
 
-      <DashboardTasks supabase={supabase} authUser={authUser} onOpenTasks={() => setActiveTemplate("workHub")} />
+      <DashboardTasks supabase={supabase} authUser={authUser} onOpenTasks={(taskId = "") => { setWorkHubInitialTaskId(taskId); setActiveTemplate("workHub"); }} />
 
       <Section title="Quick actions" subtitle="Capture a new opportunity and keep it moving through the CRM.">
         <div className="dashboardQuickActions">
