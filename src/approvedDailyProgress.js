@@ -40,6 +40,24 @@ export function calculateSubcontractorCost(subcontractor = {}) {
   };
 }
 
+export function calculateDailyTravelCost(travel = {}) {
+  const milesDriven = Math.max(0, numberValue(travel.milesDriven));
+  const mpg = Math.max(0.1, numberValue(travel.mpg));
+  const fuelCostPerGallon = Math.max(0, numberValue(travel.fuelCostPerGallon));
+  const estimatedFuelGallons = milesDriven / mpg;
+  const fuelCost = currencyValue(estimatedFuelGallons * fuelCostPerGallon);
+  const otherTravelCost = currencyValue(Math.max(0, numberValue(travel.otherTravelCost)));
+  return {
+    milesDriven,
+    mpg,
+    fuelCostPerGallon,
+    estimatedFuelGallons,
+    fuelCost,
+    otherTravelCost,
+    totalTravelCost: currencyValue(fuelCost + otherTravelCost),
+  };
+}
+
 export function calculateSprayFoamMaterialUsage(gallonsUsed) {
   const normalizedGallonsUsed = Math.max(0, numberValue(gallonsUsed));
   const equivalentKits = normalizedGallonsUsed / SPRAY_FOAM_GALLONS_PER_KIT;
@@ -138,8 +156,10 @@ export function summarizeApprovedDailyProgress(day = {}) {
   const employees = Array.isArray(day.employeeRows) ? day.employeeRows : [];
   const materials = Array.isArray(day.materialsUsed) ? day.materialsUsed : [];
   const subcontractors = Array.isArray(day.subcontractors) ? day.subcontractors : [];
+  const travelRows = Array.isArray(day.travelRows) ? day.travelRows : [];
   const laborCosts = employees.map(calculateDailyEmployeeLaborCost);
   const subcontractorCosts = subcontractors.map(calculateSubcontractorCost);
+  const travelCosts = travelRows.map(calculateDailyTravelCost);
   const sprayFoamUsage = calculateSprayFoamMaterialUsage(day.sprayFoamGallonsUsed);
   const otherMaterialCost = materials.reduce(
     (total, material) => total + numberValue(material.quantity) * numberValue(material.unitCost),
@@ -153,6 +173,11 @@ export function summarizeApprovedDailyProgress(day = {}) {
     payrollTaxCost: currencyValue(laborCosts.reduce((total, labor) => total + labor.payrollTaxCost, 0)),
     laborCost: currencyValue(laborCosts.reduce((total, labor) => total + labor.totalLaborCost, 0)),
     subcontractorCost: currencyValue(subcontractorCosts.reduce((total, subcontractor) => total + subcontractor.totalCost, 0)),
+    travelMiles: travelCosts.reduce((total, travel) => total + travel.milesDriven, 0),
+    fuelGallons: travelCosts.reduce((total, travel) => total + travel.estimatedFuelGallons, 0),
+    fuelCost: currencyValue(travelCosts.reduce((total, travel) => total + travel.fuelCost, 0)),
+    otherTravelCost: currencyValue(travelCosts.reduce((total, travel) => total + travel.otherTravelCost, 0)),
+    travelCost: currencyValue(travelCosts.reduce((total, travel) => total + travel.totalTravelCost, 0)),
     sprayFoamGallonsUsed: sprayFoamUsage.gallonsUsed,
     sprayFoamEquivalentKits: sprayFoamUsage.equivalentKits,
     sprayFoamCost: sprayFoamUsage.totalCost,

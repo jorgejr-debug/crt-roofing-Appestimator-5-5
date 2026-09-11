@@ -62,6 +62,7 @@ import {
   calculateApprovedJobFullyLoadedProfitability,
   calculateApprovedJobOperatingOverhead,
   calculateDailyEmployeeLaborCost,
+  calculateDailyTravelCost,
   calculateSprayFoamMaterialUsage,
   calculateSubcontractorCost,
   getDefaultSalesCommissionRate,
@@ -14037,12 +14038,26 @@ function App() {
     pricePerSquare: 0,
   });
 
+  const createBlankDailyTravelRow = () => {
+    const vehicle = TRAVEL_VEHICLE_OPTIONS[0];
+    return {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      vehicleKey: vehicle.value,
+      vehicleName: vehicle.label,
+      milesDriven: 0,
+      mpg: toNumber(adminTravelSettings.vehicleMpgByKey?.[vehicle.value], vehicle.mpg),
+      fuelCostPerGallon: toNumber(adminTravelSettings.fuelCostPerGallon, DEFAULT_TRAVEL_ADMIN_SETTINGS.fuelCostPerGallon),
+      otherTravelCost: 0,
+    };
+  };
+
   const createBlankDailyProgress = () => ({
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     date: new Date().toISOString().slice(0, 10),
     crewSize: 0,
     employeeRows: [createBlankEmployeeRow()],
     subcontractors: [createBlankSubcontractorRow()],
+    travelRows: [createBlankDailyTravelRow()],
     sprayFoamGallonsUsed: 0,
     materialsUsed: [createBlankMaterialItem()],
     attachments: [],
@@ -14058,6 +14073,11 @@ function App() {
       totalPayrollTaxCost: 0,
       totalActualLaborCost: 0,
       totalSubcontractorCost: 0,
+      totalTravelMiles: 0,
+      totalFuelGallons: 0,
+      totalFuelCost: 0,
+      totalOtherTravelCost: 0,
+      totalTravelCost: 0,
       totalJobDays: logs.length,
       totalSprayFoamGallonsUsed: 0,
       totalSprayFoamEquivalentKits: 0,
@@ -14068,6 +14088,7 @@ function App() {
       runningActualCost: 0,
       laborLog: [],
       subcontractorLog: [],
+      travelLog: [],
       materialUsageLog: [],
     };
 
@@ -14106,6 +14127,23 @@ function App() {
           });
         }
       });
+      (day.travelRows || []).forEach((travel) => {
+        const travelCost = calculateDailyTravelCost(travel);
+        totals.totalTravelMiles += travelCost.milesDriven;
+        totals.totalFuelGallons += travelCost.estimatedFuelGallons;
+        totals.totalFuelCost += travelCost.fuelCost;
+        totals.totalOtherTravelCost += travelCost.otherTravelCost;
+        totals.totalTravelCost += travelCost.totalTravelCost;
+        if (travel.vehicleKey || travelCost.totalTravelCost > 0) {
+          totals.travelLog.push({
+            dayId: day.id,
+            date: day.date,
+            vehicleKey: travel.vehicleKey || "",
+            vehicleName: travel.vehicleName || "",
+            ...travelCost,
+          });
+        }
+      });
       const sprayFoamUsage = calculateSprayFoamMaterialUsage(day.sprayFoamGallonsUsed);
       totals.totalSprayFoamGallonsUsed += sprayFoamUsage.gallonsUsed;
       totals.totalSprayFoamEquivalentKits += sprayFoamUsage.equivalentKits;
@@ -14140,7 +14178,7 @@ function App() {
     });
 
     const costWithOverhead = calculateApprovedJobOperatingOverhead(
-      totals.totalActualLaborCost + totals.totalSubcontractorCost + totals.totalMaterialCost,
+      totals.totalActualLaborCost + totals.totalSubcontractorCost + totals.totalMaterialCost + totals.totalTravelCost,
     );
     totals.directActualCost = costWithOverhead.directCost;
     totals.operatingOverheadCost = costWithOverhead.operatingOverheadCost;
@@ -14318,6 +14356,44 @@ function App() {
           }
         : day
     )));
+  };
+
+  const handleAddDailyTravelRow = (dayId) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => (
+      day.id === dayId
+        ? { ...day, travelRows: [...(day.travelRows || []), createBlankDailyTravelRow()] }
+        : day
+    )));
+  };
+
+  const handleRemoveDailyTravelRow = (dayId, rowId) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => (
+      day.id === dayId
+        ? { ...day, travelRows: (day.travelRows || []).filter((row) => row.id !== rowId) }
+        : day
+    )));
+  };
+
+  const handleDailyTravelRowChange = (dayId, rowId, key, value) => {
+    setApprovedDailyProgressLogs((current) => current.map((day) => {
+      if (day.id !== dayId) return day;
+      return {
+        ...day,
+        travelRows: (day.travelRows || []).map((row) => {
+          if (row.id !== rowId) return row;
+          if (key === "vehicleKey") {
+            const vehicle = TRAVEL_VEHICLE_OPTIONS.find((option) => option.value === value) || TRAVEL_VEHICLE_OPTIONS[0];
+            return {
+              ...row,
+              vehicleKey: vehicle.value,
+              vehicleName: vehicle.label,
+              mpg: toNumber(adminTravelSettings.vehicleMpgByKey?.[vehicle.value], vehicle.mpg),
+            };
+          }
+          return { ...row, [key]: value };
+        }),
+      };
+    }));
   };
 
   const handleAddMaterialItem = (dayId) => {
@@ -15148,9 +15224,11 @@ function App() {
       laborLog: totals.laborLog,
       subcontractorLog: totals.subcontractorLog,
       materialUsageLog: totals.materialUsageLog,
+      travelLog: totals.travelLog,
       actualLaborHours: totals.totalActualLaborHours,
       actualLaborCost: totals.totalActualLaborCost,
       actualSubcontractorCost: totals.totalSubcontractorCost,
+      actualTravelCost: totals.totalTravelCost,
       actualCost: financialSummary.fullyLoadedCost,
       actualMaterialCost: totals.totalMaterialCost,
       actualOperatingOverheadCost: totals.operatingOverheadCost,
@@ -15208,7 +15286,7 @@ function App() {
           actualMaterialCost: totals.totalMaterialCost,
           actualLaborCost: totals.totalActualLaborCost,
           actualLaborHours: totals.totalActualLaborHours,
-          actualTravelCost: 0,
+          actualTravelCost: totals.totalTravelCost,
           changeOrders: financialSummary.changeOrders,
           finalInvoiceAmount: financialSummary.totalSalePrice,
           actualProfit,
@@ -19777,7 +19855,7 @@ function App() {
                     <p className="approvedDailyProgressEyebrow">Day {dayIndex + 1}</p>
                     <h3>{day.date || "Date not selected"}</h3>
                     <p className="approvedDailyProgressSummary">
-                      Crew {toNumber(day.crewSize)} · {round(daySummary.laborHours, 2)} labor hours · {money2(daySummary.laborCost)} loaded labor · {money2(daySummary.subcontractorCost)} subcontractors · {money2(daySummary.materialCost)} materials
+                      Crew {toNumber(day.crewSize)} · {round(daySummary.laborHours, 2)} labor hours · {money2(daySummary.laborCost)} loaded labor · {money2(daySummary.subcontractorCost)} subcontractors · {money2(daySummary.materialCost)} materials · {money2(daySummary.travelCost)} travel/fuel
                     </p>
                   </div>
                   <div className="approvedDailyProgressActions">
@@ -19979,6 +20057,55 @@ function App() {
                 </div>
 
                 <div className="formGrid" style={{ marginTop: 12 }}>
+                  <Field label="Travel / fuel">
+                    <div>
+                      {(day.travelRows || []).map((travel) => {
+                        const travelCost = calculateDailyTravelCost(travel);
+                        return (
+                          <div key={travel.id} style={{ marginBottom: 12, border: "1px solid #ddd", padding: 12, borderRadius: 6 }}>
+                            <div className="formGrid">
+                              <Field label="Vehicle">
+                                <select value={travel.vehicleKey || ""} onChange={(e) => handleDailyTravelRowChange(day.id, travel.id, "vehicleKey", e.target.value)}>
+                                  {TRAVEL_VEHICLE_OPTIONS.map((vehicle) => (
+                                    <option key={vehicle.value} value={vehicle.value}>{vehicle.label}</option>
+                                  ))}
+                                </select>
+                              </Field>
+                              <Field label="Miles driven">
+                                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.1" value={travel.milesDriven ?? 0} onChange={(e) => handleDailyTravelRowChange(day.id, travel.id, "milesDriven", Math.max(0, toNumber(e.target.value)))} />
+                              </Field>
+                              <Field label="Vehicle MPG">
+                                <input type="number" onWheel={handleNumberInputWheel} min="0.1" step="0.1" value={travel.mpg ?? 0} onChange={(e) => handleDailyTravelRowChange(day.id, travel.id, "mpg", Math.max(0.1, toNumber(e.target.value)))} />
+                              </Field>
+                              <Field label="Fuel price per gallon">
+                                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={travel.fuelCostPerGallon ?? 0} onChange={(e) => handleDailyTravelRowChange(day.id, travel.id, "fuelCostPerGallon", Math.max(0, toNumber(e.target.value)))} />
+                              </Field>
+                              <Field label="Estimated gallons used">
+                                <input type="text" value={round(travelCost.estimatedFuelGallons, 2)} disabled />
+                              </Field>
+                              <Field label="Calculated fuel cost">
+                                <input type="text" value={money2(travelCost.fuelCost)} disabled />
+                              </Field>
+                              <Field label="Tolls, parking, lodging, or other travel">
+                                <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={travel.otherTravelCost ?? 0} onChange={(e) => handleDailyTravelRowChange(day.id, travel.id, "otherTravelCost", Math.max(0, toNumber(e.target.value)))} />
+                              </Field>
+                              <Field label="Total travel / fuel cost">
+                                <input type="text" value={money2(travelCost.totalTravelCost)} disabled />
+                              </Field>
+                            </div>
+                            <div className="actionRow" style={{ marginTop: 12 }}>
+                              <button type="button" className="secondaryButton" onClick={() => handleRemoveDailyTravelRow(day.id, travel.id)}>Delete travel row</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <button type="button" className="secondaryButton" onClick={() => handleAddDailyTravelRow(day.id)}>Add vehicle / trip</button>
+                      <p className="smallNote" style={{ marginTop: 8 }}>Fuel is calculated as miles driven ÷ MPG × fuel price per gallon.</p>
+                    </div>
+                  </Field>
+                </div>
+
+                <div className="formGrid" style={{ marginTop: 12 }}>
                   <Field label="Notes">
                     <textarea rows="3" value={day.notes} onChange={(e) => handleDailyProgressFieldChange(day.id, "notes", e.target.value)} />
                   </Field>
@@ -20067,6 +20194,26 @@ function App() {
             <div className="detailRow">
               <span>Total subcontractor cost</span>
               <strong>{money2(totals.totalSubcontractorCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total travel miles</span>
+              <strong>{round(totals.totalTravelMiles, 2)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Estimated fuel gallons used</span>
+              <strong>{round(totals.totalFuelGallons, 2)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total fuel cost</span>
+              <strong>{money2(totals.totalFuelCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Other travel costs</span>
+              <strong>{money2(totals.totalOtherTravelCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total travel / fuel cost</span>
+              <strong>{money2(totals.totalTravelCost)}</strong>
             </div>
             <div className="detailRow">
               <span>Total spray foam gallons used</span>

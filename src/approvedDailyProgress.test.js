@@ -6,6 +6,7 @@ import {
   calculateApprovedJobFullyLoadedProfitability,
   calculateApprovedJobOperatingOverhead,
   calculateDailyEmployeeLaborCost,
+  calculateDailyTravelCost,
   calculateSprayFoamMaterialUsage,
   calculateSubcontractorCost,
   getDailyProgressDayIds,
@@ -86,6 +87,11 @@ test("summarizes a daily progress card for its minimized view", () => {
     payrollTaxCost: 30.99,
     laborCost: 533.49,
     subcontractorCost: 0,
+    travelMiles: 0,
+    fuelGallons: 0,
+    fuelCost: 0,
+    otherTravelCost: 0,
+    travelCost: 0,
     sprayFoamGallonsUsed: 0,
     sprayFoamEquivalentKits: 0,
     sprayFoamCost: 0,
@@ -106,6 +112,23 @@ test("calculates subcontractor squares times price per square", () => {
     ],
   });
   assert.equal(summary.subcontractorCost, 1440);
+});
+
+test("calculates daily fuel from miles, MPG, fuel price, and other travel cost", () => {
+  assert.deepEqual(calculateDailyTravelCost({
+    milesDriven: 120,
+    mpg: 12,
+    fuelCostPerGallon: 6.25,
+    otherTravelCost: 25,
+  }), {
+    milesDriven: 120,
+    mpg: 12,
+    fuelCostPerGallon: 6.25,
+    estimatedFuelGallons: 10,
+    fuelCost: 62.5,
+    otherTravelCost: 25,
+    totalTravelCost: 87.5,
+  });
 });
 
 test("calculates proportional spray foam kit usage and cost from gallons", () => {
