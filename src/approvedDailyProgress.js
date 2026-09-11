@@ -3,6 +3,7 @@ import { PAYROLL_TAX_RATE, WORKERS_COMP_RATE } from "./laborBurden.js";
 export const SPRAY_FOAM_GALLONS_PER_KIT = 110;
 export const SPRAY_FOAM_KIT_COST = 2600;
 export const APPROVED_JOB_OPERATING_OVERHEAD_RATE = 0.15;
+export const CHRIS_GROSS_PROFIT_COMMISSION_RATE = 0.25;
 
 function numberValue(value) {
   const parsed = Number(value);
@@ -86,6 +87,50 @@ export function calculateApprovedJobFinancialSummary(
     totalCost: currencyValue(normalizedTotalCost),
     profitAmount,
     profitMarginPercent,
+  };
+}
+
+export function getDefaultSalesCommissionRate(salesperson) {
+  const normalized = String(salesperson || "").trim().toLowerCase();
+  return normalized.includes("chris") ? CHRIS_GROSS_PROFIT_COMMISSION_RATE : 0;
+}
+
+export function calculateApprovedJobFullyLoadedProfitability({
+  approvedSalePrice,
+  changeOrders,
+  directJobCost,
+  operatingOverheadCost,
+  otherJobCosts,
+  salesCommissionRate,
+} = {}) {
+  const salePrice = Math.max(0, numberValue(approvedSalePrice));
+  const normalizedChangeOrders = numberValue(changeOrders);
+  const totalSalePrice = currencyValue(salePrice + normalizedChangeOrders);
+  const directCost = Math.max(0, numberValue(directJobCost));
+  const overheadCost = Math.max(0, numberValue(operatingOverheadCost));
+  const otherCosts = Math.max(0, numberValue(otherJobCosts));
+  const commissionRate = Math.max(0, numberValue(salesCommissionRate));
+  const grossProfitBeforeOverhead = currencyValue(totalSalePrice - directCost - otherCosts);
+  const salesCommission = currencyValue(Math.max(0, grossProfitBeforeOverhead) * commissionRate);
+  const fullyLoadedCost = currencyValue(directCost + overheadCost + otherCosts + salesCommission);
+  const netCompanyProfit = currencyValue(totalSalePrice - fullyLoadedCost);
+  const netCompanyMarginPercent = totalSalePrice > 0
+    ? Math.round(((netCompanyProfit / totalSalePrice) * 100 + Number.EPSILON) * 10) / 10
+    : 0;
+
+  return {
+    approvedSalePrice: currencyValue(salePrice),
+    changeOrders: currencyValue(normalizedChangeOrders),
+    totalSalePrice,
+    directJobCost: currencyValue(directCost),
+    operatingOverheadCost: currencyValue(overheadCost),
+    otherJobCosts: currencyValue(otherCosts),
+    grossProfitBeforeOverhead,
+    salesCommissionRate: commissionRate,
+    salesCommission,
+    fullyLoadedCost,
+    netCompanyProfit,
+    netCompanyMarginPercent,
   };
 }
 

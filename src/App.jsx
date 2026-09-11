@@ -59,11 +59,12 @@ import {
 } from "./sprayFoamEstimateRules.js";
 import {
   APPROVED_JOB_OPERATING_OVERHEAD_RATE,
-  calculateApprovedJobFinancialSummary,
+  calculateApprovedJobFullyLoadedProfitability,
   calculateApprovedJobOperatingOverhead,
   calculateDailyEmployeeLaborCost,
   calculateSprayFoamMaterialUsage,
   calculateSubcontractorCost,
+  getDefaultSalesCommissionRate,
   getDailyProgressDayIds,
   SPRAY_FOAM_GALLONS_PER_KIT,
   SPRAY_FOAM_KIT_COST,
@@ -10038,6 +10039,12 @@ function App() {
   const [cfoManualEditingByCard, setCfoManualEditingByCard] = useState(() => createBlankCfoManualEditingByCard());
   const [cfoDeletedSourceRecordUids, setCfoDeletedSourceRecordUids] = useState([]);
   const [estimatorSettingsSyncStatus, setEstimatorSettingsSyncStatus] = useState("idle");
+  const [estimatorSettingsSyncError, setEstimatorSettingsSyncError] = useState("");
+  const [estimatorSettingsMetadata, setEstimatorSettingsMetadata] = useState(() => ({
+    updatedAt: "",
+    updatedBy: "",
+    rowVersion: 0,
+  }));
   const [jobsSyncStatus, setJobsSyncStatus] = useState("idle");
   const [jobsSyncError, setJobsSyncError] = useState("");
   const [cfoSyncStatus, setCfoSyncStatus] = useState("idle");
@@ -10071,6 +10078,12 @@ function App() {
   const estimatorSettingsLastSyncedRef = useRef("");
   const cfoLastSyncedRef = useRef("");
   const cfoLiquidCashEntriesRef = useRef([]);
+
+  const estimatorSettingsCurrentSnapshot = JSON.stringify({ adminPricing, adminTravelSettings });
+  const estimatorSettingsHasUnsavedChanges = Boolean(
+    estimatorSettingsLastSyncedRef.current
+    && estimatorSettingsCurrentSnapshot !== estimatorSettingsLastSyncedRef.current,
+  );
 
   const applyHydratedCfoState = (
     payload,
@@ -11021,6 +11034,15 @@ function App() {
           adminPricing: mergedPricing,
           adminTravelSettings: mergedTravel,
         });
+        writeJson(ADMIN_PRICING_KEY, mergedPricing);
+        writeJson(ADMIN_TRAVEL_SETTINGS_KEY, mergedTravel);
+        setEstimatorSettingsMetadata({
+          updatedAt: String(settingsRes.data.updated_at || ""),
+          updatedBy: String(settingsRes.data.updated_by || ""),
+          rowVersion: num(settingsRes.data.row_version, 0),
+        });
+        setEstimatorSettingsSyncError("");
+        setEstimatorSettingsSyncStatus("saved");
       }
 
       if (isFinanceUser && !cfoRes?.error && Array.isArray(cfoRes?.data)) {
@@ -11121,8 +11143,10 @@ function App() {
     const loadCompanyEstimatorSettings = async () => {
       if (!authUser?.key) {
         setEstimatorSettingsSyncStatus("idle");
+        setEstimatorSettingsSyncError("");
         return;
       }
+      setEstimatorSettingsSyncStatus("loading");
       estimatorSettingsHydratingRef.current = true;
       const localPricing = normalizeAdminPricing(readJson(ADMIN_PRICING_KEY, DEFAULT_ADMIN_PRICING));
       const localTravel = normalizeTravelAdminSettings(readJson(ADMIN_TRAVEL_SETTINGS_KEY, DEFAULT_TRAVEL_ADMIN_SETTINGS));
@@ -11148,12 +11172,19 @@ function App() {
           adminPricing: mergedPricing,
           adminTravelSettings: mergedTravel,
         });
+        setEstimatorSettingsMetadata({
+          updatedAt: String(data.updated_at || ""),
+          updatedBy: String(data.updated_by || ""),
+          rowVersion: num(data.row_version, 0),
+        });
+        setEstimatorSettingsSyncError("");
         setEstimatorSettingsSyncStatus("saved");
       } else {
         estimatorSettingsLastSyncedRef.current = JSON.stringify({
           adminPricing: localPricing,
           adminTravelSettings: localTravel,
         });
+        setEstimatorSettingsSyncError(error?.message || "");
         setEstimatorSettingsSyncStatus(error ? "error" : "idle");
       }
       estimatorSettingsHydratingRef.current = false;
@@ -11166,42 +11197,14 @@ function App() {
   }, [authUser?.key]);
 
   useEffect(() => {
-    writeJson(ADMIN_PRICING_KEY, adminPricing);
-    writeJson(ADMIN_TRAVEL_SETTINGS_KEY, adminTravelSettings);
-    if (!authUser?.key || estimatorSettingsHydratingRef.current) return;
-
-    const payload = {
-      material_price_defaults: {},
-      admin_pricing_defaults: adminPricing,
-      travel_defaults: adminTravelSettings,
+    if (!estimatorSettingsHasUnsavedChanges) return undefined;
+    const warnBeforeLeaving = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
     };
-    const currentSnapshot = JSON.stringify({ adminPricing, adminTravelSettings });
-    if (currentSnapshot === estimatorSettingsLastSyncedRef.current) return;
-
-    if (!(authRole === "admin" || authRole === "cfo")) {
-      estimatorSettingsLastSyncedRef.current = currentSnapshot;
-      return;
-    }
-
-    let active = true;
-    const saveCompanyEstimatorSettings = async () => {
-      setEstimatorSettingsSyncStatus("saving");
-      const { error } = await upsertCompanyEstimatorSettingsToSupabase(payload, authUser.id || authUser.key);
-      if (!active) return;
-      if (error) {
-        setEstimatorSettingsSyncStatus("error");
-        console.warn("Supabase estimator settings save failed:", error?.message || error);
-        return;
-      }
-      estimatorSettingsLastSyncedRef.current = currentSnapshot;
-      setEstimatorSettingsSyncStatus("saved");
-    };
-
-    saveCompanyEstimatorSettings();
-    return () => {
-      active = false;
-    };
-  }, [authRole, authUser?.id, authUser?.key, adminPricing, adminTravelSettings]);
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [estimatorSettingsHasUnsavedChanges]);
 
   useEffect(() => {
     if (!authUser?.key) {
@@ -12396,6 +12399,69 @@ function App() {
         },
       }),
     );
+  };
+
+  const saveCompanyEstimatorSettings = async () => {
+    if (!isFinanceUser || !authUser?.key || estimatorSettingsSyncStatus === "saving") return;
+    const payload = {
+      material_price_defaults: {},
+      admin_pricing_defaults: normalizeAdminPricing(adminPricing),
+      travel_defaults: normalizeTravelAdminSettings(adminTravelSettings),
+    };
+    setEstimatorSettingsSyncError("");
+    setEstimatorSettingsSyncStatus("saving");
+    const { data, error } = await upsertCompanyEstimatorSettingsToSupabase(payload, authUser.id || authUser.key);
+    if (error || !data) {
+      const message = error?.message || "The company defaults could not be saved.";
+      setEstimatorSettingsSyncError(message);
+      setEstimatorSettingsSyncStatus("error");
+      console.warn("Supabase estimator settings save failed:", message);
+      return;
+    }
+
+    const savedPricing = normalizeAdminPricing({
+      ...DEFAULT_ADMIN_PRICING,
+      ...toPlainObject(data.admin_pricing_defaults, payload.admin_pricing_defaults),
+    });
+    const savedTravel = normalizeTravelAdminSettings({
+      ...DEFAULT_TRAVEL_ADMIN_SETTINGS,
+      ...toPlainObject(data.travel_defaults, payload.travel_defaults),
+    });
+    estimatorSettingsHydratingRef.current = true;
+    setAdminPricing(savedPricing);
+    setAdminTravelSettings(savedTravel);
+    estimatorSettingsHydratingRef.current = false;
+    estimatorSettingsLastSyncedRef.current = JSON.stringify({
+      adminPricing: savedPricing,
+      adminTravelSettings: savedTravel,
+    });
+    writeJson(ADMIN_PRICING_KEY, savedPricing);
+    writeJson(ADMIN_TRAVEL_SETTINGS_KEY, savedTravel);
+    setEstimatorSettingsMetadata({
+      updatedAt: String(data.updated_at || new Date().toISOString()),
+      updatedBy: String(data.updated_by || authUser.id || authUser.key),
+      rowVersion: num(data.row_version, 0),
+    });
+    setEstimatorSettingsSyncStatus("saved");
+  };
+
+  const discardCompanyEstimatorSettingsChanges = () => {
+    if (!estimatorSettingsLastSyncedRef.current) return;
+    try {
+      const saved = JSON.parse(estimatorSettingsLastSyncedRef.current);
+      setAdminPricing(normalizeAdminPricing(saved.adminPricing));
+      setAdminTravelSettings(normalizeTravelAdminSettings(saved.adminTravelSettings));
+      setEstimatorSettingsSyncError("");
+      setEstimatorSettingsSyncStatus("saved");
+    } catch (error) {
+      console.warn("Unable to restore saved estimator settings:", error);
+    }
+  };
+
+  const leaveAdminPricingScreen = () => {
+    if (estimatorSettingsHasUnsavedChanges && !window.confirm("Discard your unsaved pricing changes and return to the dashboard?")) return;
+    if (estimatorSettingsHasUnsavedChanges) discardCompanyEstimatorSettingsChanges();
+    setActiveTemplate("dashboard");
   };
 
   const setSubcontractorAddOnItem = (index, key, value) => {
@@ -14095,11 +14161,25 @@ function App() {
       totalSquares: estimate.summary?.totalSquares || estimate.inputs?.totalSquares || 0,
       approvedBidAmount: estimate.summary?.selectedBidAmount || 0,
       changeOrders: 0,
+      salesperson: estimate.inputs?.salesperson || "",
+      salesCommissionRate: getDefaultSalesCommissionRate(estimate.inputs?.salesperson),
+      otherJobCosts: 0,
       status: "approved",
     };
 
+    const salesperson = baseJob.salesperson
+      || estimate.inputs?.salesperson
+      || estimate.inputs?.sprayFoamSalesperson
+      || estimate.inputs?.shingleSalesperson
+      || "";
     setSelectedApprovedJob(estimate);
-    setApprovedJobData({ ...baseJob, status: baseJob.status || "approved" });
+    setApprovedJobData({
+      ...baseJob,
+      salesperson,
+      salesCommissionRate: toNumber(baseJob.salesCommissionRate, getDefaultSalesCommissionRate(salesperson)),
+      otherJobCosts: toNumber(baseJob.otherJobCosts, 0),
+      status: baseJob.status || "approved",
+    });
     const existingDailyProgress = existingJob?.dailyProgressLog || [];
     setApprovedDailyProgressLogs(existingDailyProgress);
     setCollapsedApprovedDailyProgressDayIds(getDailyProgressDayIds(existingDailyProgress));
@@ -14119,6 +14199,16 @@ function App() {
       totalSquares: job.squareCount || matchingEstimate?.summary?.totalSquares || 0,
       approvedBidAmount: job.finalBid || matchingEstimate?.summary?.selectedBidAmount || 0,
       changeOrders: toNumber(job.changeOrders || 0),
+      salesperson: job.salesperson
+        || matchingEstimate?.inputs?.salesperson
+        || matchingEstimate?.inputs?.sprayFoamSalesperson
+        || matchingEstimate?.inputs?.shingleSalesperson
+        || "",
+      salesCommissionRate: toNumber(
+        job.salesCommissionRate,
+        getDefaultSalesCommissionRate(job.salesperson || matchingEstimate?.inputs?.salesperson),
+      ),
+      otherJobCosts: toNumber(job.otherJobCosts || 0),
       status: job.status || "approved",
     };
     setSelectedApprovedJob(matchingEstimate || job);
@@ -14133,6 +14223,14 @@ function App() {
     setApprovedJobData((current) => ({
       ...current,
       [key]: value,
+    }));
+  };
+
+  const handleApprovedJobSalespersonChange = (value) => {
+    setApprovedJobData((current) => ({
+      ...current,
+      salesperson: value,
+      salesCommissionRate: getDefaultSalesCommissionRate(value),
     }));
   };
 
@@ -14996,13 +15094,16 @@ function App() {
     setSessionMessage("Saving approved job...");
 
     const totals = calculateApprovedJobTotals(approvedDailyProgressLogs);
-    const financialSummary = calculateApprovedJobFinancialSummary(
-      approvedJobData.approvedBidAmount,
-      approvedJobData.changeOrders,
-      totals.runningActualCost,
-    );
-    const actualProfit = financialSummary.profitAmount;
-    const marginPercent = financialSummary.profitMarginPercent;
+    const financialSummary = calculateApprovedJobFullyLoadedProfitability({
+      approvedSalePrice: approvedJobData.approvedBidAmount,
+      changeOrders: approvedJobData.changeOrders,
+      directJobCost: totals.directActualCost,
+      operatingOverheadCost: totals.operatingOverheadCost,
+      otherJobCosts: approvedJobData.otherJobCosts,
+      salesCommissionRate: approvedJobData.salesCommissionRate,
+    });
+    const actualProfit = financialSummary.netCompanyProfit;
+    const marginPercent = financialSummary.netCompanyMarginPercent;
 
     const normalizedStatus = String(approvedJobData.status || "approved").toLowerCase();
     const workflowStatus = normalizedStatus === "completed"
@@ -15028,6 +15129,13 @@ function App() {
       contractAmount: approvedJobData.approvedBidAmount,
       changeOrders: financialSummary.changeOrders,
       totalSalePrice: financialSummary.totalSalePrice,
+      salesperson: approvedJobData.salesperson || selectedApprovedJob?.salesperson || "",
+      salesCommissionRate: financialSummary.salesCommissionRate,
+      salesCommission: financialSummary.salesCommission,
+      otherJobCosts: financialSummary.otherJobCosts,
+      grossProfitBeforeOverhead: financialSummary.grossProfitBeforeOverhead,
+      fullyLoadedCost: financialSummary.fullyLoadedCost,
+      netCompanyProfit: financialSummary.netCompanyProfit,
       status: approvedJobData.status,
       projectStatus: approvedJobData.status,
       projectAddress: approvedJobData.jobAddress || selectedApprovedJob?.projectAddress || "",
@@ -15043,7 +15151,7 @@ function App() {
       actualLaborHours: totals.totalActualLaborHours,
       actualLaborCost: totals.totalActualLaborCost,
       actualSubcontractorCost: totals.totalSubcontractorCost,
-      actualCost: totals.runningActualCost,
+      actualCost: financialSummary.fullyLoadedCost,
       actualMaterialCost: totals.totalMaterialCost,
       actualOperatingOverheadCost: totals.operatingOverheadCost,
       actualProfit,
@@ -19081,16 +19189,52 @@ function App() {
           <strong>{authUser.displayName}</strong>
           <p>{authRole === "admin" ? "Admin" : authRole === "cfo" ? "CFO" : "Salesperson"}</p>
           <p className="smallNote" style={{ marginTop: 8 }}>
-            Sync status: {estimatorSettingsSyncStatus === "saving" ? "Saving" : estimatorSettingsSyncStatus === "saved" ? "Saved" : estimatorSettingsSyncStatus === "error" ? "Error" : estimatorSettingsSyncStatus === "loading" ? "Loading" : "Idle"}
+            {estimatorSettingsSyncStatus === "saving"
+              ? "Saving company defaults..."
+              : estimatorSettingsHasUnsavedChanges
+                ? "Unsaved changes"
+                : estimatorSettingsSyncStatus === "saved"
+                  ? "Company defaults saved"
+                  : estimatorSettingsSyncStatus === "error"
+                    ? "Save or sync error"
+                    : estimatorSettingsSyncStatus === "loading"
+                      ? "Loading company defaults..."
+                      : "Company sync idle"}
           </p>
+          {estimatorSettingsMetadata.updatedAt ? (
+            <p className="smallNote" style={{ marginTop: 4 }}>
+              Last saved {new Date(estimatorSettingsMetadata.updatedAt).toLocaleString()}
+            </p>
+          ) : null}
         </div>
       </header>
 
       <div className="actionRow" style={{ marginBottom: 16 }}>
-        <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
+        <button type="button" className="secondaryButton" onClick={leaveAdminPricingScreen}>
           Back to dashboard
         </button>
+        <button
+          type="button"
+          className="primaryButton"
+          onClick={saveCompanyEstimatorSettings}
+          disabled={!estimatorSettingsHasUnsavedChanges || estimatorSettingsSyncStatus === "saving"}
+        >
+          {estimatorSettingsSyncStatus === "saving" ? "Saving..." : "Save Changes"}
+        </button>
+        <button
+          type="button"
+          className="secondaryButton"
+          onClick={discardCompanyEstimatorSettingsChanges}
+          disabled={!estimatorSettingsHasUnsavedChanges || estimatorSettingsSyncStatus === "saving"}
+        >
+          Discard Changes
+        </button>
       </div>
+
+      <p className="smallNote" style={{ margin: "-4px 0 16px" }}>
+        Changes are shared with every authenticated CRT estimator only after you select Save Changes.
+      </p>
+      {estimatorSettingsSyncError ? <p className="errorText">Save failed: {estimatorSettingsSyncError}</p> : null}
 
       <Section title="Materials" subtitle="Pricing foundation for material defaults.">
         <div className="formGrid">
@@ -19526,11 +19670,14 @@ function App() {
     }
 
     const totals = calculateApprovedJobTotals(approvedDailyProgressLogs);
-    const financialSummary = calculateApprovedJobFinancialSummary(
-      approvedJobData.approvedBidAmount,
-      approvedJobData.changeOrders,
-      totals.runningActualCost,
-    );
+    const financialSummary = calculateApprovedJobFullyLoadedProfitability({
+      approvedSalePrice: approvedJobData.approvedBidAmount,
+      changeOrders: approvedJobData.changeOrders,
+      directJobCost: totals.directActualCost,
+      operatingOverheadCost: totals.operatingOverheadCost,
+      otherJobCosts: approvedJobData.otherJobCosts,
+      salesCommissionRate: approvedJobData.salesCommissionRate,
+    });
     const dailyCostReturnTemplate = selectedApprovedJob?.workflowStatus === "active" ? "activeJob" : "approvedJobs";
     const payrollTaxPercentLabel = `${(PAYROLL_TAX_RATE * 100).toFixed(2)}%`;
 
@@ -19591,6 +19738,15 @@ function App() {
             </Field>
             <Field label="Change orders total (if any)">
               <input type="number" onWheel={handleNumberInputWheel} step="0.01" value={approvedJobData.changeOrders ?? 0} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("changeOrders", toNumber(e.target.value))} />
+            </Field>
+            <Field label="Salesperson">
+              <input type="text" value={approvedJobData.salesperson || ""} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobSalespersonChange(e.target.value)} />
+            </Field>
+            <Field label="Sales commission rate (%)">
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={round(toNumber(approvedJobData.salesCommissionRate) * 100, 2)} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("salesCommissionRate", Math.max(0, toNumber(e.target.value)) / 100)} />
+            </Field>
+            <Field label="Other job costs">
+              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={approvedJobData.otherJobCosts ?? 0} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("otherJobCosts", Math.max(0, toNumber(e.target.value)))} />
             </Field>
             <Field label="Job status">
               <select value={approvedJobData.status} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("status", e.target.value)}>
@@ -19953,12 +20109,28 @@ function App() {
               <strong>{money2(financialSummary.totalSalePrice)}</strong>
             </div>
             <div className="detailRow">
-              <span>Profit</span>
-              <strong>{money2(financialSummary.profitAmount)}</strong>
+              <span>Other job costs</span>
+              <strong>{money2(financialSummary.otherJobCosts)}</strong>
             </div>
             <div className="detailRow">
-              <span>Profit margin</span>
-              <strong>{financialSummary.profitMarginPercent}%</strong>
+              <span>Gross profit before operating / overhead</span>
+              <strong>{money2(financialSummary.grossProfitBeforeOverhead)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Sales commission ({round(financialSummary.salesCommissionRate * 100, 2)}%)</span>
+              <strong>{money2(financialSummary.salesCommission)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Total fully loaded cost</span>
+              <strong>{money2(financialSummary.fullyLoadedCost)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Net company profit</span>
+              <strong>{money2(financialSummary.netCompanyProfit)}</strong>
+            </div>
+            <div className="detailRow">
+              <span>Net company profit margin</span>
+              <strong>{financialSummary.netCompanyMarginPercent}%</strong>
             </div>
           </div>
         </Section>

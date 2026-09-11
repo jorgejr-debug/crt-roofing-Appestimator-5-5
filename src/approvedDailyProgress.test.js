@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   calculateApprovedJobFinancialSummary,
+  calculateApprovedJobFullyLoadedProfitability,
   calculateApprovedJobOperatingOverhead,
   calculateDailyEmployeeLaborCost,
   calculateSprayFoamMaterialUsage,
@@ -28,6 +29,30 @@ test("adds 15 percent operating and overhead cost to approved job totals", () =>
     directCost: 1000,
     operatingOverheadCost: 150,
     totalCost: 1150,
+  });
+});
+
+test("deducts Chris commission from gross profit before overhead", () => {
+  assert.deepEqual(calculateApprovedJobFullyLoadedProfitability({
+    approvedSalePrice: 3500,
+    changeOrders: 0,
+    directJobCost: 1019.97,
+    operatingOverheadCost: 153,
+    otherJobCosts: 0,
+    salesCommissionRate: 0.25,
+  }), {
+    approvedSalePrice: 3500,
+    changeOrders: 0,
+    totalSalePrice: 3500,
+    directJobCost: 1019.97,
+    operatingOverheadCost: 153,
+    otherJobCosts: 0,
+    grossProfitBeforeOverhead: 2480.03,
+    salesCommissionRate: 0.25,
+    salesCommission: 620.01,
+    fullyLoadedCost: 1792.98,
+    netCompanyProfit: 1707.02,
+    netCompanyMarginPercent: 48.8,
   });
 });
 
