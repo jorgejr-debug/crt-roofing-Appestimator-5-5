@@ -45,7 +45,7 @@ function PersonAvatar({ profile, size = "normal" }) {
   );
 }
 
-export default function WorkHub({ supabase, authUser, initialTab = "tasks", initialTaskId = "" }) {
+export default function WorkHub({ supabase, authUser, initialTab = "tasks", initialTaskId = "", initialCreateTask = false }) {
   const authUserKey = authUser?.key;
   const [activeTab, setActiveTab] = useState(initialTaskId ? "tasks" : initialTab);
   const [profiles, setProfiles] = useState([]);
@@ -66,7 +66,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
   const [search, setSearch] = useState("");
   const [taskView, setTaskView] = useState("active");
   const [taskTypeFilter, setTaskTypeFilter] = useState("all");
-  const [showCreateTask, setShowCreateTask] = useState(false);
+  const [showCreateTask, setShowCreateTask] = useState(Boolean(initialCreateTask));
   const [taskNotice, setTaskNotice] = useState("");
 
   const profileById = useMemo(() => Object.fromEntries(profiles.map((profile) => [profile.id, profile])), [profiles]);

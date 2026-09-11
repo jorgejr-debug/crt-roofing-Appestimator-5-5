@@ -2520,12 +2520,15 @@ h1{
 .templateCard:hover{border-color:rgba(18,166,245,.45); transform:translateY(-1px)}
 .dashboardQuickActions{
   display:grid;
-  grid-template-columns:minmax(280px,520px);
+  grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+  gap:10px;
 }
 .collectLeadCard{
-  min-height:132px;
   background:linear-gradient(135deg, rgba(18,166,245,.13), rgba(255,255,255,.025));
 }
+.dashboardQuickActions .templateCard{min-height:118px;padding:14px}
+.dashboardQuickActions .templateCard strong{font-size:1rem}
+.dashboardQuickActions .templateCard p{font-size:.86rem;line-height:1.4}
 @media (max-width: 960px){
   .workflowGroupGrid{grid-template-columns:1fr;}
   .dashboardQuickActions{grid-template-columns:1fr;}
@@ -9711,6 +9714,7 @@ function App() {
   const [sessionMessage, setSessionMessage] = useState("");
   const [sessionMessageType, setSessionMessageType] = useState("");
   const [workHubInitialTaskId, setWorkHubInitialTaskId] = useState("");
+  const [workHubInitialCreateTask, setWorkHubInitialCreateTask] = useState(false);
   const [cfoPaymentDiscussionOpeningId, setCfoPaymentDiscussionOpeningId] = useState("");
   const [cfoPaymentDiscussionError, setCfoPaymentDiscussionError] = useState("");
   const [profilePhotoUploading, setProfilePhotoUploading] = useState(false);
@@ -9895,8 +9899,10 @@ function App() {
   const [dashboardSavedEstimateSearch, setDashboardSavedEstimateSearch] = useState("");
   const [templatesSavedEstimatesOpen, setTemplatesSavedEstimatesOpen] = useState(false);
   const [templatesSavedEstimateSearch, setTemplatesSavedEstimateSearch] = useState("");
-  const [dashboardApprovedJobsCollapsed, setDashboardApprovedJobsCollapsed] = useState(false);
-  const [archivedJobsCollapsed, setArchivedJobsCollapsed] = useState(false);
+  const [dashboardApprovedJobsCollapsed, setDashboardApprovedJobsCollapsed] = useState(true);
+  const [archivedJobsCollapsed, setArchivedJobsCollapsed] = useState(true);
+  const [dashboardCompletedJobsOpen, setDashboardCompletedJobsOpen] = useState(false);
+  const [dashboardToolsOpen, setDashboardToolsOpen] = useState(false);
   const [completedJobs, setCompletedJobs] = useState([]);
   const [pastCompletedJobs, setPastCompletedJobs] = useState([]);
   const [completedJobMetrics, setCompletedJobMetrics] = useState([]);
@@ -21298,25 +21304,82 @@ function App() {
 
       {renderQuickMeasureReviewPanel()}
 
-      <DashboardTasks supabase={supabase} authUser={authUser} onOpenTasks={(taskId = "") => { setWorkHubInitialTaskId(taskId); setActiveTemplate("workHub"); }} />
+      <DashboardTasks
+        supabase={supabase}
+        authUser={authUser}
+        role={authRole}
+        activeJobs={activeJobs}
+        canAccessInvoices={canAccessInvoiceQueue}
+        canManageCompliance={canManageSubcontractorCompliance}
+        onOpenTasks={(taskId = "") => {
+          setWorkHubInitialCreateTask(false);
+          setWorkHubInitialTaskId(taskId);
+          setActiveTemplate("workHub");
+        }}
+        onOpenProposals={() => setActiveTemplate("proposalRequests")}
+        onOpenActiveJobs={() => setActiveTemplate("activeJobs")}
+        onOpenInvoices={() => setActiveTemplate("invoices")}
+        onOpenVendors={() => setActiveTemplate("subcontractors")}
+      />
 
-      <Section title="Quick actions" subtitle="Capture a new opportunity and keep it moving through the CRM.">
+      <Section title="Quick actions" subtitle="Start the work you use most often.">
         <div className="dashboardQuickActions">
           <button type="button" className="templateCard collectLeadCard" onClick={openDashboardLeadCapture}>
             <span className="eyebrow">CRM</span>
             <strong>Collect Lead</strong>
-            <p>Add the customer, property, service needs, lead source, value, and follow-up details.</p>
+            <p>Add a new customer opportunity.</p>
           </button>
+          <button type="button" className="templateCard" onClick={() => {
+            setWorkHubInitialTaskId("");
+            setWorkHubInitialCreateTask(true);
+            setActiveTemplate("workHub");
+          }}>
+            <span className="eyebrow">Team</span>
+            <strong>New Task</strong>
+            <p>Assign work and start a discussion.</p>
+          </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalRequests")}>
+            <span className="eyebrow">Sales</span>
+            <strong>Proposal Request</strong>
+            <p>Submit scope and estimating information.</p>
+          </button>
+          <button type="button" className="templateCard" onClick={() => setActiveTemplate("activeJobs")}>
+            <span className="eyebrow">Projects</span>
+            <strong>Active Jobs</strong>
+            <p>{activeJobsSummary.activeCount ? `${activeJobsSummary.activeCount} active projects` : "Open the active jobs workspace."}</p>
+          </button>
+          {canCreateApprovedJobData ? (
+            <button type="button" className="templateCard" onClick={() => setActiveTemplate("approvedJobs")}>
+              <span className="eyebrow">Jobs</span>
+              <strong>Add Approved Job</strong>
+              <p>Create or review upcoming approved work.</p>
+            </button>
+          ) : null}
+          {canAccessInvoiceQueue ? (
+            <button type="button" className="templateCard" onClick={() => setActiveTemplate("invoices")}>
+              <span className="eyebrow">Accounting</span>
+              <strong>Invoice Queue</strong>
+              <p>Prepare and send job invoices.</p>
+            </button>
+          ) : null}
           <button type="button" className="templateCard" onClick={() => setActiveTemplate("subcontractors")}>
-            <span className="eyebrow">Company Directory</span>
+            <span className="eyebrow">Directory</span>
             <strong>Approved Vendors</strong>
-            <p>Open Natalia's approved vendor and subcontractor contacts, trades, licensing, and compliance information.</p>
+            <p>Find vendor contacts and compliance.</p>
           </button>
         </div>
       </Section>
 
-      <Section title="Workflows" subtitle="Pick a starting point.">
-        <div className="workflowGroups">
+      <Section
+        title="More tools"
+        subtitle="Estimating, inspections, analytics, administration, and finance."
+        right={(
+          <button type="button" className="secondaryButton" aria-expanded={dashboardToolsOpen} onClick={() => setDashboardToolsOpen((current) => !current)}>
+            {dashboardToolsOpen ? "Minimize" : "Show tools"}
+          </button>
+        )}
+      >
+        {dashboardToolsOpen ? <div className="workflowGroups">
           <div className="workflowGroupCard">
             <div className="workflowGroupHeader">
               <h3>Field & project workflows</h3>
@@ -21391,7 +21454,9 @@ function App() {
               </button>
             </div>
           </div>
-        </div>
+        </div> : (
+          <p className="emptyState">Specialist tools are tucked away here to keep the dashboard focused.</p>
+        )}
       </Section>
 
       {jobsSyncStatus === "loading" || jobsSyncStatus === "refreshing" || jobsSyncStatus === "reconnecting" || jobsSyncStatus === "offline" || jobsSyncStatus === "error" ? (
@@ -21483,14 +21548,31 @@ function App() {
           <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("activeJobs")}>
             Open Active Jobs
           </button>
+          {activeJobsSummary.activeCount > activeJobsSummary.upcoming.length ? (
+            <span className="dashboardTabHint">
+              Showing the next {activeJobsSummary.upcoming.length} of {activeJobsSummary.activeCount} active jobs.
+            </span>
+          ) : null}
         </div>
       </Section>
 
       <Section
         title={`Past Completed Jobs (${pastCompletedJobs.length})`}
         subtitle="Completed job history retained with project details and recorded costs."
+        right={(
+          <button
+            type="button"
+            className="secondaryButton"
+            aria-expanded={dashboardCompletedJobsOpen}
+            onClick={() => setDashboardCompletedJobsOpen((current) => !current)}
+          >
+            {dashboardCompletedJobsOpen ? "Minimize" : "Show completed jobs"}
+          </button>
+        )}
       >
-        {pastCompletedJobs.length ? (
+        {!dashboardCompletedJobsOpen ? (
+          <p className="emptyState">Completed jobs are saved here and hidden from the daily workspace.</p>
+        ) : pastCompletedJobs.length ? (
           <div className="savedList">
             {pastCompletedJobs.map((job) => {
               const previewDetails = getActiveJobPreviewDetails(job);
@@ -24004,6 +24086,7 @@ function App() {
       }
 
       setWorkHubInitialTaskId(data.id);
+      setWorkHubInitialCreateTask(false);
       setCfoPaymentDiscussionOpeningId("");
       setSelectedCfoCard("");
       setActiveTemplate("workHub");
@@ -25628,6 +25711,10 @@ function App() {
   };
 
   const navigateFromSidebar = (destination) => {
+    if (destination === "workHub") {
+      setWorkHubInitialTaskId("");
+      setWorkHubInitialCreateTask(false);
+    }
     setActiveTemplate(destination);
     setSidebarMobileOpen(false);
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
@@ -26084,7 +26171,7 @@ function App() {
   if (activeTemplate === "archive") return renderAuthenticatedLayout(renderArchiveScreen());
   if (activeTemplate === "profile") return renderAuthenticatedLayout(renderProfileScreen());
   if (activeTemplate === "settings") return renderAuthenticatedLayout(renderSettingsScreen());
-  if (activeTemplate === "workHub") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTaskId={workHubInitialTaskId} />);
+  if (activeTemplate === "workHub") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTaskId={workHubInitialTaskId} initialCreateTask={workHubInitialCreateTask} />);
   if (activeTemplate === "proposalRequests") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTab="proposals" />);
   if (activeTemplate === "subcontractors") return renderAuthenticatedLayout(renderSubcontractorDirectoryScreen());
   if (activeTemplate === "sprayFoam") return renderAuthenticatedLayout(renderSprayFoamScreen());
