@@ -9757,63 +9757,111 @@ function App() {
     }
 
     let active = true;
+    let sessionAttempt = 0;
+    let authSettled = false;
 
-    const applySession = async (session) => {
+    const finishAuthLoading = () => {
       if (!active) return;
-      if (!session?.user) {
-        setAuthUser(null);
-        setAuthRole("salesperson");
-        setAuthLoading(false);
-        return;
-      }
-      let { data: profile } = await fetchAuthUserProfile(session.user.id);
-      if (!profile) {
-        const ensured = await ensureAuthUserProfile(session.user, profile);
-        if (!active) return;
-        if (ensured?.data) {
-          profile = ensured.data;
-        } else {
-          const refreshed = await fetchAuthUserProfile(session.user.id);
-          if (!active) return;
-          profile = refreshed.data;
-        }
-      }
-      if (!active) return;
-      const mapped = mapAuthUserFromSession(session.user, profile);
-      if ((!profile?.role || !String(profile.role).trim()) && mapped?.role) {
-        const { data: patchedProfile, error: patchedProfileError } = await supabase
-          .from("user_profiles")
-          .upsert(
-            {
-              id: session.user.id,
-              email: String(session.user.email || profile?.email || "").trim(),
-              full_name: String(profile?.full_name || profile?.display_name || session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email || "").trim(),
-              role: mapped.role,
-            },
-            { onConflict: "id" },
-          )
-          .select("id, full_name, email, role, avatar_path")
-          .maybeSingle();
-        if (!active) return;
-        if (!patchedProfileError && patchedProfile) {
-          const patchedMapped = await attachProfilePhotoUrl(mapAuthUserFromSession(session.user, patchedProfile));
-          if (!active) return;
-          setAuthUser(patchedMapped);
-          setAuthRole(patchedMapped?.role || "salesperson");
-          setAuthLoading(false);
-          return;
-        }
-      }
-      const mappedWithPhoto = await attachProfilePhotoUrl(mapped);
-      if (!active) return;
-      setAuthUser(mappedWithPhoto);
-      setAuthRole(mappedWithPhoto?.role || "salesperson");
+      authSettled = true;
       setAuthLoading(false);
     };
 
-    supabase.auth.getSession().then(({ data }) => {
-      applySession(data?.session || null);
-    });
+    const startupTimeout = window.setTimeout(() => {
+      if (!active || authSettled) return;
+      setAuthUser(null);
+      setAuthRole("salesperson");
+      setLoginError("The sign-in check took too long. Check your internet connection or VPN, then sign in again.");
+      finishAuthLoading();
+    }, 12000);
+
+    const applySession = async (session) => {
+      const attempt = ++sessionAttempt;
+      const isCurrentAttempt = () => active && attempt === sessionAttempt;
+      if (!isCurrentAttempt()) return;
+      if (!session?.user) {
+        setAuthUser(null);
+        setAuthRole("salesperson");
+        setLoginError("");
+        finishAuthLoading();
+        return;
+      }
+      const profileTimeout = window.setTimeout(() => {
+        if (!isCurrentAttempt() || authSettled) return;
+        const fallbackUser = mapAuthUserFromSession(session.user, null);
+        setAuthUser(fallbackUser);
+        setAuthRole(fallbackUser?.role || "salesperson");
+        setSessionMessage("Signed in. Some profile details are still loading.");
+        setSessionMessageType("warning");
+        finishAuthLoading();
+      }, 8000);
+      try {
+        let { data: profile } = await fetchAuthUserProfile(session.user.id);
+        if (!profile) {
+          const ensured = await ensureAuthUserProfile(session.user, profile);
+          if (!isCurrentAttempt()) return;
+          if (ensured?.data) {
+            profile = ensured.data;
+          } else {
+            const refreshed = await fetchAuthUserProfile(session.user.id);
+            if (!isCurrentAttempt()) return;
+            profile = refreshed.data;
+          }
+        }
+        if (!isCurrentAttempt()) return;
+        const mapped = mapAuthUserFromSession(session.user, profile);
+        if ((!profile?.role || !String(profile.role).trim()) && mapped?.role) {
+          const { data: patchedProfile, error: patchedProfileError } = await supabase
+            .from("user_profiles")
+            .upsert(
+              {
+                id: session.user.id,
+                email: String(session.user.email || profile?.email || "").trim(),
+                full_name: String(profile?.full_name || profile?.display_name || session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email || "").trim(),
+                role: mapped.role,
+              },
+              { onConflict: "id" },
+            )
+            .select("id, full_name, email, role, avatar_path")
+            .maybeSingle();
+          if (!isCurrentAttempt()) return;
+          if (!patchedProfileError && patchedProfile) {
+            const patchedMapped = await attachProfilePhotoUrl(mapAuthUserFromSession(session.user, patchedProfile));
+            if (!isCurrentAttempt()) return;
+            setAuthUser(patchedMapped);
+            setAuthRole(patchedMapped?.role || "salesperson");
+            setLoginError("");
+            finishAuthLoading();
+            return;
+          }
+        }
+        const mappedWithPhoto = await attachProfilePhotoUrl(mapped);
+        if (!isCurrentAttempt()) return;
+        setAuthUser(mappedWithPhoto);
+        setAuthRole(mappedWithPhoto?.role || "salesperson");
+        setLoginError("");
+        finishAuthLoading();
+      } catch {
+        if (!isCurrentAttempt()) return;
+        const fallbackUser = mapAuthUserFromSession(session.user, null);
+        setAuthUser(fallbackUser);
+        setAuthRole(fallbackUser?.role || "salesperson");
+        setSessionMessage("Signed in, but profile details could not be refreshed. Check your connection and reload the page.");
+        setSessionMessageType("warning");
+        finishAuthLoading();
+      } finally {
+        window.clearTimeout(profileTimeout);
+      }
+    };
+
+    supabase.auth.getSession()
+      .then(({ data }) => { void applySession(data?.session || null); })
+      .catch(() => {
+        if (!active) return;
+        setAuthUser(null);
+        setAuthRole("salesperson");
+        setLoginError("The portal could not reach the sign-in service. Check your internet connection or VPN and try again.");
+        finishAuthLoading();
+      });
 
     const {
       data: { subscription },
@@ -9828,6 +9876,7 @@ function App() {
 
     return () => {
       active = false;
+      window.clearTimeout(startupTimeout);
       subscription.unsubscribe();
     };
   }, []);
