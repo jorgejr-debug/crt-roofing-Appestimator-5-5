@@ -70,7 +70,7 @@ const textFields = [
 ];
 
 const blankDraft = (userId = "") => ({
-  salesperson_id: userId, assigned_estimator_id: "", priority: "normal", job_type: "standard_roof", existing_lead_job_id: "",
+  salesperson_id: userId, assigned_estimator_id: "", priority: "normal", job_type: "standard_roof", existing_lead_job_id: "", source_lead_id: "",
   customer_name: "", property_name: "", service_address: "", billing_information: "", customer_contact: "", project_contact_first_name: "",
   project_contact_last_name: "", project_contact_phone: "", project_contact_email: "", scope_of_work: "", roof_areas: "",
   roofing_system: "", work_type: "", measurements: "", roof_measurement_notes: "", total_linear_feet: "", material_specifications: "", existing_layers: "", special_conditions: "", exclusions: "",
@@ -95,6 +95,7 @@ const submittedValue = (value) => {
 
 export default function ProposalRequests({ supabase, authUser, profiles = [] }) {
   const [requests, setRequests] = useState([]);
+  const [crmLeads, setCrmLeads] = useState([]);
   const [versions, setVersions] = useState([]);
   const [changeOrders, setChangeOrders] = useState([]);
   const [audit, setAudit] = useState([]);
@@ -141,17 +142,19 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
     })), [profiles, requests]);
 
   const load = useCallback(async () => {
-    const [requestResult, versionResult, orderResult, auditResult, attachmentResult] = await Promise.all([
+    const [requestResult, versionResult, orderResult, auditResult, attachmentResult, leadResult] = await Promise.all([
       supabase.from("proposal_requests").select("*").order("created_at", { ascending: false }),
       supabase.from("proposal_versions").select("*").order("version_number", { ascending: false }),
       supabase.from("proposal_change_orders").select("*").order("created_at", { ascending: false }),
       supabase.from("proposal_request_audit_events").select("*").order("created_at", { ascending: false }),
       supabase.from("proposal_request_attachments").select("*").order("created_at", { ascending: false }),
+      supabase.from("crm_leads").select("id, contact_name, company_name, phone, email, property_address, city, zip_code, quick_note, service_needed, originator_name, originator_email, status").order("updated_at", { ascending: false }),
     ]);
-    const firstError = [requestResult.error, versionResult.error, orderResult.error, auditResult.error, attachmentResult.error].find(Boolean);
+    const firstError = [requestResult.error, versionResult.error, orderResult.error, auditResult.error, attachmentResult.error, leadResult.error].find(Boolean);
     if (firstError) { setError(firstError.message); return; }
     setRequests(requestResult.data || []); setVersions(versionResult.data || []); setChangeOrders(orderResult.data || []);
     setAudit(auditResult.data || []); setAttachments(attachmentResult.data || []);
+    setCrmLeads(leadResult.data || []);
   }, [supabase]);
 
   useEffect(() => {
@@ -250,6 +253,30 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
     setView("detail"); setError(""); setMessage("");
   };
   const newRequest = () => { setSelectedId(""); setDraft(blankDraft(authUser.key)); setPendingAttachments([]); setView("form"); };
+
+  const applyCrmLead = (leadId) => {
+    const lead = crmLeads.find((item) => item.id === leadId);
+    if (!lead) {
+      setDraft((current) => ({ ...current, source_lead_id: "", existing_lead_job_id: "" }));
+      return;
+    }
+    const contactName = String(lead.contact_name || "").trim();
+    const nameParts = contactName.split(/\s+/).filter(Boolean);
+    setDraft((current) => ({
+      ...current,
+      source_lead_id: lead.id,
+      existing_lead_job_id: lead.id,
+      customer_name: current.customer_name || lead.company_name || contactName,
+      property_name: current.property_name || lead.company_name || lead.property_address || contactName,
+      service_address: current.service_address || [lead.property_address, lead.city, lead.zip_code].filter(Boolean).join(", "),
+      customer_contact: current.customer_contact || lead.quick_note || "",
+      project_contact_first_name: current.project_contact_first_name || nameParts[0] || "",
+      project_contact_last_name: current.project_contact_last_name || nameParts.slice(1).join(" "),
+      project_contact_phone: current.project_contact_phone || lead.phone || "",
+      project_contact_email: current.project_contact_email || lead.email || "",
+      work_type: current.work_type || lead.service_needed || "",
+    }));
+  };
 
   const queue = useMemo(() => requests.filter((request) => {
     const search = filters.search.toLowerCase();
@@ -391,6 +418,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
 
     {view === "form" ? <form className="proposalRequestForm" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
       <section className="panel"><h3>Request setup</h3><div className="proposalFieldGrid">
+        <label className="proposalWide"><span>Source CRM lead</span><select value={draft.source_lead_id || draft.existing_lead_job_id || ""} onChange={(e) => applyCrmLead(e.target.value)}><option value="">No linked lead — manual request</option>{crmLeads.filter((lead) => !["Lost", "Not Qualified"].includes(lead.status)).map((lead) => <option key={lead.id} value={lead.id}>{lead.contact_name || lead.company_name || lead.property_address || "Untitled lead"} · Originated by {lead.originator_name || lead.originator_email || "Unknown"}</option>)}</select></label>
         <label><span>Assigned salesperson *</span><select value={draft.salesperson_id} onChange={(e) => setDraft((d) => ({ ...d, salesperson_id: e.target.value }))}>{(isManager ? profiles : profiles.filter((p) => p.id === authUser.key)).map((p) => <option key={p.id} value={p.id}>{p.full_name || p.email}</option>)}</select></label>
         <label><span>Job type *</span><select value={draft.job_type} onChange={(e) => setDraft((d) => ({ ...d, job_type: e.target.value }))}>{PROPOSAL_JOB_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label>
         <label><span>Priority</span><select value={draft.priority} onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value }))}>{PROPOSAL_REQUEST_PRIORITIES.map((value) => <option key={value}>{value}</option>)}</select></label>
@@ -419,6 +447,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
       <section className="panel"><h3>Timing & responsibility</h3><div className="proposalFacts"><span>Submitted <b>{dateTime(selected.submitted_at)}</b></span><span>Target <b>{dateTime(selected.target_completion_at)}</b></span><span>Priority <b>{labelize(selected.priority)}</b></span><span>Estimator <b>{profiles.find((p) => p.id === selected.assigned_estimator_id)?.full_name || "Daniela"}</b></span></div></section>
       <section className="panel proposalSubmittedDetails"><div className="sectionHead"><div><h3>Submitted Request Details</h3><p>The complete information submitted by the salesperson for Daniela's review.</p></div>{isEstimator ? <div className="proposalRequestActions"><button type="button" className="secondaryButton" disabled={Boolean(exportBusy)} onClick={exportPdf}>Download Proposal Info PDF</button><button type="button" className="primaryButton" disabled={Boolean(exportBusy)} onClick={() => void exportZip()}>{exportBusy === "zip" ? "Preparing ZIP..." : "Download Complete ZIP"}</button></div> : null}</div>
         <details open><summary>Request setup</summary><div className="proposalReadOnlyGrid">
+          <div><span>Lead originated by</span><strong>{selected.lead_originator_name || selected.lead_originator_email || "Not linked to a CRM lead"}</strong></div>
           <div><span>Assigned salesperson</span><strong>{profiles.find((p) => p.id === selected.salesperson_id)?.full_name || profiles.find((p) => p.id === selected.salesperson_id)?.email || "Not assigned"}</strong></div>
           <div><span>Job type</span><strong>{PROPOSAL_JOB_TYPES.find((type) => type.value === selected.job_type)?.label || labelize(selected.job_type)}</strong></div>
           <div><span>Priority</span><strong>{labelize(selected.priority)}</strong></div>

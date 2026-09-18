@@ -11,6 +11,7 @@ import {
 test("invoice closing is limited to existing shared-job managers", () => {
   assert.equal(canSubmitJobForInvoice("admin"), true);
   assert.equal(canSubmitJobForInvoice("cfo"), true);
+  assert.equal(canSubmitJobForInvoice("project_manager"), false);
   assert.equal(canSubmitJobForInvoice("salesperson"), false);
 });
 

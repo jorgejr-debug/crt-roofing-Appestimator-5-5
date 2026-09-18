@@ -18,9 +18,14 @@ export function canManageSharedJobs(role) {
   return normalized === "admin" || normalized === "cfo";
 }
 
+export function canManageActiveJobs(role) {
+  const normalized = safeString(role).toLowerCase();
+  return canManageSharedJobs(normalized) || normalized === "project_manager";
+}
+
 export function canUpdateDailyJobCosts(role, email = "") {
   const normalizedEmail = safeString(email).toLowerCase();
-  return canManageSharedJobs(role) || normalizedEmail === "daniela@crtroofing.com";
+  return canManageActiveJobs(role) || normalizedEmail === "daniela@crtroofing.com";
 }
 
 export function canCreateApprovedJobs(role, email = "") {

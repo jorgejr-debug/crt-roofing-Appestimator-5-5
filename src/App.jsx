@@ -10,6 +10,7 @@ import DashboardTasks from "./DashboardTasks.jsx";
 import SubcontractorCompliance from "./SubcontractorCompliance.jsx";
 import InvoiceQueue from "./InvoiceQueue.jsx";
 import AccountAccessVault from "./AccountAccessVault.jsx";
+import { calculateLeadKpis, findPotentialDuplicateLead, validateQuickLead } from "./crmLeadWorkflow.js";
 import {
   canManageInvoiceQueue,
   canSubmitJobForInvoice,
@@ -80,6 +81,7 @@ import {
   buildSharedJobSourceId,
   buildSharedJobUpsertRow,
   canCreateApprovedJobs,
+  canManageActiveJobs,
   canManageSharedJobs,
   canUpdateDailyJobCosts,
   getActiveJobPreviewDetails,
@@ -231,6 +233,12 @@ const EMPLOYEE_DIRECTORY_BY_EMAIL = {
     title: "CFO",
     canViewAllProposals: true,
     canAccessCfoDashboard: true,
+  },
+  "miguel@crtroofing.com": {
+    displayName: "Miguel Figueroa",
+    title: "Project Manager / Production",
+    canViewAllProposals: false,
+    canAccessCfoDashboard: false,
   },
 };
 const DEFAULT_MATERIAL_PRICES = {
@@ -434,6 +442,7 @@ const DEFAULT_PROPOSAL_TEMPLATE = {
 const DEFAULT_PROPOSAL_TEMPLATE_ID = DEFAULT_PROPOSAL_TEMPLATE.id;
 
 const CRM_LEAD_SOURCE_OPTIONS = [
+  "Cold Calling",
   "Existing customer",
   "Referral",
   "Google",
@@ -2425,6 +2434,12 @@ h1{
   display:grid;
   gap:14px;
 }
+.quickLeadCaptureGrid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:14px;
+}
+.quickLeadCaptureGrid > :last-child{grid-column:1/-1}
 .crmKanban{
   display:grid;
   grid-template-columns:repeat(3,minmax(0,1fr));
@@ -2534,6 +2549,8 @@ h1{
 @media (max-width: 960px){
   .workflowGroupGrid{grid-template-columns:1fr;}
   .dashboardQuickActions{grid-template-columns:1fr;}
+  .quickLeadCaptureGrid{grid-template-columns:1fr;}
+  .quickLeadCaptureGrid > :last-child{grid-column:auto}
 }
 .loginShell{
   min-height:100vh; display:grid; place-items:center; padding:24px 12px;
@@ -3321,13 +3338,14 @@ function normalizeAppRole(value) {
   if (normalized === "admin") return "admin";
   if (normalized === "cfo") return "cfo";
   if (normalized === "estimator") return "estimator";
+  if (normalized === "project_manager") return "project_manager";
   if (normalized === "salesperson") return "salesperson";
   return "salesperson";
 }
 
 function hasExplicitAppRole(value) {
   const normalized = String(value || "").trim().toLowerCase();
-  return normalized === "admin" || normalized === "cfo" || normalized === "estimator" || normalized === "salesperson";
+  return normalized === "admin" || normalized === "cfo" || normalized === "estimator" || normalized === "project_manager" || normalized === "salesperson";
 }
 
 function normalizeEmployeeEmail(email) {
@@ -3342,6 +3360,7 @@ function deriveBootstrapRoleFromEmail(email) {
   const normalized = String(email || "").trim().toLowerCase();
   if (normalized === "natalia@crtroofing.com") return "admin";
   if (normalized === "jorge@crtroofing.com" || normalized === "jorgejr@crtroofing.com") return "cfo";
+  if (normalized === "miguel@crtroofing.com") return "project_manager";
   return "salesperson";
 }
 
@@ -3368,7 +3387,7 @@ function mapAuthUserFromSession(user, profile = null) {
     key: String(user.id),
     displayName: directoryEntry?.displayName || fullName || fallbackName,
     email,
-    title: directoryEntry?.title || (role === "admin" ? "Administration" : role === "cfo" ? "Finance" : "Sales"),
+    title: directoryEntry?.title || (role === "admin" ? "Administration" : role === "cfo" ? "Finance" : role === "project_manager" ? "Project Manager / Production" : "Sales"),
     canViewAllProposals: Boolean(directoryEntry?.canViewAllProposals),
     canAccessCfoDashboard,
     role,
@@ -3847,6 +3866,96 @@ async function fetchCompanyUserProfiles() {
   return { data: Array.isArray(data) ? data : [], error };
 }
 
+function mapCrmLeadRow(row = {}) {
+  return normalizeCrmLead({
+    ...(row.lead_payload && typeof row.lead_payload === "object" ? row.lead_payload : {}),
+    ...row,
+    id: row.id,
+    contactName: row.contact_name,
+    assignedStaffId: row.assigned_staff_id,
+    roofingServiceNeeded: row.service_needed,
+    description: row.quick_note,
+    leadStatus: row.status,
+    estimatedValue: row.estimated_value,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+}
+
+async function fetchCrmLeadsFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const { data, error } = await supabase.from("crm_leads").select("*").order("updated_at", { ascending: false });
+  return { data: Array.isArray(data) ? data.map(mapCrmLeadRow) : [], error };
+}
+
+async function upsertCrmLeadToSupabase(lead, actor) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !actor?.key) return { data: null, error: null };
+  const normalized = normalizeCrmLead(lead);
+  const originatorId = normalized.originatorId || actor.key;
+  const row = {
+    id: normalized.id,
+    created_by: originatorId,
+    originator_id: originatorId,
+    originator_name: normalized.originatorName || actor.displayName || "",
+    originator_email: normalized.originatorEmail || actor.email || "",
+    relationship_owner_id: normalized.relationshipOwnerId || originatorId,
+    assigned_staff_id: normalized.assignedStaffId,
+    contact_name: normalized.contactName,
+    first_name: normalized.firstName,
+    last_name: normalized.lastName,
+    company_name: normalized.companyName,
+    phone: normalized.phone,
+    email: normalized.email,
+    property_address: normalized.propertyAddress,
+    city: normalized.city,
+    zip_code: normalized.zipCode,
+    lead_source: normalized.leadSource || "Cold Calling",
+    service_needed: normalized.roofingServiceNeeded,
+    quick_note: normalized.description,
+    status: normalized.leadStatus,
+    qualification_status: normalized.qualificationStatus,
+    qualified_at: normalized.qualifiedAt || null,
+    qualified_by: normalized.qualifiedBy || null,
+    accepted_for_inspection_at: normalized.acceptedForInspectionAt || null,
+    accepted_for_inspection_by: normalized.acceptedForInspectionBy || null,
+    inspection_scheduled_at: normalized.inspectionScheduledAt || null,
+    converted_customer_id: normalized.convertedCustomerId,
+    estimated_value: Math.max(0, toNumber(normalized.estimatedValue, 0)),
+    lead_payload: normalized,
+    created_at: normalized.createdAt,
+    updated_at: normalized.updatedAt,
+    updated_by: actor.key,
+  };
+  const updateRow = { ...row };
+  delete updateRow.created_by;
+  delete updateRow.originator_id;
+  const updated = await supabase.from("crm_leads").update(updateRow).eq("id", normalized.id).select("*").maybeSingle();
+  if (updated.error) return { data: null, error: updated.error };
+  if (updated.data) return { data: mapCrmLeadRow(updated.data), error: null };
+  const inserted = await supabase.from("crm_leads").insert({ ...row, created_by: actor.key, originator_id: actor.key }).select("*").maybeSingle();
+  return { data: inserted.data ? mapCrmLeadRow(inserted.data) : null, error: inserted.error };
+}
+
+async function deleteCrmLeadFromSupabase(leadId) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !leadId) return { error: null };
+  return supabase.from("crm_leads").delete().eq("id", leadId);
+}
+
+async function fetchCrmKpiTargetFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: null };
+  return supabase.from("crm_kpi_targets").select("*").eq("key", "ivan_weekly_inspection_capacity").maybeSingle();
+}
+
+async function saveCrmKpiTargetToSupabase(value, actorId) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: null };
+  return supabase.from("crm_kpi_targets").upsert({
+    key: "ivan_weekly_inspection_capacity",
+    numeric_value: Math.max(0, Number(value) || 0),
+    updated_at: new Date().toISOString(),
+    updated_by: actorId,
+  }, { onConflict: "key" }).select("*").maybeSingle();
+}
+
 async function createProfilePhotoSignedUrl(avatarPath) {
   const path = String(avatarPath || "").trim();
   if (!path || !SUPABASE_URL || !SUPABASE_ANON_KEY) return "";
@@ -4169,6 +4278,7 @@ function createBlankCrmLead() {
   const now = new Date().toISOString();
   return {
     id: createFieldDailyLogId(),
+    contactName: "",
     firstName: "",
     lastName: "",
     phone: "",
@@ -4176,7 +4286,7 @@ function createBlankCrmLead() {
     propertyAddress: "",
     city: "",
     zipCode: "",
-    leadSource: "",
+    leadSource: "Cold Calling",
     roofingServiceNeeded: "",
     description: "",
     assignedStaffId: "",
@@ -4196,6 +4306,16 @@ function createBlankCrmLead() {
     appointmentDate: "",
     lastActivityDate: now,
     convertedCustomerId: "",
+    originatorId: "",
+    originatorName: "",
+    originatorEmail: "",
+    relationshipOwnerId: "",
+    qualificationStatus: "captured",
+    qualifiedAt: "",
+    qualifiedBy: "",
+    acceptedForInspectionAt: "",
+    acceptedForInspectionBy: "",
+    inspectionScheduledAt: "",
     history: [],
     createdAt: now,
     updatedAt: now,
@@ -4208,6 +4328,7 @@ function normalizeCrmLead(lead = {}) {
   return {
     ...createBlankCrmLead(),
     id: String(lead.id || createFieldDailyLogId()),
+    contactName: String(lead.contactName || lead.contact_name || ""),
     firstName: String(lead.firstName || lead.first_name || ""),
     lastName: String(lead.lastName || lead.last_name || ""),
     phone: String(lead.phone || ""),
@@ -4235,6 +4356,16 @@ function normalizeCrmLead(lead = {}) {
     appointmentDate: String(lead.appointmentDate || lead.appointment_date || ""),
     lastActivityDate: String(lead.lastActivityDate || lead.last_activity_date || now),
     convertedCustomerId: String(lead.convertedCustomerId || lead.converted_customer_id || ""),
+    originatorId: String(lead.originatorId || lead.originator_id || ""),
+    originatorName: String(lead.originatorName || lead.originator_name || ""),
+    originatorEmail: String(lead.originatorEmail || lead.originator_email || ""),
+    relationshipOwnerId: String(lead.relationshipOwnerId || lead.relationship_owner_id || ""),
+    qualificationStatus: String(lead.qualificationStatus || lead.qualification_status || "captured"),
+    qualifiedAt: String(lead.qualifiedAt || lead.qualified_at || ""),
+    qualifiedBy: String(lead.qualifiedBy || lead.qualified_by || ""),
+    acceptedForInspectionAt: String(lead.acceptedForInspectionAt || lead.accepted_for_inspection_at || ""),
+    acceptedForInspectionBy: String(lead.acceptedForInspectionBy || lead.accepted_for_inspection_by || ""),
+    inspectionScheduledAt: String(lead.inspectionScheduledAt || lead.inspection_scheduled_at || ""),
     history: historySource.map((item) => ({
       id: String(item.id || createFieldDailyLogId()),
       label: String(item.label || item.type || "Activity"),
@@ -9732,9 +9863,11 @@ function App() {
   const quickMeasureFileInputRef = useRef(null);
   const isAdminUser = authRole === "admin";
   const isFinanceUser = authRole === "admin" || authRole === "cfo";
+  const isProjectManager = authRole === "project_manager";
   const canManageEmployeeWages = isFinanceUser;
   const canManageSubcontractorCompliance = isFinanceUser || normalizeEmployeeEmail(authUser?.email) === "natalia@crtroofing.com";
   const canManageSharedJobData = canManageSharedJobs(authRole);
+  const canManageActiveJobData = canManageActiveJobs(authRole);
   const canUpdateDailyJobCostData = canUpdateDailyJobCosts(authRole, authUser?.email);
   const canCreateApprovedJobData = canCreateApprovedJobs(authRole, authUser?.email);
   const canSubmitInvoiceHandoff = canSubmitJobForInvoice(authRole);
@@ -10099,8 +10232,11 @@ function App() {
   const [jobsSyncError, setJobsSyncError] = useState("");
   const [cfoSyncStatus, setCfoSyncStatus] = useState("idle");
   const [cfoSyncError, setCfoSyncError] = useState("");
-  const [crmTab, setCrmTab] = useState("newLead");
+  const [crmTab, setCrmTab] = useState("quickCapture");
   const [crmLeads, setCrmLeads] = useState([]);
+  const [crmLeadSyncStatus, setCrmLeadSyncStatus] = useState("idle");
+  const [crmLeadSyncError, setCrmLeadSyncError] = useState("");
+  const [crmWeeklyInspectionTarget, setCrmWeeklyInspectionTarget] = useState(0);
   const [crmLeadDraft, setCrmLeadDraft] = useState(() => createBlankCrmLead());
   const [crmLeadEditingId, setCrmLeadEditingId] = useState("");
   const [crmLeadSearch, setCrmLeadSearch] = useState("");
@@ -10508,10 +10644,21 @@ function App() {
       setCrmFollowups([]);
       setCrmFollowupDraft(createBlankCrmFollowup());
       setCrmFollowupEditingId("");
+      setCrmLeadSyncStatus("idle");
+      setCrmLeadSyncError("");
       return;
     }
-
-    setCrmLeads(readJson(CRM_LEADS_KEY(authUser.key), []).map(normalizeCrmLead));
+    let active = true;
+    const localLeads = readJson(CRM_LEADS_KEY(authUser.key), []).map((lead) => normalizeCrmLead({
+      ...lead,
+      originatorId: lead.originatorId || authUser.key,
+      originatorName: lead.originatorName || authUser.displayName || "",
+      originatorEmail: lead.originatorEmail || authUser.email || "",
+      relationshipOwnerId: lead.relationshipOwnerId || authUser.key,
+    }));
+    setCrmLeads(localLeads);
+    setCrmLeadSyncStatus("loading");
+    setCrmLeadSyncError("");
     setCrmCustomers(readJson(CRM_CUSTOMERS_KEY(authUser.key), []).map(normalizeCrmCustomer));
     setCrmFollowups(readJson(CRM_FOLLOWUPS_KEY(authUser.key), []).map(normalizeCrmFollowup));
     setCrmLeadDraft(createBlankCrmLead());
@@ -10521,7 +10668,54 @@ function App() {
     setCrmSelectedCustomerId("");
     setCrmFollowupDraft(createBlankCrmFollowup());
     setCrmFollowupEditingId("");
-  }, [authUser?.key, applySharedJobRows]);
+
+    const loadSharedLeads = async () => {
+      let remote = await fetchCrmLeadsFromSupabase();
+      if (!active) return;
+      if (remote.error) {
+        setCrmLeadSyncStatus("local");
+        setCrmLeadSyncError(remote.error.message || "Shared lead sync is unavailable.");
+        return;
+      }
+      if (!remote.data.length && localLeads.length) {
+        const results = await Promise.all(localLeads.map((lead) => upsertCrmLeadToSupabase(lead, authUser)));
+        const failed = results.find((result) => result?.error);
+        if (failed?.error) {
+          if (!active) return;
+          setCrmLeadSyncStatus("local");
+          setCrmLeadSyncError(failed.error.message || "Legacy leads could not be moved to the shared CRM.");
+          return;
+        }
+        remote = await fetchCrmLeadsFromSupabase();
+      }
+      if (!active) return;
+      if (!remote.error) {
+        setCrmLeads(remote.data);
+        setCrmLeadSyncStatus("saved");
+        setCrmLeadSyncError("");
+      }
+      const targetResult = await fetchCrmKpiTargetFromSupabase();
+      if (!active) return;
+      if (!targetResult.error) setCrmWeeklyInspectionTarget(Math.max(0, Number(targetResult.data?.numeric_value) || 0));
+    };
+    void loadSharedLeads();
+    return () => { active = false; };
+  }, [authUser?.key]);
+
+  useEffect(() => {
+    if (!authUser?.key || !SUPABASE_URL || !SUPABASE_ANON_KEY) return undefined;
+    const channel = supabase
+      .channel(`crm-leads-${authUser.key}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "crm_leads" }, async () => {
+        const result = await fetchCrmLeadsFromSupabase();
+        if (!result.error) {
+          setCrmLeads(result.data);
+          setCrmLeadSyncStatus("saved");
+        }
+      })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [authUser?.key]);
 
   useEffect(() => {
     if (!authUser?.key) return;
@@ -13014,6 +13208,7 @@ function App() {
   );
 
   const crmLeadDisplayName = (lead = {}) =>
+    lead.contactName ||
     [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim() ||
     lead.companyName ||
     lead.propertyAddress ||
@@ -13042,9 +13237,15 @@ function App() {
   };
 
   const startNewCrmLeadDraft = () => {
-    setCrmLeadDraft(createBlankCrmLead());
+    setCrmLeadDraft(normalizeCrmLead({
+      ...createBlankCrmLead(),
+      originatorId: authUser?.key || "",
+      originatorName: authUser?.displayName || "",
+      originatorEmail: authUser?.email || "",
+      relationshipOwnerId: authUser?.key || "",
+    }));
     setCrmLeadEditingId("");
-    setCrmTab("newLead");
+    setCrmTab("quickCapture");
   };
 
   const openDashboardLeadCapture = () => {
@@ -13070,9 +13271,15 @@ function App() {
     }));
   };
 
-  const saveCrmLeadDraft = (statusMessage = "Saved lead.") => {
-    const normalized = normalizeCrmLead(crmLeadDraft);
-    if (!normalized.firstName && !normalized.lastName && !normalized.companyName) {
+  const saveCrmLeadDraft = (statusMessage = "Saved lead.", leadOverride = crmLeadDraft) => {
+    const normalized = normalizeCrmLead({
+      ...leadOverride,
+      originatorId: leadOverride.originatorId || authUser?.key || "",
+      originatorName: leadOverride.originatorName || authUser?.displayName || "",
+      originatorEmail: leadOverride.originatorEmail || authUser?.email || "",
+      relationshipOwnerId: leadOverride.relationshipOwnerId || authUser?.key || "",
+    });
+    if (!normalized.contactName && !normalized.firstName && !normalized.lastName && !normalized.companyName) {
       setSessionMessageType("error");
       setSessionMessage("Enter a lead name or company before saving.");
       return null;
@@ -13087,6 +13294,8 @@ function App() {
     const nextLead = {
       ...leadWithHistory,
       assignedStaffId: assignedStaff?.value || normalized.assignedStaffId || "",
+      qualifiedAt: normalized.qualificationStatus === "qualified" ? normalized.qualifiedAt || new Date().toISOString() : normalized.qualifiedAt,
+      qualifiedBy: normalized.qualificationStatus === "qualified" ? normalized.qualifiedBy || authUser?.key || "" : normalized.qualifiedBy,
       updatedAt: new Date().toISOString(),
     };
 
@@ -13098,26 +13307,86 @@ function App() {
     setCrmLeadEditingId(nextLead.id);
     setSessionMessageType("success");
     setSessionMessage(statusMessage);
+    setCrmLeadSyncStatus("saving");
+    void upsertCrmLeadToSupabase(nextLead, authUser).then((result) => {
+      if (result?.error) {
+        setCrmLeadSyncStatus("local");
+        setCrmLeadSyncError(result.error.message || "Lead saved locally but not to the shared CRM.");
+        setSessionMessageType("error");
+        setSessionMessage(`Lead saved on this device, but shared sync failed: ${result.error.message || result.error}`);
+        return;
+      }
+      setCrmLeadSyncStatus("saved");
+      setCrmLeadSyncError("");
+    });
     return nextLead;
   };
 
-  const handleCrmLeadAction = (action) => {
-    const saved = saveCrmLeadDraft();
+  const saveQuickLeadAndAddNext = () => {
+    const validation = validateQuickLead(crmLeadDraft);
+    if (!validation.valid) {
+      setSessionMessageType("error");
+      setSessionMessage(validation.errors.join(" "));
+      return;
+    }
+    const duplicate = findPotentialDuplicateLead(crmLeads, crmLeadDraft);
+    const saved = saveCrmLeadDraft(duplicate ? `Lead saved. Possible duplicate: ${crmLeadDisplayName(duplicate)}.` : "Lead captured. Ready for the next one.");
     if (!saved) return;
+    const fresh = normalizeCrmLead({
+      ...createBlankCrmLead(),
+      originatorId: authUser?.key || "",
+      originatorName: authUser?.displayName || "",
+      originatorEmail: authUser?.email || "",
+      relationshipOwnerId: authUser?.key || "",
+    });
+    setCrmLeadDraft(fresh);
+    setCrmLeadEditingId("");
+  };
+
+  const handleCrmLeadAction = (action) => {
+    const now = new Date().toISOString();
     if (action === "scheduleAppointment") {
-      setCrmLeadDraft((current) => ({ ...current, leadStatus: "Appointment Scheduled", appointmentDate: current.appointmentDate || new Date().toISOString().slice(0, 10) }));
-      setSessionMessageType("success");
-      setSessionMessage("Lead marked as Appointment Scheduled.");
+      const updated = {
+        ...crmLeadDraft,
+        leadStatus: "Appointment Scheduled",
+        qualificationStatus: "qualified",
+        qualifiedAt: crmLeadDraft.qualifiedAt || now,
+        qualifiedBy: crmLeadDraft.qualifiedBy || authUser?.key || "",
+        acceptedForInspectionAt: crmLeadDraft.acceptedForInspectionAt || now,
+        acceptedForInspectionBy: crmLeadDraft.acceptedForInspectionBy || authUser?.key || "",
+        inspectionScheduledAt: crmLeadDraft.inspectionScheduledAt || now,
+        appointmentDate: crmLeadDraft.appointmentDate || now.slice(0, 10),
+      };
+      setCrmLeadDraft(updated);
+      saveCrmLeadDraft("Lead qualified and accepted for inspection.", updated);
     } else if (action === "createEstimate") {
-      setCrmLeadDraft((current) => ({ ...current, leadStatus: "Estimate in Progress" }));
-      setSessionMessageType("success");
-      setSessionMessage("Lead marked as Estimate in Progress.");
+      const updated = { ...crmLeadDraft, leadStatus: "Estimate in Progress" };
+      setCrmLeadDraft(updated);
+      saveCrmLeadDraft("Lead marked as Estimate in Progress.", updated);
     }
   };
 
   const deleteCrmLead = (leadId) => {
     setCrmLeads((current) => current.filter((lead) => lead.id !== leadId));
     if (crmLeadEditingId === leadId) startNewCrmLeadDraft();
+    void deleteCrmLeadFromSupabase(leadId).then((result) => {
+      if (result?.error) {
+        setSessionMessageType("error");
+        setSessionMessage(`Lead was removed locally, but shared deletion failed: ${result.error.message || result.error}`);
+      }
+    });
+  };
+
+  const saveCrmWeeklyInspectionTarget = async () => {
+    const result = await saveCrmKpiTargetToSupabase(crmWeeklyInspectionTarget, authUser?.key || null);
+    if (result?.error) {
+      setSessionMessageType("error");
+      setSessionMessage(`KPI target could not be saved: ${result.error.message || result.error}`);
+      return;
+    }
+    setCrmWeeklyInspectionTarget(Math.max(0, Number(result.data?.numeric_value) || 0));
+    setSessionMessageType("success");
+    setSessionMessage("Ivan's weekly inspection capacity target was saved.");
   };
 
   const convertCrmLeadToCustomer = () => {
@@ -14572,7 +14841,7 @@ function App() {
   };
 
   const handleStartActiveJobEdit = (job) => {
-    if (!job || !canManageSharedJobData) return;
+    if (!job || !canManageActiveJobData) return;
     setActiveJobEditDraft(buildActiveJobEditDraft(job));
     setActiveJobEditMode(true);
   };
@@ -14588,7 +14857,7 @@ function App() {
 
   const handleSaveActiveJobEdit = async (job) => {
     if (!job || !activeJobEditDraft || !authUser?.key) return;
-    if (!canManageSharedJobData) {
+    if (!canManageActiveJobData) {
       setSessionMessageType("error");
       setSessionMessage("You do not have permission to edit shared jobs.");
       return;
@@ -14603,11 +14872,31 @@ function App() {
 
     setJobsSyncStatus("saving");
     setSessionMessage("");
-    const { error } = await upsertSharedJobToSupabase(
-      updatedJob,
-      authUser.key,
-      authUser.id || authUser.key,
-    );
+    const { error } = isProjectManager
+      ? await supabase.rpc("save_project_manager_active_job", {
+          p_source_record_uid: buildSharedJobSourceId(updatedJob),
+          p_updates: {
+            propertyManager: updatedJob.propertyManager,
+            projectContact: updatedJob.projectContact,
+            projectManager: updatedJob.projectManager,
+            fieldSupervisor: updatedJob.fieldSupervisor,
+            foreman: updatedJob.foreman,
+            officeCoordinator: updatedJob.officeCoordinator,
+            status: updatedJob.status,
+            currentPhase: updatedJob.currentPhase,
+            riskLevel: updatedJob.riskLevel,
+            riskReason: updatedJob.riskReason,
+            startDate: updatedJob.startDate,
+            expectedCompletionDate: updatedJob.expectedCompletionDate,
+            percentComplete: updatedJob.percentComplete,
+            activityLog: updatedJob.activityLog,
+          },
+        })
+      : await upsertSharedJobToSupabase(
+          updatedJob,
+          authUser.key,
+          authUser.id || authUser.key,
+        );
     if (error) {
       setJobsSyncStatus("error");
       setJobsSyncError(error.message || String(error));
@@ -15119,7 +15408,7 @@ function App() {
   };
 
   const saveActiveJobIssue = async () => {
-    if (!canManageSharedJobData) {
+    if (!canManageActiveJobData) {
       setSessionMessageType("error");
       setSessionMessage("You do not have permission to update shared jobs.");
       return;
@@ -15191,7 +15480,16 @@ function App() {
       current.map((job) => (job.id !== project.id ? job : nextProject)),
     );
 
-    const upsertRes = await upsertSharedJobToSupabase(nextProject, authUser?.key || "", authUser?.id || authUser?.key || "");
+    const upsertRes = isProjectManager
+      ? await supabase.rpc("save_project_manager_active_job", {
+          p_source_record_uid: buildSharedJobSourceId(nextProject),
+          p_updates: {
+            issues: nextProject.issues,
+            activityLog: nextProject.activityLog,
+            riskLevel: nextProject.riskLevel,
+          },
+        })
+      : await upsertSharedJobToSupabase(nextProject, authUser?.key || "", authUser?.id || authUser?.key || "");
     if (upsertRes.error) {
       setSessionMessageType("error");
       setSessionMessage(`Issue saved locally but sync failed: ${upsertRes.error.message || upsertRes.error}`);
@@ -15259,6 +15557,7 @@ function App() {
       salesCommission: financialSummary.salesCommission,
       otherJobCosts: financialSummary.otherJobCosts,
       grossProfitBeforeOverhead: financialSummary.grossProfitBeforeOverhead,
+      commissionableGrossProfit: financialSummary.commissionableGrossProfit,
       fullyLoadedCost: financialSummary.fullyLoadedCost,
       netCompanyProfit: financialSummary.netCompanyProfit,
       status: approvedJobData.status,
@@ -17881,7 +18180,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
+            <p>{isProjectManager ? "Project Manager / Production" : isAdminUser ? "Admin" : "Salesperson"}</p>
           </div>
         </header>
 
@@ -18228,6 +18527,20 @@ function App() {
       .sort((a, b) => String(a.dueDate || a.createdAt || "").localeCompare(String(b.dueDate || b.createdAt || "")));
 
     const openFollowups = filteredFollowups.filter((followup) => String(followup.status || "").toLowerCase() !== "completed");
+    const chrisKpis = calculateLeadKpis(crmLeads, {
+      originatorEmail: "chris@crtroofing.com",
+      weeklyInspectionTarget: crmWeeklyInspectionTarget,
+    });
+    const chrisApprovedPipeline = crmLeads
+      .filter((lead) => String(lead.originatorEmail || "").toLowerCase() === "chris@crtroofing.com" && lead.leadStatus === "Approved")
+      .reduce((sum, lead) => sum + Math.max(0, toNumber(lead.estimatedValue, 0)), 0);
+    const chrisClosedJobs = completedJobs.filter((job) => {
+      const attributionEmail = String(job.leadOriginatorEmail || job.commissionRecipientEmail || "").toLowerCase();
+      const attributionName = String(job.commissionRecipientName || job.leadOriginatorName || job.salesperson || "").toLowerCase();
+      return attributionEmail === "chris@crtroofing.com" || attributionName.includes("chris");
+    });
+    const chrisFinalizedGrossProfit = chrisClosedJobs.reduce((sum, job) => sum + Math.max(0, toNumber(job.commissionableGrossProfit, 0)), 0);
+    const chrisEarnedCommission = chrisClosedJobs.reduce((sum, job) => sum + Math.max(0, toNumber(job.salesCommission, 0)), 0);
     const leadStatusCounts = CRM_LEAD_STATUS_OPTIONS.reduce((acc, status) => {
       acc[status] = crmLeads.filter((lead) => String(lead.leadStatus || "") === status).length;
       return acc;
@@ -18753,7 +19066,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
+            <p>{isProjectManager ? "Project Manager / Production" : isAdminUser ? "Admin" : "Salesperson"}</p>
           </div>
         </header>
 
@@ -18775,11 +19088,12 @@ function App() {
         <Section title="CRM Tabs" subtitle="Phase 1 workflow pages.">
           <div className="dashboardTabBar">
             {[
-              ["newLead", "New Lead"],
+              ["quickCapture", "Quick Capture"],
+              ["newLead", "Qualify / Edit"],
               ["pipeline", "Lead Pipeline"],
               ["customers", "Customers"],
               ["followUps", "Follow-Ups"],
-              ["reports", "CRM Reports"],
+              ["reports", "Chris KPI"],
             ].map(([key, label]) => (
               <button
                 key={key}
@@ -18791,12 +19105,51 @@ function App() {
               </button>
             ))}
           </div>
+          <p className="smallNote" style={{ margin: 0 }}>
+            Shared CRM: {crmLeadSyncStatus === "saving" ? "saving..." : crmLeadSyncStatus === "saved" ? "synced" : crmLeadSyncStatus === "loading" ? "loading..." : "local fallback"}
+            {crmLeadSyncError ? ` · ${crmLeadSyncError}` : ""}
+          </p>
         </Section>
+
+        {crmTab === "quickCapture" ? (
+          <Section title="Quick Lead Capture" subtitle="Built for the road: capture the opportunity now and qualify it later.">
+            <div className="quickLeadCaptureGrid">
+              <Field label="Contact or company *">
+                <input autoFocus type="text" value={crmLeadDraft.contactName} onChange={(e) => updateCrmLeadDraftField("contactName", e.target.value)} placeholder="Person or business name" />
+              </Field>
+              <Field label="Phone">
+                <input type="tel" inputMode="tel" value={crmLeadDraft.phone} onChange={(e) => updateCrmLeadDraftField("phone", e.target.value)} placeholder="Best callback number" />
+              </Field>
+              <Field label="Property address">
+                <input type="text" value={crmLeadDraft.propertyAddress} onChange={(e) => updateCrmLeadDraftField("propertyAddress", e.target.value)} placeholder="Address if available" />
+              </Field>
+              <Field label="Opportunity type">
+                <select value={crmLeadDraft.roofingServiceNeeded} onChange={(e) => updateCrmLeadDraftField("roofingServiceNeeded", e.target.value)}>
+                  <option value="">Not sure yet</option>
+                  {CRM_LEAD_SERVICE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </Field>
+              <Field label="One quick note">
+                <textarea rows="3" value={crmLeadDraft.description} onChange={(e) => updateCrmLeadDraftField("description", e.target.value)} placeholder="What did they need or say?" />
+              </Field>
+            </div>
+            <div className="detailList" style={{ marginTop: 14 }}>
+              <DetailRow label="Originator" value={crmLeadDraft.originatorName || authUser?.displayName || "Current user"} />
+              <DetailRow label="Source" value={crmLeadDraft.leadSource || "Cold Calling"} />
+              <DetailRow label="Starting status" value="New · Needs qualification" />
+            </div>
+            <div className="actionRow" style={{ marginTop: 16 }}>
+              <button type="button" className="primaryButton" onClick={saveQuickLeadAndAddNext}>Save &amp; Add Next</button>
+              <button type="button" className="secondaryButton" onClick={() => setCrmTab("newLead")}>Continue to Qualification</button>
+              <button type="button" className="dangerButton" onClick={startNewCrmLeadDraft}>Clear</button>
+            </div>
+          </Section>
+        ) : null}
 
         {crmTab === "newLead" ? (
           <Section
-            title="New Lead"
-            subtitle="Capture contact, property, and follow-up details before assigning the lead."
+            title="Qualify / Edit Lead"
+            subtitle="Office follow-up and qualification live here so quick field capture stays fast."
             right={
               <div className="actionRow" style={{ margin: 0 }}>
                 <button type="button" className="secondaryButton" onClick={() => editCrmLead(crmLeadDraft)}>
@@ -18812,6 +19165,16 @@ function App() {
             </div>
 
             <div className="formGrid">
+              <Field label="Quick-capture contact / company">
+                <input type="text" value={crmLeadDraft.contactName} onChange={(e) => updateCrmLeadDraftField("contactName", e.target.value)} />
+              </Field>
+              <Field label="Qualification status">
+                <select value={crmLeadDraft.qualificationStatus} onChange={(e) => updateCrmLeadDraftField("qualificationStatus", e.target.value)}>
+                  <option value="captured">Needs qualification</option>
+                  <option value="qualified">Qualified</option>
+                  <option value="not_qualified">Not qualified</option>
+                </select>
+              </Field>
               <Field label="First name *">
                 <input type="text" value={crmLeadDraft.firstName} onChange={(e) => updateCrmLeadDraftField("firstName", e.target.value)} />
               </Field>
@@ -18933,6 +19296,9 @@ function App() {
             </div>
 
             <div className="detailList" style={{ marginTop: 14 }}>
+              <DetailRow label="Lead originator" value={crmLeadDraft.originatorName || crmLeadDraft.originatorEmail || "—"} />
+              <DetailRow label="Relationship owner" value={crmLeadDraft.relationshipOwnerId === crmLeadDraft.originatorId ? "Originator remains relationship owner" : crmLeadDraft.relationshipOwnerId || "—"} />
+              <DetailRow label="Qualified" value={crmLeadDraft.qualifiedAt ? new Date(crmLeadDraft.qualifiedAt).toLocaleString() : "Not yet"} />
               <DetailRow label="Last activity" value={crmLeadDraft.lastActivityDate ? new Date(crmLeadDraft.lastActivityDate).toLocaleString() : "—"} />
               <DetailRow label="Converted customer" value={crmLeadDraft.convertedCustomerId || "—"} />
               <DetailRow label="Lead created" value={crmLeadDraft.createdAt ? new Date(crmLeadDraft.createdAt).toLocaleString() : "—"} />
@@ -19042,6 +19408,8 @@ function App() {
                       <th>Property address</th>
                       <th>Service needed</th>
                       <th>Lead source</th>
+                      <th>Originator</th>
+                      <th>Qualification</th>
                       <th>Assigned staff</th>
                       <th>Status</th>
                       <th>Next follow-up</th>
@@ -19059,6 +19427,8 @@ function App() {
                           <td>{lead.propertyAddress || "—"}</td>
                           <td>{lead.roofingServiceNeeded || "—"}</td>
                           <td>{lead.leadSource || "—"}</td>
+                          <td>{lead.originatorName || lead.originatorEmail || "—"}</td>
+                          <td>{lead.qualificationStatus === "qualified" ? "Qualified" : lead.qualificationStatus === "not_qualified" ? "Not qualified" : "Needs qualification"}</td>
                           <td>{crmActiveStaffOptions.find((option) => option.value === lead.assignedStaffId)?.label || "Unassigned"}</td>
                           <td>{lead.leadStatus || "New"}</td>
                           <td>{lead.nextFollowUpDate || "—"}</td>
@@ -19069,9 +19439,11 @@ function App() {
                               <button type="button" className="secondaryButton" onClick={() => editCrmLead(lead)}>
                                 Edit
                               </button>
-                              <button type="button" className="dangerButton" onClick={() => deleteCrmLead(lead.id)}>
-                                Delete
-                              </button>
+                              {isFinanceUser ? (
+                                <button type="button" className="dangerButton" onClick={() => deleteCrmLead(lead.id)}>
+                                  Delete
+                                </button>
+                              ) : null}
                             </div>
                           </td>
                         </tr>
@@ -19270,24 +19642,68 @@ function App() {
         ) : null}
 
         {crmTab === "reports" ? (
-          <Section title="CRM Reports" subtitle="Placeholder reporting for the first phase of CRM.">
+          <Section title="Chris · Business Development KPI" subtitle="A simple scorecard: keep Ivan supplied with qualified opportunities and protect workflow compliance.">
             <div className="summaryGrid">
               <div className="summaryCard">
-                <span>Total leads</span>
-                <strong>{num(crmLeads.length, 0)}</strong>
+                <span>Leads captured this week</span>
+                <strong>{num(chrisKpis.capturedThisWeek, 0)}</strong>
+                <p>New opportunities originated by Chris.</p>
               </div>
               <div className="summaryCard">
-                <span>Total customers</span>
-                <strong>{num(crmCustomers.length, 0)}</strong>
+                <span>Qualified this week</span>
+                <strong>{num(chrisKpis.qualifiedThisWeek, 0)}</strong>
+                <p>{`${Math.round(chrisKpis.qualificationRate * 100)}% of this week's captured leads.`}</p>
               </div>
               <div className="summaryCard">
-                <span>Open follow-ups</span>
-                <strong>{num(openFollowups.length, 0)}</strong>
+                <span>Inspection-ready this week</span>
+                <strong>{num(chrisKpis.inspectionReadyThisWeek, 0)}</strong>
+                <p>{chrisKpis.capacityCoverage === null ? "Set Ivan's capacity target below." : `${Math.round(chrisKpis.capacityCoverage * 100)}% of Ivan's weekly target.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>Stale open leads</span>
+                <strong>{num(chrisKpis.staleCount, 0)}</strong>
+                <p>No recorded activity for more than seven days.</p>
+              </div>
+              <div className="summaryCard">
+                <span>SOP compliance</span>
+                <strong>{`${Math.round(chrisKpis.processComplianceRate * 100)}%`}</strong>
+                <p>Proposal-stage leads have a completed qualification record.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Approved pipeline value</span>
+                <strong>{money2(chrisApprovedPipeline)}</strong>
+                <p>Estimated value only; not gross profit or earned commission.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Closed attributed jobs</span>
+                <strong>{num(chrisClosedJobs.length, 0)}</strong>
+                <p>Completed jobs traced back to Chris or assigned to his commission record.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Finalized gross profit</span>
+                <strong>{money2(chrisFinalizedGrossProfit)}</strong>
+                <p>After direct job costs, other costs, and operating/overhead.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Earned commission</span>
+                <strong>{money2(chrisEarnedCommission)}</strong>
+                <p>25% of finalized commissionable gross profit on Chris-originated jobs.</p>
               </div>
             </div>
-            <p className="emptyState" style={{ marginTop: 16 }}>
-              CRM / Leads is under construction. Advanced reports, automation, and messaging will be added later.
-            </p>
+            {isFinanceUser ? (
+              <div className="formGrid" style={{ marginTop: 16 }}>
+                <Field label="Ivan's weekly inspection capacity target">
+                  <input type="number" min="0" step="1" value={crmWeeklyInspectionTarget} onChange={(e) => setCrmWeeklyInspectionTarget(e.target.value)} />
+                </Field>
+                <div className="actionRow" style={{ alignItems: "end" }}>
+                  <button type="button" className="primaryButton" onClick={saveCrmWeeklyInspectionTarget}>Save KPI Target</button>
+                </div>
+              </div>
+            ) : null}
+            <div className="notice" style={{ marginTop: 16 }}>
+              <strong>Commission control</strong>
+              <p style={{ marginBottom: 0 }}>Chris's 25% commission must be calculated from finalized job gross profit after operating/overhead costs. The CRM stores permanent lead attribution now; the dollar commission should populate only after that lead is linked through proposal, signed job, production, and closeout.</p>
+            </div>
           </Section>
         ) : null}
       </div>
@@ -19860,21 +20276,25 @@ function App() {
             <Field label="Total squares">
               <input type="number" onWheel={handleNumberInputWheel} value={approvedJobData.totalSquares} disabled />
             </Field>
-            <Field label="Approved bid amount">
-              <input type="number" onWheel={handleNumberInputWheel} value={approvedJobData.approvedBidAmount} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("approvedBidAmount", toNumber(e.target.value))} />
-            </Field>
-            <Field label="Change orders total (if any)">
-              <input type="number" onWheel={handleNumberInputWheel} step="0.01" value={approvedJobData.changeOrders ?? 0} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("changeOrders", toNumber(e.target.value))} />
-            </Field>
-            <Field label="Salesperson">
-              <input type="text" value={approvedJobData.salesperson || ""} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobSalespersonChange(e.target.value)} />
-            </Field>
-            <Field label="Sales commission rate (%)">
-              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={round(toNumber(approvedJobData.salesCommissionRate) * 100, 2)} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("salesCommissionRate", Math.max(0, toNumber(e.target.value)) / 100)} />
-            </Field>
-            <Field label="Other job costs">
-              <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={approvedJobData.otherJobCosts ?? 0} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("otherJobCosts", Math.max(0, toNumber(e.target.value)))} />
-            </Field>
+            {!isProjectManager ? (
+              <>
+                <Field label="Approved bid amount">
+                  <input type="number" onWheel={handleNumberInputWheel} value={approvedJobData.approvedBidAmount} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("approvedBidAmount", toNumber(e.target.value))} />
+                </Field>
+                <Field label="Change orders total (if any)">
+                  <input type="number" onWheel={handleNumberInputWheel} step="0.01" value={approvedJobData.changeOrders ?? 0} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("changeOrders", toNumber(e.target.value))} />
+                </Field>
+                <Field label="Salesperson">
+                  <input type="text" value={approvedJobData.salesperson || ""} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobSalespersonChange(e.target.value)} />
+                </Field>
+                <Field label="Sales commission rate (%)">
+                  <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={round(toNumber(approvedJobData.salesCommissionRate) * 100, 2)} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("salesCommissionRate", Math.max(0, toNumber(e.target.value)) / 100)} />
+                </Field>
+                <Field label="Other job costs">
+                  <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={approvedJobData.otherJobCosts ?? 0} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("otherJobCosts", Math.max(0, toNumber(e.target.value)))} />
+                </Field>
+              </>
+            ) : null}
             <Field label="Job status">
               <select value={approvedJobData.status} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("status", e.target.value)}>
                 <option value="approved">Approved</option>
@@ -19949,7 +20369,7 @@ function App() {
                                   <option value="">Select employee</option>
                                   {employeeDirectory.filter((person) => person.isActive).map((person) => (
                                     <option key={person.id} value={person.id}>
-                                      {buildEmployeeDisplayName(person) || "Unnamed employee"} · {money2(person.hourlyRate || 0)}/hr
+                                      {buildEmployeeDisplayName(person) || "Unnamed employee"}{isProjectManager ? "" : ` · ${money2(person.hourlyRate || 0)}/hr`}
                                     </option>
                                   ))}
                                 </select>
@@ -19958,18 +20378,22 @@ function App() {
                               <Field label="Hours">
                                 <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.5" value={employee.hoursWorked} onChange={(e) => handleEmployeeRowChange(day.id, employee.id, "hoursWorked", toNumber(e.target.value))} />
                               </Field>
-                              <Field label="Base hourly wage">
-                                <input type="number" value={laborCost.hourlyRate} disabled />
-                              </Field>
-                              <Field label="Base payroll">
-                                <input type="text" value={money2(laborCost.basePayroll)} disabled />
-                              </Field>
-                              <Field label="Workers’ comp (50%)">
-                                <input type="text" value={money2(laborCost.workersCompCost)} disabled />
-                              </Field>
-                              <Field label={`Payroll tax (${payrollTaxPercentLabel})`}>
-                                <input type="text" value={money2(laborCost.payrollTaxCost)} disabled />
-                              </Field>
+                              {!isProjectManager ? (
+                                <>
+                                  <Field label="Base hourly wage">
+                                    <input type="number" value={laborCost.hourlyRate} disabled />
+                                  </Field>
+                                  <Field label="Base payroll">
+                                    <input type="text" value={money2(laborCost.basePayroll)} disabled />
+                                  </Field>
+                                  <Field label="Workers’ comp (50%)">
+                                    <input type="text" value={money2(laborCost.workersCompCost)} disabled />
+                                  </Field>
+                                  <Field label={`Payroll tax (${payrollTaxPercentLabel})`}>
+                                    <input type="text" value={money2(laborCost.payrollTaxCost)} disabled />
+                                  </Field>
+                                </>
+                              ) : null}
                               <Field label="Total loaded labor cost">
                                 <input type="text" value={money2(laborCost.totalLaborCost)} disabled />
                               </Field>
@@ -20224,18 +20648,22 @@ function App() {
               <span>Total actual labor hours</span>
               <strong>{round(totals.totalActualLaborHours, 2)}</strong>
             </div>
-            <div className="detailRow">
-              <span>Total base payroll</span>
-              <strong>{money2(totals.totalActualBasePayroll)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Workers’ compensation (50%)</span>
-              <strong>{money2(totals.totalWorkersCompCost)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Payroll tax ({payrollTaxPercentLabel})</span>
-              <strong>{money2(totals.totalPayrollTaxCost)}</strong>
-            </div>
+            {!isProjectManager ? (
+              <>
+                <div className="detailRow">
+                  <span>Total base payroll</span>
+                  <strong>{money2(totals.totalActualBasePayroll)}</strong>
+                </div>
+                <div className="detailRow">
+                  <span>Workers’ compensation (50%)</span>
+                  <strong>{money2(totals.totalWorkersCompCost)}</strong>
+                </div>
+                <div className="detailRow">
+                  <span>Payroll tax ({payrollTaxPercentLabel})</span>
+                  <strong>{money2(totals.totalPayrollTaxCost)}</strong>
+                </div>
+              </>
+            ) : null}
             <div className="detailRow">
               <span>Total loaded labor cost</span>
               <strong>{money2(totals.totalActualLaborCost)}</strong>
@@ -20284,50 +20712,28 @@ function App() {
               <span>Direct cost before operating / overhead</span>
               <strong>{money2(totals.directActualCost)}</strong>
             </div>
-            <div className="detailRow">
-              <span>Operating / overhead cost ({APPROVED_JOB_OPERATING_OVERHEAD_RATE * 100}%)</span>
-              <strong>{money2(totals.operatingOverheadCost)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Total cost including operating / overhead</span>
-              <strong>{money2(totals.runningActualCost)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Approved sale price</span>
-              <strong>{money2(financialSummary.approvedSalePrice)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Change orders (if any)</span>
-              <strong>{money2(financialSummary.changeOrders)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Total sale price (including change orders)</span>
-              <strong>{money2(financialSummary.totalSalePrice)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Other job costs</span>
-              <strong>{money2(financialSummary.otherJobCosts)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Gross profit before operating / overhead</span>
-              <strong>{money2(financialSummary.grossProfitBeforeOverhead)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Sales commission ({round(financialSummary.salesCommissionRate * 100, 2)}%)</span>
-              <strong>{money2(financialSummary.salesCommission)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Total fully loaded cost</span>
-              <strong>{money2(financialSummary.fullyLoadedCost)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Net company profit</span>
-              <strong>{money2(financialSummary.netCompanyProfit)}</strong>
-            </div>
-            <div className="detailRow">
-              <span>Net company profit margin</span>
-              <strong>{financialSummary.netCompanyMarginPercent}%</strong>
-            </div>
+            {!isProjectManager ? (
+              <>
+                <div className="detailRow">
+                  <span>Operating / overhead cost ({APPROVED_JOB_OPERATING_OVERHEAD_RATE * 100}%)</span>
+                  <strong>{money2(totals.operatingOverheadCost)}</strong>
+                </div>
+                <div className="detailRow">
+                  <span>Total cost including operating / overhead</span>
+                  <strong>{money2(totals.runningActualCost)}</strong>
+                </div>
+                <div className="detailRow"><span>Approved sale price</span><strong>{money2(financialSummary.approvedSalePrice)}</strong></div>
+                <div className="detailRow"><span>Change orders (if any)</span><strong>{money2(financialSummary.changeOrders)}</strong></div>
+                <div className="detailRow"><span>Total sale price (including change orders)</span><strong>{money2(financialSummary.totalSalePrice)}</strong></div>
+                <div className="detailRow"><span>Other job costs</span><strong>{money2(financialSummary.otherJobCosts)}</strong></div>
+                <div className="detailRow"><span>Gross profit before operating / overhead</span><strong>{money2(financialSummary.grossProfitBeforeOverhead)}</strong></div>
+                <div className="detailRow"><span>Commissionable gross profit after operating / overhead</span><strong>{money2(financialSummary.commissionableGrossProfit)}</strong></div>
+                <div className="detailRow"><span>Sales commission ({round(financialSummary.salesCommissionRate * 100, 2)}%)</span><strong>{money2(financialSummary.salesCommission)}</strong></div>
+                <div className="detailRow"><span>Total fully loaded cost</span><strong>{money2(financialSummary.fullyLoadedCost)}</strong></div>
+                <div className="detailRow"><span>Net company profit</span><strong>{money2(financialSummary.netCompanyProfit)}</strong></div>
+                <div className="detailRow"><span>Net company profit margin</span><strong>{financialSummary.netCompanyMarginPercent}%</strong></div>
+              </>
+            ) : null}
           </div>
         </Section>
 
@@ -21692,11 +22098,13 @@ function App() {
 
       <Section title="Quick actions" subtitle="Start the work you use most often.">
         <div className="dashboardQuickActions">
-          <button type="button" className="templateCard collectLeadCard" onClick={openDashboardLeadCapture}>
-            <span className="eyebrow">CRM</span>
-            <strong>Collect Lead</strong>
-            <p>Add a new customer opportunity.</p>
-          </button>
+          {!isProjectManager ? (
+            <button type="button" className="templateCard collectLeadCard" onClick={openDashboardLeadCapture}>
+              <span className="eyebrow">CRM</span>
+              <strong>Collect Lead</strong>
+              <p>Add a new customer opportunity.</p>
+            </button>
+          ) : null}
           <button type="button" className="templateCard" onClick={() => {
             setWorkHubInitialTaskId("");
             setWorkHubInitialCreateTask(true);
@@ -21706,11 +22114,13 @@ function App() {
             <strong>New Task</strong>
             <p>Assign work and start a discussion.</p>
           </button>
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalRequests")}>
-            <span className="eyebrow">Sales</span>
-            <strong>Proposal Request</strong>
-            <p>Submit scope and estimating information.</p>
-          </button>
+          {!isProjectManager ? (
+            <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalRequests")}>
+              <span className="eyebrow">Sales</span>
+              <strong>Proposal Request</strong>
+              <p>Submit scope and estimating information.</p>
+            </button>
+          ) : null}
           <button type="button" className="templateCard" onClick={() => setActiveTemplate("activeJobs")}>
             <span className="eyebrow">Projects</span>
             <strong>Active Jobs</strong>
@@ -21754,41 +22164,47 @@ function App() {
               <p>Inspection, operations, proposals, templates, and job history in one place.</p>
             </div>
             <div className="workflowGroupGrid">
-              <button type="button" className="templateCard" onClick={() => setActiveTemplate("fieldNotes")}>
-                <span className="eyebrow">Inspection</span>
-                <strong>Field Notes / Roof Inspection</strong>
-                <p>Capture the roof details before bidding.</p>
-              </button>
+              {!isProjectManager ? (
+                <button type="button" className="templateCard" onClick={() => setActiveTemplate("fieldNotes")}>
+                  <span className="eyebrow">Inspection</span>
+                  <strong>Field Notes / Roof Inspection</strong>
+                  <p>Capture the roof details before bidding.</p>
+                </button>
+              ) : null}
               <button type="button" className="templateCard" onClick={() => setActiveTemplate("fieldOperations")}>
                 <span className="eyebrow">Operations</span>
                 <strong>Field Operations</strong>
                 <p>Daily job logs and office review for field crews.</p>
               </button>
-              <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalRequests")}>
-                <span className="eyebrow">Sales</span>
-                <strong>Proposal Requests</strong>
-                <p>Submit estimating requests and track Word/PDF proposal documents.</p>
-              </button>
-              <button type="button" className="templateCard" onClick={() => setActiveTemplate("estimateTemplates")}>
-                <span className="eyebrow">Templates</span>
-                <strong>Estimate Templates</strong>
-                <p>Open TPO and future estimate templates.</p>
-              </button>
-              <button type="button" className="templateCard" onClick={() => setActiveTemplate("jobMetrics")}>
-                <span className="eyebrow">Tracking</span>
-                <strong>Completed Job Metrics</strong>
-                <p>Track actual vs estimated costs and results.</p>
-              </button>
-              <button type="button" className="templateCard" onClick={() => setActiveTemplate("approvedJobs")}>
-                <span className="eyebrow">Jobs</span>
-                <strong>Approved Jobs</strong>
-                <p>Manage job status, daily logs, and progress tracking.</p>
-              </button>
-              <button type="button" className="templateCard" onClick={() => setActiveTemplate("pastJobInsights")}>
-                <span className="eyebrow">Analytics</span>
-                <strong>Past Job Insights</strong>
-                <p>View performance analytics from completed jobs.</p>
-              </button>
+              {!isProjectManager ? (
+                <>
+                  <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalRequests")}>
+                    <span className="eyebrow">Sales</span>
+                    <strong>Proposal Requests</strong>
+                    <p>Submit estimating requests and track Word/PDF proposal documents.</p>
+                  </button>
+                  <button type="button" className="templateCard" onClick={() => setActiveTemplate("estimateTemplates")}>
+                    <span className="eyebrow">Templates</span>
+                    <strong>Estimate Templates</strong>
+                    <p>Open TPO and future estimate templates.</p>
+                  </button>
+                  <button type="button" className="templateCard" onClick={() => setActiveTemplate("jobMetrics")}>
+                    <span className="eyebrow">Tracking</span>
+                    <strong>Completed Job Metrics</strong>
+                    <p>Track actual vs estimated costs and results.</p>
+                  </button>
+                  <button type="button" className="templateCard" onClick={() => setActiveTemplate("approvedJobs")}>
+                    <span className="eyebrow">Jobs</span>
+                    <strong>Approved Jobs</strong>
+                    <p>Manage job status, daily logs, and progress tracking.</p>
+                  </button>
+                  <button type="button" className="templateCard" onClick={() => setActiveTemplate("pastJobInsights")}>
+                    <span className="eyebrow">Analytics</span>
+                    <strong>Past Job Insights</strong>
+                    <p>View performance analytics from completed jobs.</p>
+                  </button>
+                </>
+              ) : null}
             </div>
           </div>
 
@@ -21867,10 +22283,12 @@ function App() {
                       <span>Homeowner / customer</span>
                       <strong>{previewDetails.homeowner}</strong>
                     </div>
-                    <div>
-                      <span>Contract amount</span>
-                      <strong>{money(previewDetails.contractAmount)}</strong>
-                    </div>
+                    {!isProjectManager ? (
+                      <div>
+                        <span>Contract amount</span>
+                        <strong>{money(previewDetails.contractAmount)}</strong>
+                      </div>
+                    ) : null}
                     <div>
                       <span>Foreman / superintendent</span>
                       <strong>{previewDetails.fieldLead}</strong>
@@ -22013,7 +22431,7 @@ function App() {
         )}
       </Section>
 
-      <Section
+      {!isProjectManager ? <Section
         title="Approved Jobs / Upcoming Projects"
         subtitle="Track approved work that is starting soon or still needs attention."
         right={
@@ -22049,9 +22467,9 @@ function App() {
             limit: 8,
           })
         )}
-      </Section>
+      </Section> : null}
 
-      <Section title="Saved estimates" subtitle="Recent estimates in this browser.">
+      {!isProjectManager ? <Section title="Saved estimates" subtitle="Recent estimates in this browser.">
         <div className="dashboardTabBar">
           <button
             type="button"
@@ -22144,7 +22562,7 @@ function App() {
         ) : (
           <p className="emptyState">Tap Saved estimates to open the list.</p>
         )}
-      </Section>
+      </Section> : null}
       {renderActiveJobIssueModal()}
       {renderInvoiceHandoffModal()}
     </div>
@@ -22431,7 +22849,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
+            <p>{isProjectManager ? "Project Manager / Production" : isAdminUser ? "Admin" : "Salesperson"}</p>
           </div>
         </header>
 
@@ -22750,7 +23168,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
+            <p>{isProjectManager ? "Project Manager / Production" : isAdminUser ? "Admin" : "Salesperson"}</p>
           </div>
         </header>
 
@@ -22787,11 +23205,13 @@ function App() {
             <strong>{project.riskLevel || "Normal"}</strong>
             <p>{project.riskReason || "No active risk notes."}</p>
           </div>
-          <div className="summaryCard">
-            <span>Contract value</span>
-            <strong>{money2(project.contractAmount || 0)}</strong>
-            <p>Approved job value being tracked.</p>
-          </div>
+          {!isProjectManager ? (
+            <div className="summaryCard">
+              <span>Contract value</span>
+              <strong>{money2(project.contractAmount || 0)}</strong>
+              <p>Approved job value being tracked.</p>
+            </div>
+          ) : null}
           <div className="summaryCard">
             <span>Open issues</span>
             <strong>{num(openIssues, 0)}</strong>
@@ -22807,7 +23227,7 @@ function App() {
         <Section
           title="Project overview"
           subtitle={activeJobEditMode ? "Update the project information, team assignments, schedule, and financial progress." : "Review the active job details. Use Edit project details to make changes."}
-          right={canManageSharedJobData && !activeJobEditMode ? (
+          right={canManageActiveJobData && !activeJobEditMode ? (
             <button type="button" className="primaryButton" onClick={() => handleStartActiveJobEdit(project)}>
               Edit project details
             </button>
@@ -22817,19 +23237,19 @@ function App() {
             <div className="activeJobEditForm">
               <div className="formGrid">
                 <Field label="Project name">
-                  <input type="text" value={activeJobEditDraft.projectName} onChange={(e) => handleActiveJobEditFieldChange("projectName", e.target.value)} />
+                  <input type="text" value={activeJobEditDraft.projectName} disabled={isProjectManager} onChange={(e) => handleActiveJobEditFieldChange("projectName", e.target.value)} />
                 </Field>
                 <Field label="Job number">
-                  <input type="text" value={activeJobEditDraft.jobNumber} onChange={(e) => handleActiveJobEditFieldChange("jobNumber", e.target.value)} />
+                  <input type="text" value={activeJobEditDraft.jobNumber} disabled={isProjectManager} onChange={(e) => handleActiveJobEditFieldChange("jobNumber", e.target.value)} />
                 </Field>
                 <Field label="Project address">
-                  <input type="text" value={activeJobEditDraft.address} onChange={(e) => handleActiveJobEditFieldChange("address", e.target.value)} />
+                  <input type="text" value={activeJobEditDraft.address} disabled={isProjectManager} onChange={(e) => handleActiveJobEditFieldChange("address", e.target.value)} />
                 </Field>
                 <Field label="Customer / company">
-                  <input type="text" value={activeJobEditDraft.customer} onChange={(e) => handleActiveJobEditFieldChange("customer", e.target.value)} />
+                  <input type="text" value={activeJobEditDraft.customer} disabled={isProjectManager} onChange={(e) => handleActiveJobEditFieldChange("customer", e.target.value)} />
                 </Field>
                 <Field label="Homeowner / property owner">
-                  <input type="text" value={activeJobEditDraft.propertyOwner} onChange={(e) => handleActiveJobEditFieldChange("propertyOwner", e.target.value)} />
+                  <input type="text" value={activeJobEditDraft.propertyOwner} disabled={isProjectManager} onChange={(e) => handleActiveJobEditFieldChange("propertyOwner", e.target.value)} />
                 </Field>
                 <Field label="Property manager">
                   <input type="text" value={activeJobEditDraft.propertyManager} onChange={(e) => handleActiveJobEditFieldChange("propertyManager", e.target.value)} />
@@ -22847,7 +23267,7 @@ function App() {
                   <input type="text" value={activeJobEditDraft.foreman} onChange={(e) => handleActiveJobEditFieldChange("foreman", e.target.value)} />
                 </Field>
                 <Field label="Salesperson">
-                  <input type="text" value={activeJobEditDraft.salesperson} onChange={(e) => handleActiveJobEditFieldChange("salesperson", e.target.value)} />
+                  <input type="text" value={activeJobEditDraft.salesperson} disabled={isProjectManager} onChange={(e) => handleActiveJobEditFieldChange("salesperson", e.target.value)} />
                 </Field>
                 <Field label="Office coordinator">
                   <input type="text" value={activeJobEditDraft.officeCoordinator} onChange={(e) => handleActiveJobEditFieldChange("officeCoordinator", e.target.value)} />
@@ -22875,24 +23295,30 @@ function App() {
                 <Field label="Expected completion date">
                   <input type="date" value={activeJobEditDraft.expectedCompletionDate} onChange={(e) => handleActiveJobEditFieldChange("expectedCompletionDate", e.target.value)} />
                 </Field>
-                <Field label="Contract value">
-                  <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={activeJobEditDraft.contractAmount} onChange={(e) => handleActiveJobEditFieldChange("contractAmount", toNumber(e.target.value))} />
-                </Field>
                 <Field label="Percent complete">
                   <input type="number" onWheel={handleNumberInputWheel} min="0" max="100" step="1" value={activeJobEditDraft.percentComplete} onChange={(e) => handleActiveJobEditFieldChange("percentComplete", toNumber(e.target.value))} />
                 </Field>
-                <Field label="Amount billed">
-                  <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={activeJobEditDraft.amountBilled} onChange={(e) => handleActiveJobEditFieldChange("amountBilled", toNumber(e.target.value))} />
-                </Field>
-                <Field label="Amount collected">
-                  <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={activeJobEditDraft.amountCollected} onChange={(e) => handleActiveJobEditFieldChange("amountCollected", toNumber(e.target.value))} />
-                </Field>
+                {!isProjectManager ? (
+                  <>
+                    <Field label="Contract value">
+                      <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={activeJobEditDraft.contractAmount} onChange={(e) => handleActiveJobEditFieldChange("contractAmount", toNumber(e.target.value))} />
+                    </Field>
+                    <Field label="Amount billed">
+                      <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={activeJobEditDraft.amountBilled} onChange={(e) => handleActiveJobEditFieldChange("amountBilled", toNumber(e.target.value))} />
+                    </Field>
+                    <Field label="Amount collected">
+                      <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={activeJobEditDraft.amountCollected} onChange={(e) => handleActiveJobEditFieldChange("amountCollected", toNumber(e.target.value))} />
+                    </Field>
+                  </>
+                ) : null}
               </div>
-              <div className="summaryCard activeJobEditRemaining">
-                <span>Remaining contract value</span>
-                <strong>{money2(Math.max(0, toNumber(activeJobEditDraft.contractAmount) - toNumber(activeJobEditDraft.amountBilled)))}</strong>
-                <p>Calculated from contract value minus amount billed.</p>
-              </div>
+              {!isProjectManager ? (
+                <div className="summaryCard activeJobEditRemaining">
+                  <span>Remaining contract value</span>
+                  <strong>{money2(Math.max(0, toNumber(activeJobEditDraft.contractAmount) - toNumber(activeJobEditDraft.amountBilled)))}</strong>
+                  <p>Calculated from contract value minus amount billed.</p>
+                </div>
+              ) : null}
               <div className="actionRow">
                 <button type="button" className="primaryButton" onClick={() => handleSaveActiveJobEdit(project)}>Save project changes</button>
                 <button type="button" className="secondaryButton" onClick={handleCancelActiveJobEdit}>Cancel</button>
@@ -22911,9 +23337,13 @@ function App() {
               <DetailRow label="Salesperson" value={project.salesperson || "—"} />
               <DetailRow label="Office coordinator" value={project.officeCoordinator || "—"} />
               <DetailRow label="Percent complete" value={`${num(project.percentComplete || 0, 0)}%`} />
-              <DetailRow label="Amount billed" value={money2(project.amountBilled || 0)} />
-              <DetailRow label="Amount collected" value={money2(project.amountCollected || 0)} />
-              <DetailRow label="Remaining contract value" value={money2(project.remainingContractValue ?? Math.max(0, toNumber(project.contractAmount) - toNumber(project.amountBilled)))} />
+              {!isProjectManager ? (
+                <>
+                  <DetailRow label="Amount billed" value={money2(project.amountBilled || 0)} />
+                  <DetailRow label="Amount collected" value={money2(project.amountCollected || 0)} />
+                  <DetailRow label="Remaining contract value" value={money2(project.remainingContractValue ?? Math.max(0, toNumber(project.contractAmount) - toNumber(project.amountBilled)))} />
+                </>
+              ) : null}
             </div>
           )}
         </Section>
@@ -26314,7 +26744,12 @@ function App() {
   );
 
   const renderAuthenticatedLayout = (screen) => {
-    const mainNavigation = [
+    const mainNavigation = isProjectManager ? [
+      { key: "dashboard", label: "Dashboard", icon: "D", matches: ["dashboard"] },
+      { key: "workHub", label: "Tasks & Messages", icon: "T", matches: ["workHub"] },
+      { key: "activeJobs", label: "Active Jobs", icon: "J", matches: ["activeJobs", "activeJob", "fieldOperations", "approvedJob"] },
+      { key: "subcontractors", label: "Approved Vendors", icon: "SC", matches: ["subcontractors"] },
+    ] : [
       { key: "dashboard", label: "Dashboard", icon: "D", matches: ["dashboard"] },
       { key: "workHub", label: "Tasks & Messages", icon: "T", matches: ["workHub"] },
       { key: "crm", label: "Customers", icon: "C", matches: ["crm"] },
@@ -26506,6 +26941,20 @@ function App() {
   }
 
   if (activeTemplate === "dashboard") {
+    return renderAuthenticatedLayout(renderDashboard());
+  }
+
+  if (isProjectManager && !new Set([
+    "workHub",
+    "activeJobs",
+    "activeJob",
+    "approvedJob",
+    "fieldOperations",
+    "subcontractors",
+    "profile",
+    "accountAccess",
+    "settings",
+  ]).has(activeTemplate)) {
     return renderAuthenticatedLayout(renderDashboard());
   }
 

@@ -129,7 +129,8 @@ export function calculateApprovedJobFullyLoadedProfitability({
   const otherCosts = Math.max(0, numberValue(otherJobCosts));
   const commissionRate = Math.max(0, numberValue(salesCommissionRate));
   const grossProfitBeforeOverhead = currencyValue(totalSalePrice - directCost - otherCosts);
-  const salesCommission = currencyValue(Math.max(0, grossProfitBeforeOverhead) * commissionRate);
+  const commissionableGrossProfit = currencyValue(totalSalePrice - directCost - overheadCost - otherCosts);
+  const salesCommission = currencyValue(Math.max(0, commissionableGrossProfit) * commissionRate);
   const fullyLoadedCost = currencyValue(directCost + overheadCost + otherCosts + salesCommission);
   const netCompanyProfit = currencyValue(totalSalePrice - fullyLoadedCost);
   const netCompanyMarginPercent = totalSalePrice > 0
@@ -144,6 +145,7 @@ export function calculateApprovedJobFullyLoadedProfitability({
     operatingOverheadCost: currencyValue(overheadCost),
     otherJobCosts: currencyValue(otherCosts),
     grossProfitBeforeOverhead,
+    commissionableGrossProfit,
     salesCommissionRate: commissionRate,
     salesCommission,
     fullyLoadedCost,

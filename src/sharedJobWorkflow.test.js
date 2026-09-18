@@ -9,6 +9,7 @@ import {
   buildActiveJobEditDraft,
   buildSharedJobSourceId,
   buildSharedJobUpsertRow,
+  canManageActiveJobs,
   canManageSharedJobs,
   getActiveJobPreviewDetails,
   inferWorkflowStatus,
@@ -62,6 +63,9 @@ test("permissions allow only admin/cfo to manage shared jobs", () => {
   assert.equal(canManageSharedJobs("cfo"), true);
   assert.equal(canManageSharedJobs("salesperson"), false);
   assert.equal(canManageSharedJobs("estimator"), false);
+  assert.equal(canManageActiveJobs("project_manager"), true);
+  assert.equal(canManageActiveJobs("salesperson"), false);
+  assert.equal(canUpdateDailyJobCosts("project_manager", "miguel@crtroofing.com"), true);
 });
 
 test("workflow status is centrally derived from status field", () => {

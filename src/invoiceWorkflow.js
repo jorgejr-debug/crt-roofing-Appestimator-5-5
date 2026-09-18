@@ -69,4 +69,3 @@ export function validateInvoiceHandoffDraft(draft = {}) {
 export function invoiceReceivableSourceId(invoiceRequestId) {
   return `receivable:waitingOnPayment:invoice-${safeText(invoiceRequestId)}`;
 }
-

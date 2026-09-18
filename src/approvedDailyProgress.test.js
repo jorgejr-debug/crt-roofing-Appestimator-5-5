@@ -33,7 +33,7 @@ test("adds 15 percent operating and overhead cost to approved job totals", () =>
   });
 });
 
-test("deducts Chris commission from gross profit before overhead", () => {
+test("calculates Chris commission from gross profit after operating and overhead cost", () => {
   assert.deepEqual(calculateApprovedJobFullyLoadedProfitability({
     approvedSalePrice: 3500,
     changeOrders: 0,
@@ -49,11 +49,12 @@ test("deducts Chris commission from gross profit before overhead", () => {
     operatingOverheadCost: 153,
     otherJobCosts: 0,
     grossProfitBeforeOverhead: 2480.03,
+    commissionableGrossProfit: 2327.03,
     salesCommissionRate: 0.25,
-    salesCommission: 620.01,
-    fullyLoadedCost: 1792.98,
-    netCompanyProfit: 1707.02,
-    netCompanyMarginPercent: 48.8,
+    salesCommission: 581.76,
+    fullyLoadedCost: 1754.73,
+    netCompanyProfit: 1745.27,
+    netCompanyMarginPercent: 49.9,
   });
 });
 
