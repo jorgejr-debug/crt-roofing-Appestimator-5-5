@@ -116,3 +116,163 @@ export function calculateLeadKpis(leads = [], options = {}) {
     processComplianceRate: attributed.length ? processCompliant / attributed.length : 1,
   };
 }
+
+function startOfBusinessWeek(value) {
+  const date = new Date(value);
+  const day = date.getDay();
+  date.setDate(date.getDate() - ((day + 6) % 7));
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function historyTime(lead = {}, labels = [], after = null) {
+  const wanted = labels.map((label) => String(label).trim().toLowerCase());
+  const afterTime = after ? new Date(after).getTime() : 0;
+  const matches = (Array.isArray(lead.history) ? lead.history : [])
+    .filter((entry) => wanted.includes(String(entry.label || "").trim().toLowerCase()))
+    .map((entry) => new Date(entry.createdAt || entry.created_at || 0))
+    .filter((date) => Number.isFinite(date.getTime()) && date.getTime() >= afterTime)
+    .sort((a, b) => a - b);
+  return matches[0] || null;
+}
+
+export function businessMinutesBetween(startValue, endValue, workdayStart = 8, workdayEnd = 17) {
+  const start = new Date(startValue);
+  const end = new Date(endValue);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return 0;
+
+  let minutes = 0;
+  const cursor = new Date(start);
+  cursor.setHours(0, 0, 0, 0);
+  const lastDay = new Date(end);
+  lastDay.setHours(0, 0, 0, 0);
+
+  while (cursor <= lastDay) {
+    const day = cursor.getDay();
+    if (day !== 0 && day !== 6) {
+      const open = new Date(cursor);
+      open.setHours(workdayStart, 0, 0, 0);
+      const close = new Date(cursor);
+      close.setHours(workdayEnd, 0, 0, 0);
+      const rangeStart = new Date(Math.max(start.getTime(), open.getTime()));
+      const rangeEnd = new Date(Math.min(end.getTime(), close.getTime()));
+      if (rangeEnd > rangeStart) minutes += (rangeEnd - rangeStart) / 60_000;
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return minutes;
+}
+
+export function calculateIvanKpis(leads = [], proposalRequests = [], options = {}) {
+  const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  const weekStart = startOfBusinessWeek(now);
+  const weeklyCapacity = Math.max(0, Number(options.weeklyInspectionTarget) || 0);
+  const ivanUserId = String(options.ivanUserId || "").trim();
+  const rows = Array.isArray(leads) ? leads : [];
+  const requests = Array.isArray(proposalRequests) ? proposalRequests : [];
+  const isThisWeek = (value) => {
+    const date = new Date(value || 0);
+    return Number.isFinite(date.getTime()) && date >= weekStart && date <= now;
+  };
+  const isIvanLead = (lead) => {
+    const assignedIds = [lead.assignedStaffId, lead.assigned_staff_id, lead.acceptedForInspectionBy, lead.accepted_for_inspection_by]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    return (ivanUserId && assignedIds.includes(ivanUserId))
+      || Boolean(historyTime(lead, ["Sent for inspection"]));
+  };
+  const ivanLeads = rows.filter(isIvanLead);
+  const assignmentAt = (lead) => historyTime(lead, ["Sent for inspection"])
+    || (lead.acceptedForInspectionAt || lead.accepted_for_inspection_at ? new Date(lead.acceptedForInspectionAt || lead.accepted_for_inspection_at) : null)
+    || new Date(lead.createdAt || lead.created_at || 0);
+  const contactAt = (lead, assignedAt) => historyTime(lead, ["Contacted", "Appointment Scheduled"], assignedAt)
+    || (lead.inspectionScheduledAt || lead.inspection_scheduled_at ? new Date(lead.inspectionScheduledAt || lead.inspection_scheduled_at) : null);
+  const completedAt = (lead) => historyTime(lead, ["Inspection Completed"])
+    || (String(lead.leadStatus || lead.status || "") === "Inspection Completed" ? new Date(lead.updatedAt || lead.updated_at || 0) : null);
+
+  const assignmentsThisWeek = ivanLeads
+    .map((lead) => ({ lead, assignedAt: assignmentAt(lead) }))
+    .filter((entry) => isThisWeek(entry.assignedAt));
+  const completedThisWeek = ivanLeads
+    .map((lead) => ({ lead, completedAt: completedAt(lead) }))
+    .filter((entry) => entry.completedAt && isThisWeek(entry.completedAt));
+  const executionDenominator = Math.min(assignmentsThisWeek.length, weeklyCapacity || assignmentsThisWeek.length);
+  const executionRate = executionDenominator ? Math.min(1, completedThisWeek.length / executionDenominator) : null;
+  const capacityCoverage = weeklyCapacity ? Math.min(1, assignmentsThisWeek.length / weeklyCapacity) : null;
+
+  const contactEligible = assignmentsThisWeek.filter((entry) => {
+    const contacted = contactAt(entry.lead, entry.assignedAt);
+    return contacted || businessMinutesBetween(entry.assignedAt, now) >= 120;
+  });
+  const contactOnTime = contactEligible.filter((entry) => {
+    const contacted = contactAt(entry.lead, entry.assignedAt);
+    return contacted && businessMinutesBetween(entry.assignedAt, contacted) <= 120;
+  });
+  const contactSlaRate = contactEligible.length ? contactOnTime.length / contactEligible.length : null;
+
+  const submittedRequests = requests.filter((request) => request.submitted_at);
+  const requestForLead = (lead) => submittedRequests
+    .filter((request) => String(request.source_lead_id || "") === String(lead.id || ""))
+    .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at))[0] || null;
+  const handoffEligible = completedThisWeek.filter((entry) => {
+    const request = requestForLead(entry.lead);
+    return request || businessMinutesBetween(entry.completedAt, now) >= 9 * 60;
+  });
+  const handoffOnTime = handoffEligible.filter((entry) => {
+    const request = requestForLead(entry.lead);
+    return request && businessMinutesBetween(entry.completedAt, request.submitted_at) <= 9 * 60;
+  });
+  const handoffRate = handoffEligible.length ? handoffOnTime.length / handoffEligible.length : null;
+
+  const ivanRequestsThisWeek = submittedRequests.filter((request) => {
+    if (!isThisWeek(request.submitted_at)) return false;
+    if (ivanUserId && String(request.salesperson_id || "") === ivanUserId) return true;
+    return ivanLeads.some((lead) => String(lead.id || "") === String(request.source_lead_id || ""));
+  });
+  const reviewedRequestStatuses = new Set(["under_review", "missing_information", "drafting_proposal", "sales_review", "ready_to_send", "sent", "signed", "declined", "closed"]);
+  const firstPassEligible = ivanRequestsThisWeek.filter((request) => reviewedRequestStatuses.has(String(request.status || "").toLowerCase()));
+  const acceptedFirstPass = firstPassEligible.filter((request) => Number(request.missing_information_count || 0) === 0);
+  const firstPassRate = firstPassEligible.length ? acceptedFirstPass.length / firstPassEligible.length : null;
+
+  const activeInspectionStatuses = new Set(["Inspection Requested", "Contacted", "Appointment Scheduled", "Inspection Completed"]);
+  const activeInspectionLeads = ivanLeads.filter((lead) => activeInspectionStatuses.has(String(lead.leadStatus || lead.status || "")));
+  const staleLeads = activeInspectionLeads.filter((lead) => {
+    const lastActivity = lead.lastActivityDate || lead.last_activity_date || lead.updatedAt || lead.updated_at || lead.createdAt || lead.created_at;
+    return businessMinutesBetween(lastActivity, now) > 18 * 60;
+  });
+  const hygieneRate = activeInspectionLeads.length ? Math.max(0, 1 - staleLeads.length / activeInspectionLeads.length) : null;
+
+  const scoreParts = [
+    [executionRate, 35],
+    [contactSlaRate, 15],
+    [handoffRate, 25],
+    [firstPassRate, 20],
+    [hygieneRate, 5],
+  ].filter(([rate]) => rate !== null);
+  const activeWeight = scoreParts.reduce((sum, [, weight]) => sum + weight, 0);
+  const overallScore = activeWeight
+    ? Math.round(scoreParts.reduce((sum, [rate, weight]) => sum + rate * weight, 0) / activeWeight * 100)
+    : null;
+
+  return {
+    weeklyCapacity,
+    assignedThisWeek: assignmentsThisWeek.length,
+    capacityCoverage,
+    completedThisWeek: completedThisWeek.length,
+    executionRate,
+    contactEligible: contactEligible.length,
+    contactOnTime: contactOnTime.length,
+    contactSlaRate,
+    handoffEligible: handoffEligible.length,
+    handoffOnTime: handoffOnTime.length,
+    handoffRate,
+    proposalRequestsThisWeek: ivanRequestsThisWeek.length,
+    firstPassEligible: firstPassEligible.length,
+    acceptedFirstPass: acceptedFirstPass.length,
+    firstPassRate,
+    staleCount: staleLeads.length,
+    staleLeadIds: staleLeads.map((lead) => lead.id),
+    hygieneRate,
+    overallScore,
+  };
+}

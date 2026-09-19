@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildInspectionTask,
+  businessMinutesBetween,
+  calculateIvanKpis,
   calculateLeadKpis,
   findInspectionAssignee,
   findPotentialDuplicateLead,
@@ -41,6 +43,63 @@ test("inspection routing finds Ivan and builds a complete task", () => {
   assert.match(task.description, /Phone: \(909\) 555-0100/);
   assert.match(task.description, /Property address: 123 Main St/);
   assert.match(task.description, /Sent by: Natalia/);
+});
+
+test("business time excludes nights and weekends", () => {
+  assert.equal(
+    businessMinutesBetween("2026-09-18T16:00:00-07:00", "2026-09-21T10:00:00-07:00"),
+    180,
+  );
+});
+
+test("Ivan KPI separates supplied capacity from controllable execution and quality", () => {
+  const ivanId = "ivan-id";
+  const leads = [
+    {
+      id: "lead-1",
+      assignedStaffId: ivanId,
+      leadStatus: "Estimate in Progress",
+      history: [
+        { label: "Sent for inspection", createdAt: "2026-09-14T08:00:00-07:00" },
+        { label: "Contacted", createdAt: "2026-09-14T09:00:00-07:00" },
+        { label: "Inspection Completed", createdAt: "2026-09-14T15:00:00-07:00" },
+      ],
+      lastActivityDate: "2026-09-14T15:00:00-07:00",
+    },
+    {
+      id: "lead-2",
+      assignedStaffId: ivanId,
+      leadStatus: "Appointment Scheduled",
+      history: [
+        { label: "Sent for inspection", createdAt: "2026-09-15T08:00:00-07:00" },
+        { label: "Contacted", createdAt: "2026-09-15T12:00:00-07:00" },
+      ],
+      lastActivityDate: "2026-09-15T12:00:00-07:00",
+    },
+  ];
+  const requests = [{
+    source_lead_id: "lead-1",
+    salesperson_id: ivanId,
+    status: "under_review",
+    submitted_at: "2026-09-15T11:00:00-07:00",
+    missing_information_count: 0,
+  }];
+  const kpis = calculateIvanKpis(leads, requests, {
+    now: new Date("2026-09-16T12:00:00-07:00"),
+    ivanUserId: ivanId,
+    weeklyInspectionTarget: 6,
+  });
+
+  assert.equal(kpis.assignedThisWeek, 2);
+  assert.equal(kpis.capacityCoverage, 2 / 6);
+  assert.equal(kpis.completedThisWeek, 1);
+  assert.equal(kpis.executionRate, 1 / 2);
+  assert.equal(kpis.contactOnTime, 1);
+  assert.equal(kpis.contactEligible, 2);
+  assert.equal(kpis.handoffOnTime, 1);
+  assert.equal(kpis.acceptedFirstPass, 1);
+  assert.equal(kpis.staleCount, 0);
+  assert.equal(Number.isFinite(kpis.overallScore), true);
 });
 
 test("Chris KPI scorecard measures weekly supply, qualification, capacity, and stale work", () => {

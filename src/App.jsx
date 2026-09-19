@@ -12,6 +12,7 @@ import InvoiceQueue from "./InvoiceQueue.jsx";
 import AccountAccessVault from "./AccountAccessVault.jsx";
 import {
   buildInspectionTask,
+  calculateIvanKpis,
   calculateLeadKpis,
   findInspectionAssignee,
   findPotentialDuplicateLead,
@@ -3953,6 +3954,23 @@ async function deleteCrmLeadFromSupabase(leadId) {
 async function fetchCrmKpiTargetFromSupabase() {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: null };
   return supabase.from("crm_kpi_targets").select("*").eq("key", "ivan_weekly_inspection_capacity").maybeSingle();
+}
+
+async function fetchCrmProposalRequestsFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  return supabase
+    .from("proposal_requests")
+    .select("id, source_lead_id, salesperson_id, status, submitted_at, missing_information_count")
+    .order("submitted_at", { ascending: false });
+}
+
+async function fetchIvanProfileFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: null };
+  const result = await supabase
+    .from("user_profiles")
+    .select("id, full_name, email, role")
+    .order("full_name", { ascending: true });
+  return { data: findInspectionAssignee(result.data || []), error: result.error };
 }
 
 async function saveCrmKpiTargetToSupabase(value, actorId) {
@@ -10246,7 +10264,9 @@ function App() {
   const [crmLeadSyncStatus, setCrmLeadSyncStatus] = useState("idle");
   const [crmLeadSyncError, setCrmLeadSyncError] = useState("");
   const [crmInspectionSending, setCrmInspectionSending] = useState(false);
-  const [crmWeeklyInspectionTarget, setCrmWeeklyInspectionTarget] = useState(0);
+  const [crmWeeklyInspectionTarget, setCrmWeeklyInspectionTarget] = useState(6);
+  const [crmProposalRequests, setCrmProposalRequests] = useState([]);
+  const [crmIvanProfileId, setCrmIvanProfileId] = useState("");
   const [crmLeadDraft, setCrmLeadDraft] = useState(() => createBlankCrmLead());
   const [crmLeadEditingId, setCrmLeadEditingId] = useState("");
   const [crmLeadSearch, setCrmLeadSearch] = useState("");
@@ -10645,6 +10665,8 @@ function App() {
   useEffect(() => {
     if (!authUser?.key) {
       setCrmLeads([]);
+      setCrmProposalRequests([]);
+      setCrmIvanProfileId("");
       setCrmLeadDraft(createBlankCrmLead());
       setCrmLeadEditingId("");
       setCrmCustomers([]);
@@ -10706,10 +10728,29 @@ function App() {
       }
       const targetResult = await fetchCrmKpiTargetFromSupabase();
       if (!active) return;
-      if (!targetResult.error) setCrmWeeklyInspectionTarget(Math.max(0, Number(targetResult.data?.numeric_value) || 0));
+      if (!targetResult.error) setCrmWeeklyInspectionTarget(Math.max(1, Number(targetResult.data?.numeric_value) || 6));
+      const [proposalResult, ivanResult] = await Promise.all([
+        fetchCrmProposalRequestsFromSupabase(),
+        fetchIvanProfileFromSupabase(),
+      ]);
+      if (!active) return;
+      if (!proposalResult.error) setCrmProposalRequests(proposalResult.data || []);
+      if (!ivanResult.error) setCrmIvanProfileId(String(ivanResult.data?.id || ""));
     };
     void loadSharedLeads();
     return () => { active = false; };
+  }, [authUser?.key]);
+
+  useEffect(() => {
+    if (!authUser?.key || !SUPABASE_URL || !SUPABASE_ANON_KEY) return undefined;
+    const channel = supabase
+      .channel(`crm-proposal-kpis-${authUser.key}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "proposal_requests" }, async () => {
+        const result = await fetchCrmProposalRequestsFromSupabase();
+        if (!result.error) setCrmProposalRequests(result.data || []);
+      })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
   }, [authUser?.key]);
 
   useEffect(() => {
@@ -13497,13 +13538,14 @@ function App() {
   };
 
   const saveCrmWeeklyInspectionTarget = async () => {
-    const result = await saveCrmKpiTargetToSupabase(crmWeeklyInspectionTarget, authUser?.key || null);
+    const normalizedTarget = Math.max(1, Number(crmWeeklyInspectionTarget) || 6);
+    const result = await saveCrmKpiTargetToSupabase(normalizedTarget, authUser?.key || null);
     if (result?.error) {
       setSessionMessageType("error");
       setSessionMessage(`KPI target could not be saved: ${result.error.message || result.error}`);
       return;
     }
-    setCrmWeeklyInspectionTarget(Math.max(0, Number(result.data?.numeric_value) || 0));
+    setCrmWeeklyInspectionTarget(Math.max(1, Number(result.data?.numeric_value) || normalizedTarget));
     setSessionMessageType("success");
     setSessionMessage("Ivan's weekly inspection capacity target was saved.");
   };
@@ -18650,6 +18692,11 @@ function App() {
       originatorEmail: "chris@crtroofing.com",
       weeklyInspectionTarget: crmWeeklyInspectionTarget,
     });
+    const ivanKpis = calculateIvanKpis(crmLeads, crmProposalRequests, {
+      ivanUserId: crmIvanProfileId,
+      weeklyInspectionTarget: crmWeeklyInspectionTarget,
+    });
+    const ivanStaleLeads = crmLeads.filter((lead) => ivanKpis.staleLeadIds.includes(lead.id));
     const chrisApprovedPipeline = crmLeads
       .filter((lead) => String(lead.originatorEmail || "").toLowerCase() === "chris@crtroofing.com" && lead.leadStatus === "Approved")
       .reduce((sum, lead) => sum + Math.max(0, toNumber(lead.estimatedValue, 0)), 0);
@@ -19212,7 +19259,7 @@ function App() {
               ["pipeline", "Lead Pipeline"],
               ["customers", "Customers"],
               ["followUps", "Follow-Ups"],
-              ["reports", "Chris KPI"],
+              ["reports", "KPI Scorecards"],
             ].map(([key, label]) => (
               <button
                 key={key}
@@ -19780,6 +19827,84 @@ function App() {
         ) : null}
 
         {crmTab === "reports" ? (
+          <>
+          {(isFinanceUser || String(authUser?.email || "").trim().toLowerCase() === "ivan@crtroofing.com") ? (
+          <Section title="Ivan · Estimator / Technician KPI" subtitle="Execution is scored separately from lead supply so Ivan is not penalized when fewer inspections are assigned.">
+            <div className="summaryGrid">
+              <div className="summaryCard">
+                <span>Overall KPI score</span>
+                <strong>{ivanKpis.overallScore === null ? "—" : `${ivanKpis.overallScore}%`}</strong>
+                <p>Weighted only from KPI categories with enough current data.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Weekly capacity</span>
+                <strong>{num(ivanKpis.weeklyCapacity, 0)}</strong>
+                <p>Management-set inspection slots available this week.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Lead supply</span>
+                <strong>{num(ivanKpis.assignedThisWeek, 0)}</strong>
+                <p>{ivanKpis.capacityCoverage === null ? "Set capacity below." : `${Math.round(ivanKpis.capacityCoverage * 100)}% of weekly capacity supplied.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>Inspections completed</span>
+                <strong>{num(ivanKpis.completedThisWeek, 0)}</strong>
+                <p>{ivanKpis.executionRate === null ? "No assigned inspections to score yet." : `${Math.round(ivanKpis.executionRate * 100)}% execution against supplied work.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>Customer contact SLA</span>
+                <strong>{ivanKpis.contactSlaRate === null ? "—" : `${Math.round(ivanKpis.contactSlaRate * 100)}%`}</strong>
+                <p>{`${ivanKpis.contactOnTime} of ${ivanKpis.contactEligible} eligible requests contacted within 2 business hours.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>Proposal handoff SLA</span>
+                <strong>{ivanKpis.handoffRate === null ? "—" : `${Math.round(ivanKpis.handoffRate * 100)}%`}</strong>
+                <p>{`${ivanKpis.handoffOnTime} of ${ivanKpis.handoffEligible} completed inspections submitted within 1 business day.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>First-pass completeness</span>
+                <strong>{ivanKpis.firstPassRate === null ? "—" : `${Math.round(ivanKpis.firstPassRate * 100)}%`}</strong>
+                <p>{`${ivanKpis.acceptedFirstPass} of ${ivanKpis.firstPassEligible} reviewed requests were not returned for missing information.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>Stale inspection work</span>
+                <strong>{num(ivanKpis.staleCount, 0)}</strong>
+                <p>Inspection-stage leads without an update for more than 2 business days.</p>
+              </div>
+            </div>
+            {isFinanceUser ? (
+              <div className="formGrid" style={{ marginTop: 16 }}>
+                <Field label="Ivan's weekly inspection capacity">
+                  <input type="number" min="1" step="1" value={crmWeeklyInspectionTarget} onChange={(e) => setCrmWeeklyInspectionTarget(e.target.value)} />
+                </Field>
+                <div className="actionRow" style={{ alignItems: "end" }}>
+                  <button type="button" className="primaryButton" onClick={saveCrmWeeklyInspectionTarget}>Save KPI Target</button>
+                </div>
+              </div>
+            ) : null}
+            {ivanStaleLeads.length ? (
+              <div className="savedList" style={{ marginTop: 16 }}>
+                {ivanStaleLeads.map((lead) => (
+                  <div className="savedCard" key={lead.id}>
+                    <div>
+                      <span className="eyebrow">Needs update</span>
+                      <strong>{crmLeadDisplayName(lead)}</strong>
+                      <p>{lead.propertyAddress || lead.phone || "No contact details recorded"}</p>
+                    </div>
+                    <button type="button" className="secondaryButton" onClick={() => editCrmLead(lead)}>Open Lead</button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="smallNote" style={{ marginTop: 16 }}>No stale inspection work currently needs attention.</p>
+            )}
+            <div className="notice" style={{ marginTop: 16 }}>
+              <strong>Scoring weights</strong>
+              <p style={{ marginBottom: 0 }}>Inspection execution 35% · customer contact 15% · proposal handoff 25% · first-pass completeness 20% · open-work hygiene 5%. Categories without enough data are excluded rather than counted against Ivan.</p>
+            </div>
+          </Section>
+          ) : null}
+
           <Section title="Chris · Business Development KPI" subtitle="A simple scorecard: keep Ivan supplied with qualified opportunities and protect workflow compliance.">
             <div className="summaryGrid">
               <div className="summaryCard">
@@ -19828,21 +19953,12 @@ function App() {
                 <p>25% of finalized commissionable gross profit on Chris-originated jobs.</p>
               </div>
             </div>
-            {isFinanceUser ? (
-              <div className="formGrid" style={{ marginTop: 16 }}>
-                <Field label="Ivan's weekly inspection capacity target">
-                  <input type="number" min="0" step="1" value={crmWeeklyInspectionTarget} onChange={(e) => setCrmWeeklyInspectionTarget(e.target.value)} />
-                </Field>
-                <div className="actionRow" style={{ alignItems: "end" }}>
-                  <button type="button" className="primaryButton" onClick={saveCrmWeeklyInspectionTarget}>Save KPI Target</button>
-                </div>
-              </div>
-            ) : null}
             <div className="notice" style={{ marginTop: 16 }}>
               <strong>Commission control</strong>
               <p style={{ marginBottom: 0 }}>Chris's 25% commission must be calculated from finalized job gross profit after operating/overhead costs. The CRM stores permanent lead attribution now; the dollar commission should populate only after that lead is linked through proposal, signed job, production, and closeout.</p>
             </div>
           </Section>
+          </>
         ) : null}
       </div>
     );
