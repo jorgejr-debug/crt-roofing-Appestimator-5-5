@@ -37,3 +37,14 @@ test("Ivan KPI separates capacity supply from controllable execution and proposa
   assert.match(app, /Inspection execution 35%/);
   assert.match(app, /fetchCrmProposalRequestsFromSupabase/);
 });
+
+test("Daniela KPI measures controllable proposal response, turnaround, documents, and queue hygiene", () => {
+  assert.match(app, /Daniela · Proposal & Estimating KPI/);
+  assert.match(app, /Intake response SLA/);
+  assert.match(app, /On-time proposal handoff/);
+  assert.match(app, /Complete Word \+ PDF handoff/);
+  assert.match(app, /Returned for missing info/);
+  assert.match(app, /does not lower Daniela's score/);
+  assert.match(app, /On-time proposal handoff 45%/);
+  assert.match(app, /fetchCrmProposalAuditEventsFromSupabase/);
+});

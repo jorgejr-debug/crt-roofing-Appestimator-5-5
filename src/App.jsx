@@ -12,6 +12,7 @@ import InvoiceQueue from "./InvoiceQueue.jsx";
 import AccountAccessVault from "./AccountAccessVault.jsx";
 import {
   buildInspectionTask,
+  calculateDanielaKpis,
   calculateIvanKpis,
   calculateLeadKpis,
   findInspectionAssignee,
@@ -3960,8 +3961,25 @@ async function fetchCrmProposalRequestsFromSupabase() {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
   return supabase
     .from("proposal_requests")
-    .select("id, source_lead_id, salesperson_id, status, submitted_at, missing_information_count")
+    .select("id, request_number, customer_name, property_name, source_lead_id, salesperson_id, assigned_estimator_id, status, priority, submitted_at, accepted_at, target_completion_at, sla_paused_at, sla_paused_seconds, missing_information_count, sent_at, updated_at")
     .order("submitted_at", { ascending: false });
+}
+
+async function fetchCrmProposalVersionsFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  return supabase
+    .from("proposal_versions")
+    .select("id, proposal_request_id, version_number, finalized_at, source_document_storage_path, final_pdf_storage_path, pdf_storage_path, sent_at")
+    .order("created_at", { ascending: false });
+}
+
+async function fetchCrmProposalAuditEventsFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  return supabase
+    .from("proposal_request_audit_events")
+    .select("id, proposal_request_id, actor_id, action, created_at")
+    .in("action", ["assigned", "information_requested"])
+    .order("created_at", { ascending: false });
 }
 
 async function fetchIvanProfileFromSupabase() {
@@ -3971,6 +3989,18 @@ async function fetchIvanProfileFromSupabase() {
     .select("id, full_name, email, role")
     .order("full_name", { ascending: true });
   return { data: findInspectionAssignee(result.data || []), error: result.error };
+}
+
+async function fetchDanielaProfileFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: null };
+  const result = await supabase
+    .from("user_profiles")
+    .select("id, full_name, email, role")
+    .order("full_name", { ascending: true });
+  const profiles = result.data || [];
+  const match = profiles.find((profile) => String(profile.email || "").trim().toLowerCase() === "daniela@crtroofing.com")
+    || profiles.find((profile) => String(profile.full_name || "").trim().toLowerCase().startsWith("daniela "));
+  return { data: match || null, error: result.error };
 }
 
 async function saveCrmKpiTargetToSupabase(value, actorId) {
@@ -10266,7 +10296,10 @@ function App() {
   const [crmInspectionSending, setCrmInspectionSending] = useState(false);
   const [crmWeeklyInspectionTarget, setCrmWeeklyInspectionTarget] = useState(6);
   const [crmProposalRequests, setCrmProposalRequests] = useState([]);
+  const [crmProposalVersions, setCrmProposalVersions] = useState([]);
+  const [crmProposalAuditEvents, setCrmProposalAuditEvents] = useState([]);
   const [crmIvanProfileId, setCrmIvanProfileId] = useState("");
+  const [crmDanielaProfileId, setCrmDanielaProfileId] = useState("");
   const [crmLeadDraft, setCrmLeadDraft] = useState(() => createBlankCrmLead());
   const [crmLeadEditingId, setCrmLeadEditingId] = useState("");
   const [crmLeadSearch, setCrmLeadSearch] = useState("");
@@ -10666,7 +10699,10 @@ function App() {
     if (!authUser?.key) {
       setCrmLeads([]);
       setCrmProposalRequests([]);
+      setCrmProposalVersions([]);
+      setCrmProposalAuditEvents([]);
       setCrmIvanProfileId("");
+      setCrmDanielaProfileId("");
       setCrmLeadDraft(createBlankCrmLead());
       setCrmLeadEditingId("");
       setCrmCustomers([]);
@@ -10729,13 +10765,19 @@ function App() {
       const targetResult = await fetchCrmKpiTargetFromSupabase();
       if (!active) return;
       if (!targetResult.error) setCrmWeeklyInspectionTarget(Math.max(1, Number(targetResult.data?.numeric_value) || 6));
-      const [proposalResult, ivanResult] = await Promise.all([
+      const [proposalResult, versionResult, auditResult, ivanResult, danielaResult] = await Promise.all([
         fetchCrmProposalRequestsFromSupabase(),
+        fetchCrmProposalVersionsFromSupabase(),
+        fetchCrmProposalAuditEventsFromSupabase(),
         fetchIvanProfileFromSupabase(),
+        fetchDanielaProfileFromSupabase(),
       ]);
       if (!active) return;
       if (!proposalResult.error) setCrmProposalRequests(proposalResult.data || []);
+      if (!versionResult.error) setCrmProposalVersions(versionResult.data || []);
+      if (!auditResult.error) setCrmProposalAuditEvents(auditResult.data || []);
       if (!ivanResult.error) setCrmIvanProfileId(String(ivanResult.data?.id || ""));
+      if (!danielaResult.error) setCrmDanielaProfileId(String(danielaResult.data?.id || ""));
     };
     void loadSharedLeads();
     return () => { active = false; };
@@ -10748,6 +10790,14 @@ function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "proposal_requests" }, async () => {
         const result = await fetchCrmProposalRequestsFromSupabase();
         if (!result.error) setCrmProposalRequests(result.data || []);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "proposal_versions" }, async () => {
+        const result = await fetchCrmProposalVersionsFromSupabase();
+        if (!result.error) setCrmProposalVersions(result.data || []);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "proposal_request_audit_events" }, async () => {
+        const result = await fetchCrmProposalAuditEventsFromSupabase();
+        if (!result.error) setCrmProposalAuditEvents(result.data || []);
       })
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
@@ -18696,6 +18746,11 @@ function App() {
       ivanUserId: crmIvanProfileId,
       weeklyInspectionTarget: crmWeeklyInspectionTarget,
     });
+    const danielaKpis = calculateDanielaKpis(crmProposalRequests, crmProposalVersions, crmProposalAuditEvents, {
+      danielaUserId: crmDanielaProfileId,
+      periodDays: 30,
+    });
+    const danielaOverdueRequests = crmProposalRequests.filter((request) => danielaKpis.overdueRequestIds.includes(request.id));
     const ivanStaleLeads = crmLeads.filter((lead) => ivanKpis.staleLeadIds.includes(lead.id));
     const chrisApprovedPipeline = crmLeads
       .filter((lead) => String(lead.originatorEmail || "").toLowerCase() === "chris@crtroofing.com" && lead.leadStatus === "Approved")
@@ -19828,6 +19883,79 @@ function App() {
 
         {crmTab === "reports" ? (
           <>
+          {(isFinanceUser
+            || String(authUser?.email || "").trim().toLowerCase() === "daniela@crtroofing.com"
+            || String(authUser?.id || authUser?.key || "") === crmDanielaProfileId) ? (
+          <Section title="Daniela · Proposal & Estimating KPI" subtitle="Measures controllable estimating work over the last 30 days. Sales corrections, customer response time, and paused missing-information requests do not count against Daniela.">
+            <div className="summaryGrid">
+              <div className="summaryCard">
+                <span>Overall KPI score</span>
+                <strong>{danielaKpis.overallScore === null ? "—" : `${danielaKpis.overallScore}%`}</strong>
+                <p>Weighted only from categories with enough current data.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Requests submitted</span>
+                <strong>{num(danielaKpis.submittedCount, 0)}</strong>
+                <p>Complete requests assigned to Daniela in the last 30 days.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Intake response SLA</span>
+                <strong>{danielaKpis.intakeResponseRate === null ? "—" : `${Math.round(danielaKpis.intakeResponseRate * 100)}%`}</strong>
+                <p>{`${danielaKpis.intakeOnTime} of ${danielaKpis.intakeEligible} eligible requests reviewed within 4 business hours.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>On-time proposal handoff</span>
+                <strong>{danielaKpis.turnaroundRate === null ? "—" : `${Math.round(danielaKpis.turnaroundRate * 100)}%`}</strong>
+                <p>{`${danielaKpis.turnaroundOnTime} of ${danielaKpis.turnaroundEligible} due requests reached Sales Review by the adjusted target.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>Average drafting time</span>
+                <strong>{danielaKpis.averageTurnaroundHours === null ? "—" : `${danielaKpis.averageTurnaroundHours.toFixed(1)}h`}</strong>
+                <p>Business hours from submission to finalized proposal, excluding recorded SLA pauses.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Complete Word + PDF handoff</span>
+                <strong>{danielaKpis.documentCompletenessRate === null ? "—" : `${Math.round(danielaKpis.documentCompletenessRate * 100)}%`}</strong>
+                <p>{`${danielaKpis.completeHandoffs} of ${danielaKpis.finalizedCount} finalized versions included both required files.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>Active estimating queue</span>
+                <strong>{num(danielaKpis.activeQueueCount, 0)}</strong>
+                <p>{`${danielaKpis.overdueCount} overdue active request${danielaKpis.overdueCount === 1 ? "" : "s"}.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>Awaiting Sales Review</span>
+                <strong>{num(danielaKpis.awaitingSalesReviewCount, 0)}</strong>
+                <p>Drafting is complete and responsibility is currently with the salesperson.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Returned for missing info</span>
+                <strong>{num(danielaKpis.missingInformationCount, 0)}</strong>
+                <p>Workload and intake-quality context only; this does not lower Daniela's score.</p>
+              </div>
+            </div>
+            {danielaOverdueRequests.length ? (
+              <div className="savedList" style={{ marginTop: 16 }}>
+                {danielaOverdueRequests.map((request) => (
+                  <div className="savedCard" key={request.id}>
+                    <div>
+                      <span className="eyebrow">Overdue estimating request</span>
+                      <strong>{request.property_name || request.customer_name || `Proposal Request ${request.request_number || ""}`}</strong>
+                      <p>{request.target_completion_at ? `Target ${new Date(request.target_completion_at).toLocaleString()}` : "No target recorded"}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="smallNote" style={{ marginTop: 16 }}>No active estimating requests are overdue.</p>
+            )}
+            <div className="notice" style={{ marginTop: 16 }}>
+              <strong>Scoring weights</strong>
+              <p style={{ marginBottom: 0 }}>On-time proposal handoff 45% · intake response 20% · Word/PDF completeness 20% · active-queue hygiene 15%. Customer waiting time and Sales Review waiting time are excluded from Daniela's score.</p>
+            </div>
+          </Section>
+          ) : null}
+
           {(isFinanceUser || String(authUser?.email || "").trim().toLowerCase() === "ivan@crtroofing.com") ? (
           <Section title="Ivan · Estimator / Technician KPI" subtitle="Execution is scored separately from lead supply so Ivan is not penalized when fewer inspections are assigned.">
             <div className="summaryGrid">

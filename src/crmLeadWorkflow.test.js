@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildInspectionTask,
   businessMinutesBetween,
+  calculateDanielaKpis,
   calculateIvanKpis,
   calculateLeadKpis,
   findInspectionAssignee,
@@ -99,6 +100,36 @@ test("Ivan KPI separates supplied capacity from controllable execution and quali
   assert.equal(kpis.handoffOnTime, 1);
   assert.equal(kpis.acceptedFirstPass, 1);
   assert.equal(kpis.staleCount, 0);
+  assert.equal(Number.isFinite(kpis.overallScore), true);
+});
+
+test("Daniela KPI scores controllable proposal work and excludes paused requests", () => {
+  const requests = [
+    { id: "r1", assigned_estimator_id: "daniela", status: "sales_review", submitted_at: "2026-09-01T08:00:00-07:00", target_completion_at: "2026-09-02T08:00:00-07:00", sla_paused_seconds: 0, missing_information_count: 0 },
+    { id: "r2", assigned_estimator_id: "daniela", status: "drafting_proposal", submitted_at: "2026-09-03T08:00:00-07:00", target_completion_at: "2026-09-04T08:00:00-07:00", sla_paused_seconds: 0, missing_information_count: 0 },
+    { id: "r3", assigned_estimator_id: "daniela", status: "missing_information", submitted_at: "2026-09-04T08:00:00-07:00", target_completion_at: "2026-09-05T08:00:00-07:00", sla_paused_at: "2026-09-04T09:00:00-07:00", missing_information_count: 1 },
+  ];
+  const versions = [{ id: "v1", proposal_request_id: "r1", finalized_at: "2026-09-01T16:00:00-07:00", source_document_storage_path: "r1/proposal.docx", final_pdf_storage_path: "r1/proposal.pdf" }];
+  const audit = [
+    { proposal_request_id: "r1", action: "assigned", created_at: "2026-09-01T09:00:00-07:00" },
+    { proposal_request_id: "r2", action: "assigned", created_at: "2026-09-03T13:00:00-07:00" },
+    { proposal_request_id: "r3", action: "information_requested", created_at: "2026-09-04T09:00:00-07:00" },
+  ];
+  const kpis = calculateDanielaKpis(requests, versions, audit, {
+    now: new Date("2026-09-08T12:00:00-07:00"),
+    danielaUserId: "daniela",
+    periodDays: 30,
+  });
+
+  assert.equal(kpis.submittedCount, 3);
+  assert.equal(kpis.intakeOnTime, 2);
+  assert.equal(kpis.intakeEligible, 3);
+  assert.equal(kpis.turnaroundOnTime, 1);
+  assert.equal(kpis.turnaroundEligible, 2);
+  assert.equal(kpis.completeHandoffs, 1);
+  assert.equal(kpis.activeQueueCount, 1);
+  assert.equal(kpis.overdueCount, 1);
+  assert.equal(kpis.missingInformationCount, 1);
   assert.equal(Number.isFinite(kpis.overallScore), true);
 });
 

@@ -276,3 +276,114 @@ export function calculateIvanKpis(leads = [], proposalRequests = [], options = {
     overallScore,
   };
 }
+
+export function calculateDanielaKpis(proposalRequests = [], proposalVersions = [], auditEvents = [], options = {}) {
+  const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  const periodDays = Math.max(1, Number(options.periodDays) || 30);
+  const periodStart = new Date(now.getTime() - periodDays * 24 * 60 * 60 * 1000);
+  const danielaUserId = String(options.danielaUserId || "").trim();
+  const requests = (Array.isArray(proposalRequests) ? proposalRequests : []).filter((request) => {
+    if (!danielaUserId) return true;
+    return String(request.assigned_estimator_id || "") === danielaUserId;
+  });
+  const requestIds = new Set(requests.map((request) => String(request.id || "")));
+  const versions = (Array.isArray(proposalVersions) ? proposalVersions : [])
+    .filter((version) => requestIds.has(String(version.proposal_request_id || "")));
+  const events = (Array.isArray(auditEvents) ? auditEvents : [])
+    .filter((event) => requestIds.has(String(event.proposal_request_id || "")));
+  const inPeriod = (value) => {
+    const date = new Date(value || 0);
+    return Number.isFinite(date.getTime()) && date >= periodStart && date <= now;
+  };
+  const periodRequests = requests.filter((request) => inPeriod(request.submitted_at));
+  const eventFor = (requestId, actions) => events
+    .filter((event) => String(event.proposal_request_id || "") === String(requestId || "") && actions.includes(String(event.action || "")))
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0] || null;
+  const finalizedVersionFor = (requestId) => versions
+    .filter((version) => String(version.proposal_request_id || "") === String(requestId || "") && version.finalized_at)
+    .sort((a, b) => new Date(a.finalized_at) - new Date(b.finalized_at))[0] || null;
+
+  const intakeRows = periodRequests.map((request) => ({
+    request,
+    reviewEvent: eventFor(request.id, ["assigned", "information_requested"]),
+  }));
+  const intakeEligible = intakeRows.filter(({ request, reviewEvent }) => reviewEvent || businessMinutesBetween(request.submitted_at, now) >= 4 * 60);
+  const intakeOnTime = intakeEligible.filter(({ request, reviewEvent }) => (
+    reviewEvent && businessMinutesBetween(request.submitted_at, reviewEvent.created_at) <= 4 * 60
+  ));
+  const intakeResponseRate = intakeEligible.length ? intakeOnTime.length / intakeEligible.length : null;
+
+  const turnaroundRows = periodRequests.map((request) => ({ request, version: finalizedVersionFor(request.id) }));
+  const turnaroundEligible = turnaroundRows.filter(({ request, version }) => {
+    if (!request.target_completion_at) return false;
+    if (version) return true;
+    if (String(request.status || "") === "missing_information" || request.sla_paused_at) return false;
+    const effectiveTarget = new Date(request.target_completion_at).getTime() + Math.max(0, Number(request.sla_paused_seconds) || 0) * 1000;
+    return Number.isFinite(effectiveTarget) && effectiveTarget <= now.getTime();
+  });
+  const turnaroundOnTime = turnaroundEligible.filter(({ request, version }) => {
+    if (!version) return false;
+    const effectiveTarget = new Date(request.target_completion_at).getTime() + Math.max(0, Number(request.sla_paused_seconds) || 0) * 1000;
+    return new Date(version.finalized_at).getTime() <= effectiveTarget;
+  });
+  const turnaroundRate = turnaroundEligible.length ? turnaroundOnTime.length / turnaroundEligible.length : null;
+  const completedTurnarounds = turnaroundRows.filter(({ version }) => version);
+  const averageTurnaroundHours = completedTurnarounds.length
+    ? completedTurnarounds.reduce((sum, { request, version }) => {
+      const pausedMinutes = Math.max(0, Number(request.sla_paused_seconds) || 0) / 60;
+      return sum + Math.max(0, businessMinutesBetween(request.submitted_at, version.finalized_at) - pausedMinutes);
+    }, 0) / completedTurnarounds.length / 60
+    : null;
+
+  const finalizedThisPeriod = versions.filter((version) => version.finalized_at && inPeriod(version.finalized_at));
+  const completeHandoffs = finalizedThisPeriod.filter((version) => (
+    String(version.source_document_storage_path || "").trim()
+    && String(version.final_pdf_storage_path || version.pdf_storage_path || "").trim()
+  ));
+  const documentCompletenessRate = finalizedThisPeriod.length ? completeHandoffs.length / finalizedThisPeriod.length : null;
+
+  const completedStatuses = new Set(["sales_review", "ready_to_send", "sent", "signed", "declined", "closed"]);
+  const activeQueue = requests.filter((request) => request.submitted_at
+    && !completedStatuses.has(String(request.status || ""))
+    && String(request.status || "") !== "missing_information");
+  const overdueRequests = activeQueue.filter((request) => {
+    if (!request.target_completion_at || request.sla_paused_at) return false;
+    const effectiveTarget = new Date(request.target_completion_at).getTime() + Math.max(0, Number(request.sla_paused_seconds) || 0) * 1000;
+    return Number.isFinite(effectiveTarget) && effectiveTarget < now.getTime();
+  });
+  const queueHygieneRate = activeQueue.length ? Math.max(0, 1 - overdueRequests.length / activeQueue.length) : null;
+
+  const scoreParts = [
+    [turnaroundRate, 45],
+    [intakeResponseRate, 20],
+    [documentCompletenessRate, 20],
+    [queueHygieneRate, 15],
+  ].filter(([rate]) => rate !== null);
+  const activeWeight = scoreParts.reduce((sum, [, weight]) => sum + weight, 0);
+  const overallScore = activeWeight
+    ? Math.round(scoreParts.reduce((sum, [rate, weight]) => sum + rate * weight, 0) / activeWeight * 100)
+    : null;
+
+  return {
+    periodDays,
+    submittedCount: periodRequests.length,
+    intakeEligible: intakeEligible.length,
+    intakeOnTime: intakeOnTime.length,
+    intakeResponseRate,
+    turnaroundEligible: turnaroundEligible.length,
+    turnaroundOnTime: turnaroundOnTime.length,
+    turnaroundRate,
+    averageTurnaroundHours,
+    finalizedCount: finalizedThisPeriod.length,
+    completeHandoffs: completeHandoffs.length,
+    documentCompletenessRate,
+    activeQueueCount: activeQueue.length,
+    overdueCount: overdueRequests.length,
+    overdueRequestIds: overdueRequests.map((request) => request.id),
+    queueHygieneRate,
+    missingInformationCount: periodRequests.filter((request) => Number(request.missing_information_count || 0) > 0).length,
+    awaitingSalesReviewCount: requests.filter((request) => String(request.status || "") === "sales_review").length,
+    sentCount: periodRequests.filter((request) => request.sent_at || ["sent", "signed", "closed"].includes(String(request.status || ""))).length,
+    overallScore,
+  };
+}
