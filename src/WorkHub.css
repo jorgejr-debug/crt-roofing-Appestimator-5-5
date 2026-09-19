@@ -13,3 +13,5 @@
 @media(max-width:1200px){.workHubColumns.withoutCreator{grid-template-columns:minmax(320px,.85fr) minmax(380px,1.15fr)}.workHubColumns:not(.withoutCreator) .workHubDiscussion{grid-column:1/-1}}
 @media(max-width:900px){.workHubTaskFilters{grid-template-columns:1fr}.workHubColumns.withoutCreator{grid-template-columns:1fr}.workHubColumns.withoutCreator .workHubDiscussion{grid-column:auto}}
 @media(max-width:760px){.workHubTaskToolbar{align-items:flex-start}.workHubTaskToolbar span{display:none}.workHubColumns.hasSelection>.workHubCreator,.workHubColumns.hasSelection>.workHubTaskBrowser{display:none}.workHubColumns:not(.hasSelection)>.workHubDiscussion{display:none}.workHubMobileBack{display:inline-flex;margin-bottom:12px}.workHubTaskList{max-height:none}.workHubTaskTop{align-items:flex-start}.workHubTaskTitle{align-items:flex-start;flex-direction:column}.workHubQuickStatuses{display:grid;grid-template-columns:1fr 1fr}.workHubQuickStatuses .voidAction{grid-column:1/-1}}
+
+.workHubTypeBadge.inspection_request{background:rgba(16,185,129,.14);color:#047857}

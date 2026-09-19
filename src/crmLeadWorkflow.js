@@ -31,6 +31,50 @@ export function findPotentialDuplicateLead(leads = [], candidate = {}) {
   }) || null;
 }
 
+export function findInspectionAssignee(profiles = []) {
+  const normalized = profiles.map((profile) => ({
+    ...profile,
+    email: String(profile.email || "").trim().toLowerCase(),
+    fullName: String(profile.full_name || profile.fullName || "").trim().toLowerCase(),
+    role: String(profile.role || "").trim().toLowerCase(),
+  }));
+
+  return normalized.find((profile) => profile.email === "ivan@crtroofing.com")
+    || normalized.find((profile) => profile.fullName === "ivan solano")
+    || normalized.find((profile) => profile.fullName.startsWith("ivan ") && ["estimator", "salesperson", "admin"].includes(profile.role))
+    || null;
+}
+
+export function buildInspectionTask(lead = {}) {
+  const contactName = String(
+    lead.contactName
+      || [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim()
+      || lead.companyName
+      || "New caller",
+  ).trim();
+  const urgency = String(lead.urgency || "Normal").trim().toLowerCase();
+  const detailLines = [
+    "Please contact this customer to schedule a roof inspection.",
+    `Contact: ${contactName}`,
+    lead.companyName && lead.companyName !== contactName ? `Company: ${lead.companyName}` : "",
+    lead.phone ? `Phone: ${lead.phone}` : "",
+    lead.email ? `Email: ${lead.email}` : "",
+    lead.propertyAddress ? `Property address: ${lead.propertyAddress}` : "",
+    lead.roofingServiceNeeded ? `Requested service: ${lead.roofingServiceNeeded}` : "Requested service: Roof inspection",
+    lead.bestTimeToCall ? `Best time to call: ${lead.bestTimeToCall}` : "",
+    lead.description ? `Office notes: ${lead.description}` : "",
+    lead.originatorName || lead.originatorEmail
+      ? `Sent by: ${lead.originatorName || lead.originatorEmail}`
+      : "",
+  ].filter(Boolean);
+
+  return {
+    title: `Inspection Request: ${contactName}`,
+    description: detailLines.join("\n"),
+    priority: ["high", "rush", "urgent", "emergency"].includes(urgency) ? "high" : "normal",
+  };
+}
+
 export function calculateLeadKpis(leads = [], options = {}) {
   const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const weekStart = new Date(now);

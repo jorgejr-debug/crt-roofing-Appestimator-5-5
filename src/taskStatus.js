@@ -10,6 +10,7 @@ const STATUS_LABELS = {
 
 const TASK_TYPE_LABELS = {
   general: "General Task",
+  inspection_request: "Inspection Request",
   proposal_request: "Proposal Request",
   payment_follow_up: "Payment Follow-up",
 };
@@ -40,6 +41,7 @@ export function taskStatusLabel(task = {}, today = new Date()) {
 export function taskType(task = {}) {
   if (String(task.related_type || "").toLowerCase() === "receivable_payment_follow_up") return "payment_follow_up";
   if (String(task.task_type || "").toLowerCase() === "proposal_request") return "proposal_request";
+  if (String(task.title || "").trim().toLowerCase().startsWith("inspection request:")) return "inspection_request";
   return "general";
 }
 

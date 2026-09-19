@@ -10,7 +10,13 @@ import DashboardTasks from "./DashboardTasks.jsx";
 import SubcontractorCompliance from "./SubcontractorCompliance.jsx";
 import InvoiceQueue from "./InvoiceQueue.jsx";
 import AccountAccessVault from "./AccountAccessVault.jsx";
-import { calculateLeadKpis, findPotentialDuplicateLead, validateQuickLead } from "./crmLeadWorkflow.js";
+import {
+  buildInspectionTask,
+  calculateLeadKpis,
+  findInspectionAssignee,
+  findPotentialDuplicateLead,
+  validateQuickLead,
+} from "./crmLeadWorkflow.js";
 import {
   canManageInvoiceQueue,
   canSubmitJobForInvoice,
@@ -442,6 +448,7 @@ const DEFAULT_PROPOSAL_TEMPLATE = {
 const DEFAULT_PROPOSAL_TEMPLATE_ID = DEFAULT_PROPOSAL_TEMPLATE.id;
 
 const CRM_LEAD_SOURCE_OPTIONS = [
+  "Phone Call / Office",
   "Cold Calling",
   "Existing customer",
   "Referral",
@@ -476,6 +483,7 @@ const CRM_LEAD_SERVICE_OPTIONS = [
 const CRM_LEAD_STATUS_OPTIONS = [
   "New",
   "Contacted",
+  "Inspection Requested",
   "Appointment Scheduled",
   "Inspection Completed",
   "Estimate in Progress",
@@ -489,6 +497,7 @@ const CRM_LEAD_STATUS_OPTIONS = [
 const CRM_PIPELINE_STATUS_OPTIONS = [
   "New",
   "Contacted",
+  "Inspection Requested",
   "Appointment Scheduled",
   "Inspection Completed",
   "Estimate in Progress",
@@ -10236,6 +10245,7 @@ function App() {
   const [crmLeads, setCrmLeads] = useState([]);
   const [crmLeadSyncStatus, setCrmLeadSyncStatus] = useState("idle");
   const [crmLeadSyncError, setCrmLeadSyncError] = useState("");
+  const [crmInspectionSending, setCrmInspectionSending] = useState(false);
   const [crmWeeklyInspectionTarget, setCrmWeeklyInspectionTarget] = useState(0);
   const [crmLeadDraft, setCrmLeadDraft] = useState(() => createBlankCrmLead());
   const [crmLeadEditingId, setCrmLeadEditingId] = useState("");
@@ -13236,13 +13246,14 @@ function App() {
     };
   };
 
-  const startNewCrmLeadDraft = () => {
+  const startNewCrmLeadDraft = (overrides = {}) => {
     setCrmLeadDraft(normalizeCrmLead({
       ...createBlankCrmLead(),
       originatorId: authUser?.key || "",
       originatorName: authUser?.displayName || "",
       originatorEmail: authUser?.email || "",
       relationshipOwnerId: authUser?.key || "",
+      ...overrides,
     }));
     setCrmLeadEditingId("");
     setCrmTab("quickCapture");
@@ -13250,6 +13261,17 @@ function App() {
 
   const openDashboardLeadCapture = () => {
     startNewCrmLeadDraft();
+    setActiveTemplate("crm");
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  const openDashboardInspectionRequest = () => {
+    startNewCrmLeadDraft({
+      leadSource: "Phone Call / Office",
+      roofingServiceNeeded: "Roof inspection",
+    });
     setActiveTemplate("crm");
     if (typeof window !== "undefined") {
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -13341,6 +13363,103 @@ function App() {
     });
     setCrmLeadDraft(fresh);
     setCrmLeadEditingId("");
+  };
+
+  const sendCrmLeadForInspection = async (leadOverride = crmLeadDraft, resetAfter = false) => {
+    if (crmInspectionSending || !authUser?.key) return;
+    const validation = validateQuickLead(leadOverride);
+    if (!validation.valid) {
+      setSessionMessageType("error");
+      setSessionMessage(validation.errors.join(" "));
+      return;
+    }
+
+    setCrmInspectionSending(true);
+    setSessionMessageType("");
+    setSessionMessage("Sending inspection request to Ivan...");
+
+    const { data: profiles, error: profilesError } = await supabase
+      .from("user_profiles")
+      .select("id, full_name, email, role")
+      .order("full_name", { ascending: true });
+    const ivan = findInspectionAssignee(profiles || []);
+    if (profilesError || !ivan?.id) {
+      setCrmInspectionSending(false);
+      setSessionMessageType("error");
+      setSessionMessage(profilesError?.message || "Ivan's app profile could not be found. Confirm that ivan@crtroofing.com is active.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const normalized = normalizeCrmLead({
+      ...leadOverride,
+      leadSource: leadOverride.leadSource || "Phone Call / Office",
+      roofingServiceNeeded: leadOverride.roofingServiceNeeded || "Roof inspection",
+      assignedStaffId: ivan.id,
+      leadStatus: "Inspection Requested",
+      qualificationStatus: "qualified",
+      qualifiedAt: leadOverride.qualifiedAt || now,
+      qualifiedBy: leadOverride.qualifiedBy || authUser.key,
+      originatorId: leadOverride.originatorId || authUser.key,
+      originatorName: leadOverride.originatorName || authUser.displayName || "",
+      originatorEmail: leadOverride.originatorEmail || authUser.email || "",
+      relationshipOwnerId: leadOverride.relationshipOwnerId || authUser.key,
+      updatedAt: now,
+    });
+    const routedLead = addCrmLeadHistory(
+      normalized,
+      "Sent for inspection",
+      `Assigned to Ivan Solano by ${authUser.displayName || authUser.email || "office staff"}.`,
+    );
+
+    const leadResult = await upsertCrmLeadToSupabase(routedLead, authUser);
+    if (leadResult?.error) {
+      setCrmInspectionSending(false);
+      setCrmLeadSyncStatus("local");
+      setCrmLeadSyncError(leadResult.error.message || "Inspection lead could not sync.");
+      setSessionMessageType("error");
+      setSessionMessage(`Inspection request was not sent because the lead could not sync: ${leadResult.error.message || leadResult.error}`);
+      return;
+    }
+
+    const savedLead = normalizeCrmLead(leadResult?.data || routedLead);
+    const inspectionTask = buildInspectionTask(savedLead);
+    const { data: task, error: taskError } = await supabase.rpc("create_private_company_task", {
+      p_title: inspectionTask.title,
+      p_description: `${inspectionTask.description}\nCRM lead ID: ${savedLead.id}`,
+      p_due_date: null,
+      p_priority: inspectionTask.priority,
+      p_assignee_ids: [ivan.id],
+    }).single();
+
+    if (taskError || !task?.id) {
+      setCrmInspectionSending(false);
+      setSessionMessageType("error");
+      setSessionMessage(`The lead was saved, but Ivan's inspection task could not be created: ${taskError?.message || "Unknown task error"}`);
+      return;
+    }
+
+    setCrmLeads((current) => [
+      savedLead,
+      ...current.filter((lead) => lead.id !== savedLead.id),
+    ].sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""))));
+    setCrmLeadSyncStatus("saved");
+    setCrmLeadSyncError("");
+    setWorkHubInitialTaskId(task.id);
+    setWorkHubInitialCreateTask(false);
+    setSessionMessageType("success");
+    setSessionMessage("Inspection request sent to Ivan. He received a task notification and the discussion is ready.");
+
+    if (resetAfter) {
+      startNewCrmLeadDraft({
+        leadSource: "Phone Call / Office",
+        roofingServiceNeeded: "Roof inspection",
+      });
+    } else {
+      setCrmLeadDraft(savedLead);
+      setCrmLeadEditingId(savedLead.id);
+    }
+    setCrmInspectionSending(false);
   };
 
   const handleCrmLeadAction = (action) => {
@@ -19074,7 +19193,7 @@ function App() {
           <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
             Back to dashboard
           </button>
-          <button type="button" className="secondaryButton" onClick={startNewCrmLeadDraft}>
+          <button type="button" className="secondaryButton" onClick={() => startNewCrmLeadDraft()}>
             + New lead
           </button>
           <button type="button" className="secondaryButton" onClick={startNewCrmCustomerDraft}>
@@ -19140,9 +19259,20 @@ function App() {
             </div>
             <div className="actionRow" style={{ marginTop: 16 }}>
               <button type="button" className="primaryButton" onClick={saveQuickLeadAndAddNext}>Save &amp; Add Next</button>
+              <button
+                type="button"
+                className="secondaryButton"
+                disabled={crmInspectionSending}
+                onClick={() => sendCrmLeadForInspection(crmLeadDraft, true)}
+              >
+                {crmInspectionSending ? "Sending to Ivan…" : "Send for Inspection"}
+              </button>
               <button type="button" className="secondaryButton" onClick={() => setCrmTab("newLead")}>Continue to Qualification</button>
-              <button type="button" className="dangerButton" onClick={startNewCrmLeadDraft}>Clear</button>
+              <button type="button" className="dangerButton" onClick={() => startNewCrmLeadDraft()}>Clear</button>
             </div>
+            <p className="smallNote" style={{ margin: "10px 0 0" }}>
+              Use Send for Inspection only when the caller needs a roof inspection. Ivan will receive a task notification with these details.
+            </p>
           </Section>
         ) : null}
 
@@ -19307,6 +19437,14 @@ function App() {
             <div className="actionRow" style={{ marginTop: 16 }}>
               <button type="button" className="primaryButton" onClick={() => saveCrmLeadDraft("Lead saved.")}>
                 Save Lead
+              </button>
+              <button
+                type="button"
+                className="secondaryButton"
+                disabled={crmInspectionSending}
+                onClick={() => sendCrmLeadForInspection(crmLeadDraft)}
+              >
+                {crmInspectionSending ? "Sending to Ivan…" : "Send for Inspection"}
               </button>
               <button type="button" className="secondaryButton" onClick={() => handleCrmLeadAction("scheduleAppointment")}>
                 Schedule Appointment
@@ -22103,6 +22241,13 @@ function App() {
               <span className="eyebrow">CRM</span>
               <strong>Collect Lead</strong>
               <p>Add a new customer opportunity.</p>
+            </button>
+          ) : null}
+          {!isProjectManager ? (
+            <button type="button" className="templateCard" onClick={openDashboardInspectionRequest}>
+              <span className="eyebrow">Office Call</span>
+              <strong>Send for Inspection</strong>
+              <p>Capture the caller and notify Ivan.</p>
             </button>
           ) : null}
           <button type="button" className="templateCard" onClick={() => {

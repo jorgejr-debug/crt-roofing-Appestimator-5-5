@@ -30,5 +30,7 @@ test("existing task relationships become useful type labels without duplicating 
   assert.equal(taskTypeLabel({ related_type: "receivable_payment_follow_up" }), "Payment Follow-up");
   assert.equal(taskType({ task_type: "proposal_request" }), "proposal_request");
   assert.equal(taskTypeLabel({ task_type: "proposal_request" }), "Proposal Request");
+  assert.equal(taskType({ title: "Inspection Request: Jane Customer" }), "inspection_request");
+  assert.equal(taskTypeLabel({ title: "Inspection Request: Jane Customer" }), "Inspection Request");
   assert.equal(taskTypeLabel({}), "General Task");
 });

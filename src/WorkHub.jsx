@@ -320,6 +320,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
               <select aria-label="Task type" value={taskTypeFilter} onChange={(event) => setTaskTypeFilter(event.target.value)}>
                 <option value="all">All types</option>
                 <option value="general">General tasks</option>
+                <option value="inspection_request">Inspection requests</option>
                 <option value="payment_follow_up">Payment follow-ups</option>
                 <option value="proposal_request">Proposal requests</option>
               </select>
