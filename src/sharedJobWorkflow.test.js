@@ -233,3 +233,13 @@ test("saving active job details preserves identity, aliases, and activity histor
   assert.equal(saved.activityLog[0].summary, "Active job details updated");
   assert.equal(saved.activityLog[1].id, "older");
 });
+
+test("first production schedule records a durable scheduling milestone", () => {
+  const updated = applyActiveJobEditDraft(
+    { id: "job-1", startDate: "", activityLog: [] },
+    { projectName: "Job", status: "Scheduled", startDate: "2026-09-21" },
+    { updatedAt: "2026-09-19T10:00:00-07:00", updatedBy: "Miguel" },
+  );
+  assert.equal(updated.scheduledAt, "2026-09-19T10:00:00-07:00");
+  assert.equal(updated.activityLog[0].summary, "Production schedule established");
+});

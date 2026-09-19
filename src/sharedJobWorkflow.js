@@ -102,6 +102,7 @@ export function mapSharedJobRowToJob(row = {}) {
     finalBid: Number(payload.finalBid ?? row.final_bid ?? 0) || 0,
     contractAmount: Number(payload.contractAmount ?? row.contract_amount ?? row.final_bid ?? 0) || 0,
     dailyProgressLog: Array.isArray(payload.dailyProgressLog) ? payload.dailyProgressLog : Array.isArray(row.daily_progress_log) ? row.daily_progress_log : [],
+    productionAuthorizedAt: safeString(payload.productionAuthorizedAt || row.production_authorized_at),
     issues: Array.isArray(payload.issues) ? payload.issues : [],
     activityLog: Array.isArray(payload.activityLog) ? payload.activityLog : [],
     workflowStatus,
@@ -296,6 +297,7 @@ export function applyActiveJobEditDraft(job = {}, draft = {}, options = {}) {
   const updatedAt = safeString(options.updatedAt) || new Date().toISOString();
   const updatedBy = safeString(options.updatedBy) || "Unknown";
   const remainingContractValue = Math.max(0, normalized.contractAmount - normalized.amountBilled);
+  const scheduleEstablished = !safeString(job.startDate || job.anticipatedStartDate) && Boolean(normalized.startDate);
   return {
     ...job,
     ...normalized,
@@ -306,6 +308,7 @@ export function applyActiveJobEditDraft(job = {}, draft = {}, options = {}) {
     projectStatus: normalized.status,
     finalBid: normalized.contractAmount,
     anticipatedStartDate: normalized.startDate,
+    scheduledAt: safeString(job.scheduledAt) || (scheduleEstablished ? updatedAt : ""),
     remainingContractValue,
     workflowStatus: "active",
     isActive: true,
@@ -313,7 +316,7 @@ export function applyActiveJobEditDraft(job = {}, draft = {}, options = {}) {
     activityLog: [
       {
         id: safeString(options.activityId) || `activity-edit-active-${updatedAt}`,
-        summary: "Active job details updated",
+        summary: scheduleEstablished ? "Production schedule established" : "Active job details updated",
         changedBy: updatedBy,
         createdAt: updatedAt,
       },

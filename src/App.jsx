@@ -10,6 +10,7 @@ import DashboardTasks from "./DashboardTasks.jsx";
 import SubcontractorCompliance from "./SubcontractorCompliance.jsx";
 import InvoiceQueue from "./InvoiceQueue.jsx";
 import AccountAccessVault from "./AccountAccessVault.jsx";
+import { calculateMiguelKpis } from "./productionKpiWorkflow.js";
 import {
   buildInspectionTask,
   calculateDanielaKpis,
@@ -18633,6 +18634,109 @@ function App() {
     </div>
   );
 
+  const getMiguelKpiData = () => {
+    const uniqueJobs = new Map();
+    [...completedJobs, ...activeJobs, ...pastCompletedJobs].forEach((job) => {
+      const key = String(job.sourceRecordUid || job.id || "");
+      if (key) uniqueJobs.set(key, job);
+    });
+    const jobs = [...uniqueJobs.values()];
+    const kpis = calculateMiguelKpis(jobs, { periodDays: 30, managerName: "Miguel Figueroa" });
+    return {
+      kpis,
+      attentionJobs: jobs.filter((job) => kpis.attentionJobIds.includes(job.id)),
+    };
+  };
+
+  const renderMiguelKpiSection = () => {
+    const { kpis, attentionJobs } = getMiguelKpiData();
+    return (
+      <Section title="Miguel · Project Manager / Production KPI" subtitle="Measures controllable production execution over the last 30 days. Proposal, sales-approval, customer, and accounting delays do not count against Miguel.">
+        <div className="summaryGrid">
+          <div className="summaryCard">
+            <span>Overall KPI score</span>
+            <strong>{kpis.overallScore === null ? "—" : `${kpis.overallScore}%`}</strong>
+            <p>Weighted only from production categories with enough current data.</p>
+          </div>
+          <div className="summaryCard">
+            <span>Active production jobs</span>
+            <strong>{num(kpis.activeJobs, 0)}</strong>
+            <p>Current jobs under Miguel's production responsibility.</p>
+          </div>
+          <div className="summaryCard">
+            <span>Scheduling response</span>
+            <strong>{kpis.schedulingRate === null ? "—" : `${Math.round(kpis.schedulingRate * 100)}%`}</strong>
+            <p>{`${kpis.scheduledOnTime} of ${kpis.schedulingEligible} eligible jobs scheduled within 2 business days of production release.`}</p>
+          </div>
+          <div className="summaryCard">
+            <span>Daily job-log coverage</span>
+            <strong>{kpis.dailyLogRate === null ? "—" : `${Math.round(kpis.dailyLogRate * 100)}%`}</strong>
+            <p>{`${kpis.loggedDays} of ${kpis.expectedLogDays} expected business-day logs recorded.`}</p>
+          </div>
+          <div className="summaryCard">
+            <span>On-time completion</span>
+            <strong>{kpis.completionRate === null ? "—" : `${Math.round(kpis.completionRate * 100)}%`}</strong>
+            <p>{`${kpis.completedOnTime} of ${kpis.completionEligible} completed or overdue jobs met the expected completion date.`}</p>
+          </div>
+          <div className="summaryCard">
+            <span>Current job updates</span>
+            <strong>{kpis.updateHygieneRate === null ? "—" : `${Math.round(kpis.updateHygieneRate * 100)}%`}</strong>
+            <p>{`${kpis.currentUpdates} of ${kpis.hygieneEligible} active jobs updated within 2 business days.`}</p>
+          </div>
+          <div className="summaryCard">
+            <span>Upcoming starts</span>
+            <strong>{num(kpis.upcomingCount, 0)}</strong>
+            <p>Jobs scheduled to start within the next seven days.</p>
+          </div>
+          <div className="summaryCard">
+            <span>Pre-start blockers</span>
+            <strong>{num(kpis.blockedUpcomingCount, 0)}</strong>
+            <p>Visible for coordination; department-owned material or document delays are context, not an automatic KPI deduction.</p>
+          </div>
+        </div>
+        {attentionJobs.length ? (
+          <div className="savedList" style={{ marginTop: 16 }}>
+            {attentionJobs.map((job) => (
+              <div className="savedCard" key={job.id}>
+                <div>
+                  <span className="eyebrow">Production attention</span>
+                  <strong>{job.projectName || job.jobName || job.jobNumber || "Production job"}</strong>
+                  <p>{job.status || job.projectStatus || "Status not entered"} · Start {job.startDate || job.anticipatedStartDate || "TBD"} · Due {job.expectedCompletionDate || "TBD"}</p>
+                </div>
+                {activeJobs.some((activeJob) => activeJob.id === job.id) ? (
+                  <button type="button" className="secondaryButton" onClick={() => openActiveJobDetail(job.id)}>Open Job</button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="smallNote" style={{ marginTop: 16 }}>No production jobs currently need KPI attention.</p>
+        )}
+        <div className="notice" style={{ marginTop: 16 }}>
+          <strong>Scoring weights</strong>
+          <p style={{ marginBottom: 0 }}>On-time completion 35% · daily job-log coverage 25% · production scheduling response 20% · active-job update hygiene 20%. Categories without enough data are excluded instead of counted against Miguel.</p>
+        </div>
+      </Section>
+    );
+  };
+
+  const renderMiguelKpiScreen = () => (
+    <div className="appShell">
+      <style>{css}</style>
+      <header className="hero">
+        <div className="brandRow">
+          <div className="brandMark"><img src={LOGO_SRC} alt="CRT Roofing logo" /></div>
+          <div>
+            <p className="eyebrow">Production Accountability</p>
+            <h1>KPI Scorecards</h1>
+            <p className="intro">A focused view of production commitments, documentation, and job readiness.</p>
+          </div>
+        </div>
+      </header>
+      {renderMiguelKpiSection()}
+    </div>
+  );
+
   const renderCrmLeadsScreen = () => {
     const assignedStaffOptions = [
       { value: "", label: "Unassigned" },
@@ -19883,6 +19987,8 @@ function App() {
 
         {crmTab === "reports" ? (
           <>
+          {isFinanceUser ? renderMiguelKpiSection() : null}
+
           {(isFinanceUser
             || String(authUser?.email || "").trim().toLowerCase() === "daniela@crtroofing.com"
             || String(authUser?.id || authUser?.key || "") === crmDanielaProfileId) ? (
@@ -27136,6 +27242,7 @@ function App() {
     const mainNavigation = isProjectManager ? [
       { key: "dashboard", label: "Dashboard", icon: "D", matches: ["dashboard"] },
       { key: "workHub", label: "Tasks & Messages", icon: "T", matches: ["workHub"] },
+      { key: "kpis", label: "KPI Scorecards", icon: "K", matches: ["kpis"] },
       { key: "activeJobs", label: "Active Jobs", icon: "J", matches: ["activeJobs", "activeJob", "fieldOperations", "approvedJob"] },
       { key: "subcontractors", label: "Approved Vendors", icon: "SC", matches: ["subcontractors"] },
     ] : [
@@ -27335,6 +27442,7 @@ function App() {
 
   if (isProjectManager && !new Set([
     "workHub",
+    "kpis",
     "activeJobs",
     "activeJob",
     "approvedJob",
@@ -27362,6 +27470,7 @@ function App() {
   if (activeTemplate === "cfoDashboard") return renderAuthenticatedLayout(renderCfoDashboardScreen());
   if (activeTemplate === "invoices") return renderAuthenticatedLayout(<InvoiceQueue supabase={supabase} authUser={authUser} onClose={() => setActiveTemplate("dashboard")} />);
   if (activeTemplate === "accountAccess") return renderAuthenticatedLayout(<AccountAccessVault supabase={supabase} onClose={() => setActiveTemplate("dashboard")} />);
+  if (activeTemplate === "kpis") return renderAuthenticatedLayout(renderMiguelKpiScreen());
   if (activeTemplate === "administration") return renderAuthenticatedLayout(renderAdministrationScreen());
   if (activeTemplate === "activeJobs") return renderAuthenticatedLayout(renderActiveJobsScreen());
   if (activeTemplate === "activeJob") return renderAuthenticatedLayout(renderActiveJobScreen());

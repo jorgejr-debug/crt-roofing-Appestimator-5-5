@@ -48,3 +48,14 @@ test("Daniela KPI measures controllable proposal response, turnaround, documents
   assert.match(app, /On-time proposal handoff 45%/);
   assert.match(app, /fetchCrmProposalAuditEventsFromSupabase/);
 });
+
+test("Miguel KPI measures production execution without exposing finance data", () => {
+  assert.match(app, /Miguel · Project Manager \/ Production KPI/);
+  assert.match(app, /Scheduling response/);
+  assert.match(app, /Daily job-log coverage/);
+  assert.match(app, /On-time completion/);
+  assert.match(app, /Current job updates/);
+  assert.match(app, /On-time completion 35%/);
+  assert.match(app, /department-owned material or document delays are context/);
+  assert.match(app, /key: "kpis", label: "KPI Scorecards"/);
+});
