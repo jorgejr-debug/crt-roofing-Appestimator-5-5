@@ -18698,12 +18698,32 @@ function App() {
   const renderMiguelKpiSection = () => {
     const { kpis, attentionJobs } = getMiguelKpiData();
     return (
-      <Section title="Miguel · Project Manager / Production KPI" subtitle="Measures controllable production execution over the last 30 days. Proposal, sales-approval, customer, and accounting delays do not count against Miguel.">
+      <Section title="Miguel · Project Manager / Production KPI" subtitle="Tracks Miguel's 30-day production flow from authorized release through scheduling and completion. Proposal, sales-approval, customer, and accounting delays do not count against him.">
         <div className="summaryGrid">
           <div className="summaryCard">
-            <span>Overall KPI score</span>
+            <span>On-time production completion · primary KPI</span>
+            <strong>{kpis.completionRate === null ? "—" : `${Math.round(kpis.completionRate * 100)}%`}</strong>
+            <p>{`Target 90% · Status ${String(kpis.completionStatus || "gray").toUpperCase()} · ${kpis.completedOnTime} of ${kpis.completionEligible} completed or overdue jobs met the promised completion date.`}</p>
+          </div>
+          <div className="summaryCard">
+            <span>Overall operating score</span>
             <strong>{kpis.overallScore === null ? "—" : `${kpis.overallScore}%`}</strong>
-            <p>Weighted only from production categories with enough current data.</p>
+            <p>Blends completion, daily logs, scheduling response, and current job updates.</p>
+          </div>
+          <div className="summaryCard">
+            <span>Jobs released to production</span>
+            <strong>{num(kpis.releasedCount, 0)}</strong>
+            <p>Authorized jobs handed to production during the last 30 days.</p>
+          </div>
+          <div className="summaryCard">
+            <span>Released jobs scheduled</span>
+            <strong>{num(kpis.scheduledReleasedCount, 0)}</strong>
+            <p>Released jobs with a production schedule established.</p>
+          </div>
+          <div className="summaryCard">
+            <span>Jobs completed</span>
+            <strong>{num(kpis.completedThisPeriodCount, 0)}</strong>
+            <p>Production jobs completed during the last 30 days.</p>
           </div>
           <div className="summaryCard">
             <span>Active production jobs</span>
@@ -18719,11 +18739,6 @@ function App() {
             <span>Daily job-log coverage</span>
             <strong>{kpis.dailyLogRate === null ? "—" : `${Math.round(kpis.dailyLogRate * 100)}%`}</strong>
             <p>{`${kpis.loggedDays} of ${kpis.expectedLogDays} expected business-day logs recorded.`}</p>
-          </div>
-          <div className="summaryCard">
-            <span>On-time completion</span>
-            <strong>{kpis.completionRate === null ? "—" : `${Math.round(kpis.completionRate * 100)}%`}</strong>
-            <p>{`${kpis.completedOnTime} of ${kpis.completionEligible} completed or overdue jobs met the expected completion date.`}</p>
           </div>
           <div className="summaryCard">
             <span>Current job updates</span>
@@ -18759,6 +18774,11 @@ function App() {
         ) : (
           <p className="smallNote" style={{ marginTop: 16 }}>No production jobs currently need KPI attention.</p>
         )}
+        <div className="notice" style={{ marginTop: 16 }}>
+          <strong>Thirty-day production flow</strong>
+          <p>{`${kpis.releasedCount} released → ${kpis.scheduledReleasedCount} scheduled → ${kpis.completedThisPeriodCount} completed.`}</p>
+          <p>Pre-production delays outside Miguel's control stay visible for coordination but do not lower his score.</p>
+        </div>
         <div className="notice" style={{ marginTop: 16 }}>
           <strong>Scoring weights</strong>
           <p style={{ marginBottom: 0 }}>On-time completion 35% · daily job-log coverage 25% · production scheduling response 20% · active-job update hygiene 20%. Categories without enough data are excluded instead of counted against Miguel.</p>

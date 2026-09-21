@@ -46,6 +46,9 @@ test("Miguel KPI scores production scheduling, daily logs, completion, and updat
   assert.equal(kpis.schedulingEligible, 2);
   assert.equal(kpis.completedOnTime, 1);
   assert.equal(kpis.completionEligible, 1);
+  assert.equal(kpis.completionStatus, "green");
+  assert.equal(kpis.completedThisPeriodCount, 1);
+  assert.equal(kpis.scheduledReleasedCount, 2);
   assert.equal(kpis.loggedDays, 3);
   assert.equal(kpis.expectedLogDays, 4);
   assert.equal(kpis.currentUpdates, 1);

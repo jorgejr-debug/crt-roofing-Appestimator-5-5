@@ -64,6 +64,11 @@ test("Daniela KPI measures controllable proposal response, turnaround, documents
 
 test("Miguel KPI measures production execution without exposing finance data", () => {
   assert.match(app, /Miguel · Project Manager \/ Production KPI/);
+  assert.match(app, /On-time production completion · primary KPI/);
+  assert.match(app, /Jobs released to production/);
+  assert.match(app, /Released jobs scheduled/);
+  assert.match(app, /Jobs completed/);
+  assert.match(app, /Thirty-day production flow/);
   assert.match(app, /Scheduling response/);
   assert.match(app, /Daily job-log coverage/);
   assert.match(app, /On-time completion/);

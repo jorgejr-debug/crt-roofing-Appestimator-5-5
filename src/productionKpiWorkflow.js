@@ -92,6 +92,7 @@ export function calculateMiguelKpis(jobs = [], options = {}) {
     scheduledAt && businessMinutesBetween(releasedAt, scheduledAt) <= 18 * 60
   ));
   const schedulingRate = schedulingEligible.length ? scheduledOnTime.length / schedulingEligible.length : null;
+  const scheduledReleasedCount = schedulingRows.filter(({ scheduledAt }) => Boolean(scheduledAt)).length;
 
   let expectedLogDays = 0;
   let loggedDays = 0;
@@ -128,6 +129,17 @@ export function calculateMiguelKpis(jobs = [], options = {}) {
     return completed <= expected;
   });
   const completionRate = completionEligible.length ? completedOnTime.length / completionEligible.length : null;
+  const completionStatus = completionRate === null
+    ? "gray"
+    : completionRate >= 0.9
+      ? "green"
+      : completionRate >= 0.75
+        ? "yellow"
+        : "red";
+  const completedThisPeriod = rows.filter((job) => {
+    const completed = dateValue(job.completedAt || job.completed_at);
+    return completed && completed >= periodStart && completed <= now;
+  });
 
   const hygieneEligible = active.filter((job) => latestOperationalUpdate(job) || dateValue(job.createdAt || job.created_at));
   const currentUpdates = hygieneEligible.filter((job) => {
@@ -170,6 +182,7 @@ export function calculateMiguelKpis(jobs = [], options = {}) {
     overallScore,
     activeJobs: active.length,
     releasedCount: releasedThisPeriod.length,
+    scheduledReleasedCount,
     schedulingEligible: schedulingEligible.length,
     scheduledOnTime: scheduledOnTime.length,
     schedulingRate,
@@ -179,6 +192,8 @@ export function calculateMiguelKpis(jobs = [], options = {}) {
     completionEligible: completionEligible.length,
     completedOnTime: completedOnTime.length,
     completionRate,
+    completionStatus,
+    completedThisPeriodCount: completedThisPeriod.length,
     hygieneEligible: hygieneEligible.length,
     currentUpdates: currentUpdates.length,
     updateHygieneRate,
