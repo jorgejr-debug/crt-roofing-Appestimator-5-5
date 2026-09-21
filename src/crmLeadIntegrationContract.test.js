@@ -50,8 +50,11 @@ test("Ivan KPI separates capacity supply from controllable execution and proposa
 
 test("Daniela KPI measures controllable proposal response, turnaround, documents, and queue hygiene", () => {
   assert.match(app, /Daniela · Proposal & Estimating KPI/);
-  assert.match(app, /Intake response SLA/);
-  assert.match(app, /On-time proposal handoff/);
+  assert.match(app, /Complete proposal handoff · primary KPI/);
+  assert.match(app, /Requests reviewed/);
+  assert.match(app, /Proposals finalized/);
+  assert.match(app, /Proposals sent/);
+  assert.match(app, /Thirty-day proposal funnel/);
   assert.match(app, /Complete Word \+ PDF handoff/);
   assert.match(app, /Returned for missing info/);
   assert.match(app, /does not lower Daniela's score/);

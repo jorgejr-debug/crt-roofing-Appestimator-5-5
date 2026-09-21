@@ -129,6 +129,9 @@ test("Daniela KPI scores controllable proposal work and excludes paused requests
   assert.equal(kpis.intakeEligible, 3);
   assert.equal(kpis.turnaroundOnTime, 1);
   assert.equal(kpis.turnaroundEligible, 2);
+  assert.equal(kpis.turnaroundStatus, "red");
+  assert.equal(kpis.reviewedCount, 3);
+  assert.equal(kpis.finalizedSubmittedCount, 1);
   assert.equal(kpis.completeHandoffs, 1);
   assert.equal(kpis.activeQueueCount, 1);
   assert.equal(kpis.overdueCount, 1);

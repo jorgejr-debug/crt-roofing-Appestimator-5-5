@@ -362,9 +362,18 @@ export function calculateDanielaKpis(proposalRequests = [], proposalVersions = [
   const turnaroundOnTime = turnaroundEligible.filter(({ request, version }) => {
     if (!version) return false;
     const effectiveTarget = new Date(request.target_completion_at).getTime() + Math.max(0, Number(request.sla_paused_seconds) || 0) * 1000;
-    return new Date(version.finalized_at).getTime() <= effectiveTarget;
+    const hasCompleteDocuments = String(version.source_document_storage_path || "").trim()
+      && String(version.final_pdf_storage_path || version.pdf_storage_path || "").trim();
+    return Boolean(hasCompleteDocuments) && new Date(version.finalized_at).getTime() <= effectiveTarget;
   });
   const turnaroundRate = turnaroundEligible.length ? turnaroundOnTime.length / turnaroundEligible.length : null;
+  const turnaroundStatus = turnaroundRate === null
+    ? "gray"
+    : turnaroundRate >= 0.9
+      ? "green"
+      : turnaroundRate >= 0.75
+        ? "yellow"
+        : "red";
   const completedTurnarounds = turnaroundRows.filter(({ version }) => version);
   const averageTurnaroundHours = completedTurnarounds.length
     ? completedTurnarounds.reduce((sum, { request, version }) => {
@@ -390,6 +399,12 @@ export function calculateDanielaKpis(proposalRequests = [], proposalVersions = [
     return Number.isFinite(effectiveTarget) && effectiveTarget < now.getTime();
   });
   const queueHygieneRate = activeQueue.length ? Math.max(0, 1 - overdueRequests.length / activeQueue.length) : null;
+  const reviewedStatuses = new Set(["under_review", "missing_information", "drafting_proposal", "sales_review", "ready_to_send", "sent", "signed", "declined", "closed"]);
+  const reviewedCount = periodRequests.filter((request) => (
+    request.accepted_at
+    || reviewedStatuses.has(String(request.status || ""))
+    || Boolean(eventFor(request.id, ["assigned", "information_requested"]))
+  )).length;
 
   const scoreParts = [
     [turnaroundRate, 45],
@@ -411,8 +426,11 @@ export function calculateDanielaKpis(proposalRequests = [], proposalVersions = [
     turnaroundEligible: turnaroundEligible.length,
     turnaroundOnTime: turnaroundOnTime.length,
     turnaroundRate,
+    turnaroundStatus,
     averageTurnaroundHours,
     finalizedCount: finalizedThisPeriod.length,
+    finalizedSubmittedCount: completedTurnarounds.length,
+    reviewedCount,
     completeHandoffs: completeHandoffs.length,
     documentCompletenessRate,
     activeQueueCount: activeQueue.length,

@@ -20046,7 +20046,7 @@ function App() {
           {(isFinanceUser
             || String(authUser?.email || "").trim().toLowerCase() === "daniela@crtroofing.com"
             || String(authUser?.id || authUser?.key || "") === crmDanielaProfileId) ? (
-          <Section title="Daniela · Proposal & Estimating KPI" subtitle="Measures controllable estimating work over the last 30 days. Sales corrections, customer response time, and paused missing-information requests do not count against Daniela.">
+          <Section title="Daniela · Proposal & Estimating KPI" subtitle="Thirty-day proposal funnel: review complete requests, prepare the Word and PDF package, and deliver it to Sales Review within the assigned SLA.">
             <div className="summaryGrid">
               <div className="summaryCard">
                 <span>Overall KPI score</span>
@@ -20054,19 +20054,29 @@ function App() {
                 <p>Weighted only from categories with enough current data.</p>
               </div>
               <div className="summaryCard">
+                <span>Complete proposal handoff · primary KPI</span>
+                <strong>{danielaKpis.turnaroundRate === null ? "—" : `${Math.round(danielaKpis.turnaroundRate * 100)}%`}</strong>
+                <p>{`${String(danielaKpis.turnaroundStatus || "gray").toUpperCase()} · ${danielaKpis.turnaroundOnTime} of ${danielaKpis.turnaroundEligible} eligible requests reached Sales Review on time with Word and PDF. Target: 90%.`}</p>
+              </div>
+              <div className="summaryCard">
                 <span>Requests submitted</span>
                 <strong>{num(danielaKpis.submittedCount, 0)}</strong>
                 <p>Complete requests assigned to Daniela in the last 30 days.</p>
               </div>
               <div className="summaryCard">
-                <span>Intake response SLA</span>
-                <strong>{danielaKpis.intakeResponseRate === null ? "—" : `${Math.round(danielaKpis.intakeResponseRate * 100)}%`}</strong>
-                <p>{`${danielaKpis.intakeOnTime} of ${danielaKpis.intakeEligible} eligible requests reviewed within 4 business hours.`}</p>
+                <span>Requests reviewed</span>
+                <strong>{num(danielaKpis.reviewedCount, 0)}</strong>
+                <p>{danielaKpis.intakeResponseRate === null ? "No eligible intake response to score yet." : `${Math.round(danielaKpis.intakeResponseRate * 100)}% reviewed within 4 business hours. Target: 90%.`}</p>
               </div>
               <div className="summaryCard">
-                <span>On-time proposal handoff</span>
-                <strong>{danielaKpis.turnaroundRate === null ? "—" : `${Math.round(danielaKpis.turnaroundRate * 100)}%`}</strong>
-                <p>{`${danielaKpis.turnaroundOnTime} of ${danielaKpis.turnaroundEligible} due requests reached Sales Review by the adjusted target.`}</p>
+                <span>Proposals finalized</span>
+                <strong>{num(danielaKpis.finalizedSubmittedCount, 0)}</strong>
+                <p>Submitted requests with a finalized proposal version.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Proposals sent</span>
+                <strong>{num(danielaKpis.sentCount, 0)}</strong>
+                <p>Requests sent to the customer during the reporting period.</p>
               </div>
               <div className="summaryCard">
                 <span>Average drafting time</span>
@@ -20076,7 +20086,7 @@ function App() {
               <div className="summaryCard">
                 <span>Complete Word + PDF handoff</span>
                 <strong>{danielaKpis.documentCompletenessRate === null ? "—" : `${Math.round(danielaKpis.documentCompletenessRate * 100)}%`}</strong>
-                <p>{`${danielaKpis.completeHandoffs} of ${danielaKpis.finalizedCount} finalized versions included both required files.`}</p>
+                <p>{`${danielaKpis.completeHandoffs} of ${danielaKpis.finalizedCount} finalized versions included both required files. Target: 100%.`}</p>
               </div>
               <div className="summaryCard">
                 <span>Active estimating queue</span>
@@ -20093,6 +20103,10 @@ function App() {
                 <strong>{num(danielaKpis.missingInformationCount, 0)}</strong>
                 <p>Workload and intake-quality context only; this does not lower Daniela's score.</p>
               </div>
+            </div>
+            <div className="notice" style={{ marginTop: 16 }}>
+              <strong>Thirty-day proposal funnel</strong>
+              <p style={{ marginBottom: 0 }}>{`${num(danielaKpis.submittedCount, 0)} submitted → ${num(danielaKpis.reviewedCount, 0)} reviewed → ${num(danielaKpis.finalizedSubmittedCount, 0)} finalized → ${num(danielaKpis.sentCount, 0)} sent. Missing-information pauses and work waiting on Sales Review are visible context and do not lower Daniela's score.`}</p>
             </div>
             {danielaOverdueRequests.length ? (
               <div className="savedList" style={{ marginTop: 16 }}>
