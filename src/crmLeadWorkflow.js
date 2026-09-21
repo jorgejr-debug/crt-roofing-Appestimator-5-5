@@ -84,6 +84,9 @@ export function calculateLeadKpis(leads = [], options = {}) {
   const originatorEmail = String(options.originatorEmail || "").trim().toLowerCase();
   const originatorId = String(options.originatorId || "").trim();
   const weeklyInspectionTarget = Math.max(0, Number(options.weeklyInspectionTarget) || 0);
+  const weeklyVisitTarget = Math.max(1, Number(options.weeklyVisitTarget) || 36);
+  const weeklyQualifiedTarget = Math.max(1, Number(options.weeklyQualifiedTarget) || 6);
+  const weeklyChrisInspectionTarget = Math.max(1, Number(options.weeklyChrisInspectionTarget) || 4);
 
   const attributed = leads.filter((lead) => {
     if (!originatorEmail && !originatorId) return true;
@@ -91,9 +94,16 @@ export function calculateLeadKpis(leads = [], options = {}) {
     const idMatches = originatorId && String(lead.originatorId || "") === originatorId;
     return emailMatches || idMatches;
   });
-  const thisWeek = attributed.filter((lead) => new Date(lead.createdAt || 0) >= weekStart);
-  const qualified = thisWeek.filter((lead) => lead.qualificationStatus === "qualified" || lead.qualifiedAt);
-  const inspectionReady = thisWeek.filter((lead) => lead.acceptedForInspectionAt || lead.appointmentDate);
+  const thisWeek = attributed.filter((lead) => {
+    const createdAt = new Date(lead.createdAt || 0);
+    return Number.isFinite(createdAt.getTime()) && createdAt >= weekStart && createdAt <= now;
+  });
+  const customerVisits = thisWeek.filter((lead) => {
+    const source = String(lead.leadSource || lead.lead_source || "").trim().toLowerCase();
+    return Boolean(String(lead.visitOutcome || lead.visit_outcome || "").trim()) || source === "cold calling";
+  });
+  const qualified = customerVisits.filter((lead) => lead.qualificationStatus === "qualified" || lead.qualifiedAt);
+  const inspectionReady = qualified.filter((lead) => lead.acceptedForInspectionAt || lead.appointmentDate);
   const staleCutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const stale = attributed.filter((lead) => {
     if (CLOSED_LEAD_STATUSES.has(String(lead.leadStatus || ""))) return false;
@@ -104,14 +114,31 @@ export function calculateLeadKpis(leads = [], options = {}) {
     return !progressed || Boolean(lead.qualifiedAt || lead.qualificationStatus === "qualified");
   }).length;
 
+  const visitAttainment = Math.min(1, customerVisits.length / weeklyVisitTarget);
+  const qualifiedAttainment = Math.min(1, qualified.length / weeklyQualifiedTarget);
+  const inspectionAttainment = Math.min(1, inspectionReady.length / weeklyChrisInspectionTarget);
+  const weeklyScore = Math.round((visitAttainment * 0.2 + qualifiedAttainment * 0.6 + inspectionAttainment * 0.2) * 100);
+  const qualifiedStatus = qualified.length >= weeklyQualifiedTarget
+    ? "green"
+    : qualified.length >= Math.ceil(weeklyQualifiedTarget * 2 / 3)
+      ? "yellow"
+      : "red";
+
   return {
     total: attributed.length,
     capturedThisWeek: thisWeek.length,
+    customerVisitsThisWeek: customerVisits.length,
     qualifiedThisWeek: qualified.length,
     inspectionReadyThisWeek: inspectionReady.length,
-    qualificationRate: thisWeek.length ? qualified.length / thisWeek.length : 0,
+    qualificationRate: customerVisits.length ? qualified.length / customerVisits.length : 0,
+    inspectionConversionRate: qualified.length ? inspectionReady.length / qualified.length : 0,
     capacityCoverage: weeklyInspectionTarget ? inspectionReady.length / weeklyInspectionTarget : null,
     weeklyInspectionTarget,
+    weeklyVisitTarget,
+    weeklyQualifiedTarget,
+    weeklyChrisInspectionTarget,
+    weeklyScore,
+    qualifiedStatus,
     staleCount: stale.length,
     processComplianceRate: attributed.length ? processCompliant / attributed.length : 1,
   };

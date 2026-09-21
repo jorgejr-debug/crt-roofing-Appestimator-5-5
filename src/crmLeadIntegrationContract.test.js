@@ -7,7 +7,7 @@ const migration = fs.readFileSync(new URL("../supabase/migrations/20260918100000
 
 test("CRM includes a mobile-first quick capture and a separate qualification workspace", () => {
   assert.match(app, /Quick Lead Capture/);
-  assert.match(app, /Save &amp; Add Next/);
+  assert.match(app, /Save &(?:amp;)? Add Next/);
   assert.match(app, /Qualify \/ Edit Lead/);
   assert.match(app, /Continue to Qualification/);
 });
@@ -23,6 +23,13 @@ test("shared leads preserve originator attribution and project managers cannot a
 test("Chris KPI is driven by explicit attribution and inspection capacity", () => {
   assert.match(app, /Chris · Business Development KPI/);
   assert.match(app, /originatorEmail: "chris@crtroofing\.com"/);
+  assert.match(app, /Qualified leads · primary KPI/);
+  assert.match(app, /New customer visits/);
+  assert.match(app, /Visit conversion/);
+  assert.match(app, /Inspection handoffs/);
+  assert.match(app, /weeklyVisitTarget, 36/);
+  assert.match(app, /CRM_VISIT_OUTCOME_OPTIONS/);
+  assert.match(app, /Save & Send to Ivan/);
   assert.match(app, /Ivan's weekly inspection capacity target/);
   assert.match(app, /25% commission must be calculated from finalized job gross profit/);
 });

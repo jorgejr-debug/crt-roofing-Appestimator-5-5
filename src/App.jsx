@@ -483,6 +483,14 @@ const CRM_LEAD_SERVICE_OPTIONS = [
   "Other",
 ];
 
+const CRM_VISIT_OUTCOME_OPTIONS = [
+  ["no_contact", "No contact"],
+  ["not_interested", "Not interested"],
+  ["follow_up", "Follow up later"],
+  ["qualified", "Qualified opportunity"],
+  ["inspection", "Send for inspection"],
+];
+
 const CRM_LEAD_STATUS_OPTIONS = [
   "New",
   "Contacted",
@@ -4345,6 +4353,7 @@ function createBlankCrmLead() {
     city: "",
     zipCode: "",
     leadSource: "Cold Calling",
+    visitOutcome: "no_contact",
     roofingServiceNeeded: "",
     description: "",
     assignedStaffId: "",
@@ -4395,6 +4404,7 @@ function normalizeCrmLead(lead = {}) {
     city: String(lead.city || ""),
     zipCode: String(lead.zipCode || lead.zip_code || ""),
     leadSource: String(lead.leadSource || lead.lead_source || ""),
+    visitOutcome: String(lead.visitOutcome || lead.visit_outcome || ""),
     roofingServiceNeeded: String(lead.roofingServiceNeeded || lead.roofing_service_needed || ""),
     description: String(lead.description || lead.requestDescription || lead.notes || ""),
     assignedStaffId: String(lead.assignedStaffId || lead.assigned_staff_id || ""),
@@ -13436,15 +13446,35 @@ function App() {
     return nextLead;
   };
 
-  const saveQuickLeadAndAddNext = () => {
+  const saveQuickLeadAndAddNext = async () => {
     const validation = validateQuickLead(crmLeadDraft);
     if (!validation.valid) {
       setSessionMessageType("error");
       setSessionMessage(validation.errors.join(" "));
       return;
     }
-    const duplicate = findPotentialDuplicateLead(crmLeads, crmLeadDraft);
-    const saved = saveCrmLeadDraft(duplicate ? `Lead saved. Possible duplicate: ${crmLeadDisplayName(duplicate)}.` : "Lead captured. Ready for the next one.");
+    if (["qualified", "inspection"].includes(crmLeadDraft.visitOutcome) && !crmLeadDraft.roofingServiceNeeded) {
+      setSessionMessageType("error");
+      setSessionMessage("Select the roofing opportunity type before marking this visit qualified.");
+      return;
+    }
+    if (crmLeadDraft.visitOutcome === "inspection") {
+      await sendCrmLeadForInspection(crmLeadDraft, true);
+      return;
+    }
+    const outcomeUpdates = crmLeadDraft.visitOutcome === "not_interested"
+      ? { leadStatus: "Not Qualified", qualificationStatus: "not_qualified" }
+      : crmLeadDraft.visitOutcome === "follow_up"
+        ? { leadStatus: "Follow-Up", qualificationStatus: "captured" }
+        : crmLeadDraft.visitOutcome === "qualified"
+          ? { leadStatus: "Contacted", qualificationStatus: "qualified" }
+          : { leadStatus: "New", qualificationStatus: "captured" };
+    const leadToSave = { ...crmLeadDraft, ...outcomeUpdates };
+    const duplicate = findPotentialDuplicateLead(crmLeads, leadToSave);
+    const saved = saveCrmLeadDraft(
+      duplicate ? `Visit saved. Possible duplicate: ${crmLeadDisplayName(duplicate)}.` : "Customer visit saved. Ready for the next one.",
+      leadToSave,
+    );
     if (!saved) return;
     const fresh = normalizeCrmLead({
       ...createBlankCrmLead(),
@@ -13488,7 +13518,7 @@ function App() {
       leadSource: leadOverride.leadSource || "Phone Call / Office",
       roofingServiceNeeded: leadOverride.roofingServiceNeeded || "Roof inspection",
       assignedStaffId: ivan.id,
-      leadStatus: "Inspection Requested",
+      leadStatus: "Contacted",
       qualificationStatus: "qualified",
       qualifiedAt: leadOverride.qualifiedAt || now,
       qualifiedBy: leadOverride.qualifiedBy || authUser.key,
@@ -13498,13 +13528,8 @@ function App() {
       relationshipOwnerId: leadOverride.relationshipOwnerId || authUser.key,
       updatedAt: now,
     });
-    const routedLead = addCrmLeadHistory(
-      normalized,
-      "Sent for inspection",
-      `Assigned to Ivan Solano by ${authUser.displayName || authUser.email || "office staff"}.`,
-    );
 
-    const leadResult = await upsertCrmLeadToSupabase(routedLead, authUser);
+    const leadResult = await upsertCrmLeadToSupabase(normalized, authUser);
     if (leadResult?.error) {
       setCrmInspectionSending(false);
       setCrmLeadSyncStatus("local");
@@ -13514,11 +13539,11 @@ function App() {
       return;
     }
 
-    const savedLead = normalizeCrmLead(leadResult?.data || routedLead);
-    const inspectionTask = buildInspectionTask(savedLead);
+    const savedLeadBeforeHandoff = normalizeCrmLead(leadResult?.data || normalized);
+    const inspectionTask = buildInspectionTask(savedLeadBeforeHandoff);
     const { data: task, error: taskError } = await supabase.rpc("create_private_company_task", {
       p_title: inspectionTask.title,
-      p_description: `${inspectionTask.description}\nCRM lead ID: ${savedLead.id}`,
+      p_description: `${inspectionTask.description}\nCRM lead ID: ${savedLeadBeforeHandoff.id}`,
       p_due_date: null,
       p_priority: inspectionTask.priority,
       p_assignee_ids: [ivan.id],
@@ -13531,21 +13556,43 @@ function App() {
       return;
     }
 
+    const routedLead = addCrmLeadHistory(
+      {
+        ...savedLeadBeforeHandoff,
+        leadStatus: "Inspection Requested",
+        acceptedForInspectionAt: savedLeadBeforeHandoff.acceptedForInspectionAt || now,
+        acceptedForInspectionBy: savedLeadBeforeHandoff.acceptedForInspectionBy || authUser.key,
+        updatedAt: now,
+      },
+      "Sent for inspection",
+      `Assigned to Ivan Solano by ${authUser.displayName || authUser.email || "office staff"}.`,
+    );
+    const handoffResult = await upsertCrmLeadToSupabase(routedLead, authUser);
+    const savedLead = normalizeCrmLead(handoffResult?.data || routedLead);
+    if (handoffResult?.error) {
+      setCrmLeadSyncStatus("local");
+      setCrmLeadSyncError(handoffResult.error.message || "Inspection handoff was created, but its CRM milestone could not sync.");
+    }
+
     setCrmLeads((current) => [
       savedLead,
       ...current.filter((lead) => lead.id !== savedLead.id),
     ].sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""))));
-    setCrmLeadSyncStatus("saved");
-    setCrmLeadSyncError("");
+    if (!handoffResult?.error) {
+      setCrmLeadSyncStatus("saved");
+      setCrmLeadSyncError("");
+    }
     setWorkHubInitialTaskId(task.id);
     setWorkHubInitialCreateTask(false);
-    setSessionMessageType("success");
-    setSessionMessage("Inspection request sent to Ivan. He received a task notification and the discussion is ready.");
+    setSessionMessageType(handoffResult?.error ? "error" : "success");
+    setSessionMessage(handoffResult?.error
+      ? "Ivan received the inspection task, but the CRM milestone did not sync. Open the lead and save it again before relying on the KPI."
+      : "Inspection request sent to Ivan. He received a task notification and the discussion is ready.");
 
     if (resetAfter) {
       startNewCrmLeadDraft({
-        leadSource: "Phone Call / Office",
-        roofingServiceNeeded: "Roof inspection",
+        leadSource: leadOverride.leadSource || "Cold Calling",
+        roofingServiceNeeded: leadOverride.leadSource === "Phone Call / Office" ? "Roof inspection" : "",
       });
     } else {
       setCrmLeadDraft(savedLead);
@@ -19454,6 +19501,11 @@ function App() {
                   {CRM_LEAD_SERVICE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               </Field>
+              <Field label="Visit outcome">
+                <select value={crmLeadDraft.visitOutcome} onChange={(e) => updateCrmLeadDraftField("visitOutcome", e.target.value)}>
+                  {CRM_VISIT_OUTCOME_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </Field>
               <Field label="One quick note">
                 <textarea rows="3" value={crmLeadDraft.description} onChange={(e) => updateCrmLeadDraftField("description", e.target.value)} placeholder="What did they need or say?" />
               </Field>
@@ -19464,7 +19516,9 @@ function App() {
               <DetailRow label="Starting status" value="New · Needs qualification" />
             </div>
             <div className="actionRow" style={{ marginTop: 16 }}>
-              <button type="button" className="primaryButton" onClick={saveQuickLeadAndAddNext}>Save &amp; Add Next</button>
+              <button type="button" className="primaryButton" disabled={crmInspectionSending} onClick={saveQuickLeadAndAddNext}>
+                {crmLeadDraft.visitOutcome === "inspection" ? (crmInspectionSending ? "Sending to Ivan…" : "Save & Send to Ivan") : "Save & Add Next"}
+              </button>
               <button
                 type="button"
                 className="secondaryButton"
@@ -20139,22 +20193,37 @@ function App() {
           </Section>
           ) : null}
 
-          <Section title="Chris · Business Development KPI" subtitle="A simple scorecard: keep Ivan supplied with qualified opportunities and protect workflow compliance.">
+          <Section title="Chris · Business Development KPI" subtitle="Weekly field funnel: visit new customers, create qualified roofing opportunities, and keep Ivan supplied with inspections.">
             <div className="summaryGrid">
               <div className="summaryCard">
-                <span>Leads captured this week</span>
-                <strong>{num(chrisKpis.capturedThisWeek, 0)}</strong>
-                <p>New opportunities originated by Chris.</p>
+                <span>Weekly KPI score</span>
+                <strong>{`${num(chrisKpis.weeklyScore, 0)}%`}</strong>
+                <p>Qualified leads 60% · customer visits 20% · inspection handoffs 20%.</p>
               </div>
               <div className="summaryCard">
-                <span>Qualified this week</span>
-                <strong>{num(chrisKpis.qualifiedThisWeek, 0)}</strong>
-                <p>{`${Math.round(chrisKpis.qualificationRate * 100)}% of this week's captured leads.`}</p>
+                <span>Qualified leads · primary KPI</span>
+                <strong>{`${num(chrisKpis.qualifiedThisWeek, 0)} / ${num(chrisKpis.weeklyQualifiedTarget, 6)}`}</strong>
+                <p>{`${String(chrisKpis.qualifiedStatus || "red").toUpperCase()} · legitimate opportunities created from this week's visits.`}</p>
               </div>
               <div className="summaryCard">
-                <span>Inspection-ready this week</span>
-                <strong>{num(chrisKpis.inspectionReadyThisWeek, 0)}</strong>
-                <p>{chrisKpis.capacityCoverage === null ? "Set Ivan's capacity target below." : `${Math.round(chrisKpis.capacityCoverage * 100)}% of Ivan's weekly target.`}</p>
+                <span>New customer visits</span>
+                <strong>{`${num(chrisKpis.customerVisitsThisWeek, 0)} / ${num(chrisKpis.weeklyVisitTarget, 36)}`}</strong>
+                <p>Cold-call customer visits logged this week.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Visit conversion</span>
+                <strong>{`${Math.round(chrisKpis.qualificationRate * 100)}%`}</strong>
+                <p>Qualified leads divided by logged customer visits. Target: 15% or better.</p>
+              </div>
+              <div className="summaryCard">
+                <span>Inspection handoffs</span>
+                <strong>{`${num(chrisKpis.inspectionReadyThisWeek, 0)} / ${num(chrisKpis.weeklyChrisInspectionTarget, 4)}`}</strong>
+                <p>{`${Math.round(chrisKpis.inspectionConversionRate * 100)}% of qualified leads sent into the inspection workflow.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>Ivan's available capacity</span>
+                <strong>{num(Math.max(0, crmWeeklyInspectionTarget - ivanKpis.assignedThisWeek), 0)}</strong>
+                <p>{`${num(ivanKpis.assignedThisWeek, 0)} of ${num(crmWeeklyInspectionTarget, 0)} inspection slots supplied this week.`}</p>
               </div>
               <div className="summaryCard">
                 <span>Stale open leads</span>
@@ -20186,6 +20255,10 @@ function App() {
                 <strong>{money2(chrisEarnedCommission)}</strong>
                 <p>25% of finalized commissionable gross profit on Chris-originated jobs.</p>
               </div>
+            </div>
+            <div className="notice" style={{ marginTop: 16 }}>
+              <strong>Weekly funnel</strong>
+              <p style={{ marginBottom: 0 }}>{`${num(chrisKpis.customerVisitsThisWeek, 0)} customer visits → ${num(chrisKpis.qualifiedThisWeek, 0)} qualified leads → ${num(chrisKpis.inspectionReadyThisWeek, 0)} inspection handoffs. Green begins at 6 qualified leads, yellow at 4, and red below 4.`}</p>
             </div>
             <div className="notice" style={{ marginTop: 16 }}>
               <strong>Commission control</strong>

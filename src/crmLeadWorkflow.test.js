@@ -136,15 +136,56 @@ test("Daniela KPI scores controllable proposal work and excludes paused requests
 test("Chris KPI scorecard measures weekly supply, qualification, capacity, and stale work", () => {
   const now = new Date("2026-09-18T12:00:00Z");
   const leads = [
-    { originatorEmail: "chris@crtroofing.com", createdAt: "2026-09-15T12:00:00Z", qualificationStatus: "qualified", acceptedForInspectionAt: "2026-09-16T12:00:00Z", lastActivityDate: "2026-09-16T12:00:00Z", leadStatus: "Contacted" },
-    { originatorEmail: "chris@crtroofing.com", createdAt: "2026-09-17T12:00:00Z", qualificationStatus: "captured", lastActivityDate: "2026-09-17T12:00:00Z", leadStatus: "New" },
+    { originatorEmail: "chris@crtroofing.com", leadSource: "Cold Calling", createdAt: "2026-09-15T12:00:00Z", qualificationStatus: "qualified", acceptedForInspectionAt: "2026-09-16T12:00:00Z", lastActivityDate: "2026-09-16T12:00:00Z", leadStatus: "Contacted" },
+    { originatorEmail: "chris@crtroofing.com", leadSource: "Cold Calling", createdAt: "2026-09-17T12:00:00Z", qualificationStatus: "captured", lastActivityDate: "2026-09-17T12:00:00Z", leadStatus: "New" },
     { originatorEmail: "chris@crtroofing.com", createdAt: "2026-08-01T12:00:00Z", qualificationStatus: "captured", lastActivityDate: "2026-08-02T12:00:00Z", leadStatus: "Contacted" },
     { originatorEmail: "ivan@crtroofing.com", createdAt: "2026-09-17T12:00:00Z", qualificationStatus: "qualified" },
   ];
   const kpis = calculateLeadKpis(leads, { now, originatorEmail: "chris@crtroofing.com", weeklyInspectionTarget: 4 });
   assert.equal(kpis.capturedThisWeek, 2);
+  assert.equal(kpis.customerVisitsThisWeek, 2);
   assert.equal(kpis.qualifiedThisWeek, 1);
   assert.equal(kpis.inspectionReadyThisWeek, 1);
   assert.equal(kpis.capacityCoverage, 0.25);
   assert.equal(kpis.staleCount, 1);
+});
+
+test("Chris KPI weights the 36 visit, 6 qualified lead, and 4 inspection weekly funnel", () => {
+  const leads = Array.from({ length: 36 }, (_, index) => ({
+    id: `visit-${index + 1}`,
+    originatorEmail: "chris@crtroofing.com",
+    leadSource: "Cold Calling",
+    visitOutcome: index < 4 ? "inspection" : index < 6 ? "qualified" : "no_contact",
+    qualificationStatus: index < 6 ? "qualified" : "captured",
+    acceptedForInspectionAt: index < 4 ? "2026-09-22T12:00:00Z" : "",
+    createdAt: "2026-09-22T10:00:00Z",
+    lastActivityDate: "2026-09-22T12:00:00Z",
+    leadStatus: index < 4 ? "Inspection Requested" : "New",
+  }));
+  const kpis = calculateLeadKpis(leads, {
+    now: new Date("2026-09-23T12:00:00Z"),
+    originatorEmail: "chris@crtroofing.com",
+    weeklyInspectionTarget: 6,
+  });
+
+  assert.equal(kpis.customerVisitsThisWeek, 36);
+  assert.equal(kpis.qualifiedThisWeek, 6);
+  assert.equal(kpis.inspectionReadyThisWeek, 4);
+  assert.equal(kpis.qualificationRate, 1 / 6);
+  assert.equal(kpis.weeklyScore, 100);
+  assert.equal(kpis.qualifiedStatus, "green");
+});
+
+test("Chris field-visit KPI excludes office phone leads", () => {
+  const kpis = calculateLeadKpis([
+    { originatorEmail: "chris@crtroofing.com", leadSource: "Cold Calling", createdAt: "2026-09-22T10:00:00Z" },
+    { originatorEmail: "chris@crtroofing.com", leadSource: "Phone Call / Office", createdAt: "2026-09-22T11:00:00Z", qualificationStatus: "qualified" },
+  ], {
+    now: new Date("2026-09-23T12:00:00Z"),
+    originatorEmail: "chris@crtroofing.com",
+  });
+
+  assert.equal(kpis.capturedThisWeek, 2);
+  assert.equal(kpis.customerVisitsThisWeek, 1);
+  assert.equal(kpis.qualifiedThisWeek, 0);
 });
