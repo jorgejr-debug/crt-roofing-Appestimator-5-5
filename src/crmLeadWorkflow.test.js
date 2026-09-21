@@ -98,6 +98,9 @@ test("Ivan KPI separates supplied capacity from controllable execution and quali
   assert.equal(kpis.contactOnTime, 1);
   assert.equal(kpis.contactEligible, 2);
   assert.equal(kpis.handoffOnTime, 1);
+  assert.equal(kpis.handoffStatus, "green");
+  assert.equal(kpis.submittedAfterInspection, 1);
+  assert.equal(kpis.availableCapacity, 4);
   assert.equal(kpis.acceptedFirstPass, 1);
   assert.equal(kpis.staleCount, 0);
   assert.equal(Number.isFinite(kpis.overallScore), true);

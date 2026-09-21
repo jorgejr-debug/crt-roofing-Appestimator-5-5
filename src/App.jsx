@@ -20117,7 +20117,7 @@ function App() {
           ) : null}
 
           {(isFinanceUser || String(authUser?.email || "").trim().toLowerCase() === "ivan@crtroofing.com") ? (
-          <Section title="Ivan · Estimator / Technician KPI" subtitle="Execution is scored separately from lead supply so Ivan is not penalized when fewer inspections are assigned.">
+          <Section title="Ivan · Estimator / Technician KPI" subtitle="Weekly inspection funnel: respond to assigned customers, complete roof inspections, and submit complete proposal requests to Daniela.">
             <div className="summaryGrid">
               <div className="summaryCard">
                 <span>Overall KPI score</span>
@@ -20125,14 +20125,19 @@ function App() {
                 <p>Weighted only from KPI categories with enough current data.</p>
               </div>
               <div className="summaryCard">
-                <span>Weekly capacity</span>
-                <strong>{num(ivanKpis.weeklyCapacity, 0)}</strong>
-                <p>Management-set inspection slots available this week.</p>
+                <span>On-time proposal handoff · primary KPI</span>
+                <strong>{ivanKpis.handoffRate === null ? "—" : `${Math.round(ivanKpis.handoffRate * 100)}%`}</strong>
+                <p>{`${String(ivanKpis.handoffStatus || "gray").toUpperCase()} · ${ivanKpis.handoffOnTime} of ${ivanKpis.handoffEligible} eligible inspections submitted within 1 business day. Target: 90%.`}</p>
               </div>
               <div className="summaryCard">
-                <span>Lead supply</span>
-                <strong>{num(ivanKpis.assignedThisWeek, 0)}</strong>
+                <span>Assigned inspections</span>
+                <strong>{`${num(ivanKpis.assignedThisWeek, 0)} / ${num(ivanKpis.weeklyCapacity, 0)}`}</strong>
                 <p>{ivanKpis.capacityCoverage === null ? "Set capacity below." : `${Math.round(ivanKpis.capacityCoverage * 100)}% of weekly capacity supplied.`}</p>
+              </div>
+              <div className="summaryCard">
+                <span>Available inspection capacity</span>
+                <strong>{num(ivanKpis.availableCapacity, 0)}</strong>
+                <p>Remaining management-set inspection slots this week.</p>
               </div>
               <div className="summaryCard">
                 <span>Inspections completed</span>
@@ -20142,23 +20147,27 @@ function App() {
               <div className="summaryCard">
                 <span>Customer contact SLA</span>
                 <strong>{ivanKpis.contactSlaRate === null ? "—" : `${Math.round(ivanKpis.contactSlaRate * 100)}%`}</strong>
-                <p>{`${ivanKpis.contactOnTime} of ${ivanKpis.contactEligible} eligible requests contacted within 2 business hours.`}</p>
+                <p>{`${ivanKpis.contactOnTime} of ${ivanKpis.contactEligible} eligible requests contacted within 2 business hours. Target: 90%.`}</p>
               </div>
               <div className="summaryCard">
-                <span>Proposal handoff SLA</span>
-                <strong>{ivanKpis.handoffRate === null ? "—" : `${Math.round(ivanKpis.handoffRate * 100)}%`}</strong>
-                <p>{`${ivanKpis.handoffOnTime} of ${ivanKpis.handoffEligible} completed inspections submitted within 1 business day.`}</p>
+                <span>Proposal requests submitted</span>
+                <strong>{num(ivanKpis.submittedAfterInspection, 0)}</strong>
+                <p>Completed inspections connected to a submitted proposal request this week.</p>
               </div>
               <div className="summaryCard">
                 <span>First-pass completeness</span>
                 <strong>{ivanKpis.firstPassRate === null ? "—" : `${Math.round(ivanKpis.firstPassRate * 100)}%`}</strong>
-                <p>{`${ivanKpis.acceptedFirstPass} of ${ivanKpis.firstPassEligible} reviewed requests were not returned for missing information.`}</p>
+                <p>{`${ivanKpis.acceptedFirstPass} of ${ivanKpis.firstPassEligible} reviewed requests were not returned for missing information. Target: 90%.`}</p>
               </div>
               <div className="summaryCard">
                 <span>Stale inspection work</span>
                 <strong>{num(ivanKpis.staleCount, 0)}</strong>
                 <p>Inspection-stage leads without an update for more than 2 business days.</p>
               </div>
+            </div>
+            <div className="notice" style={{ marginTop: 16 }}>
+              <strong>Weekly inspection funnel</strong>
+              <p style={{ marginBottom: 0 }}>{`${num(ivanKpis.assignedThisWeek, 0)} assigned inspections → ${num(ivanKpis.completedThisWeek, 0)} completed inspections → ${num(ivanKpis.submittedAfterInspection, 0)} proposal requests submitted. Lead supply is displayed as capacity context and does not penalize Ivan.`}</p>
             </div>
             {isFinanceUser ? (
               <div className="formGrid" style={{ marginTop: 16 }}>
@@ -20188,7 +20197,7 @@ function App() {
             )}
             <div className="notice" style={{ marginTop: 16 }}>
               <strong>Scoring weights</strong>
-              <p style={{ marginBottom: 0 }}>Inspection execution 35% · customer contact 15% · proposal handoff 25% · first-pass completeness 20% · open-work hygiene 5%. Categories without enough data are excluded rather than counted against Ivan.</p>
+              <p style={{ marginBottom: 0 }}>On-time proposal handoff 40% · inspection execution 25% · first-pass completeness 20% · customer contact 10% · open-work hygiene 5%. Categories without enough data are excluded rather than counted against Ivan.</p>
             </div>
           </Section>
           ) : null}

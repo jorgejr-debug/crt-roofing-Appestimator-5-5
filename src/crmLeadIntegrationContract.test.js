@@ -37,11 +37,14 @@ test("Chris KPI is driven by explicit attribution and inspection capacity", () =
 test("Ivan KPI separates capacity supply from controllable execution and proposal quality", () => {
   assert.match(app, /Ivan · Estimator \/ Technician KPI/);
   assert.match(app, /Overall KPI score/);
-  assert.match(app, /Lead supply/);
+  assert.match(app, /On-time proposal handoff · primary KPI/);
+  assert.match(app, /Assigned inspections/);
+  assert.match(app, /Available inspection capacity/);
+  assert.match(app, /Weekly inspection funnel/);
   assert.match(app, /Customer contact SLA/);
-  assert.match(app, /Proposal handoff SLA/);
+  assert.match(app, /Proposal requests submitted/);
   assert.match(app, /First-pass completeness/);
-  assert.match(app, /Inspection execution 35%/);
+  assert.match(app, /On-time proposal handoff 40%/);
   assert.match(app, /fetchCrmProposalRequestsFromSupabase/);
 });
 

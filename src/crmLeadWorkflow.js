@@ -250,6 +250,14 @@ export function calculateIvanKpis(leads = [], proposalRequests = [], options = {
     return request && businessMinutesBetween(entry.completedAt, request.submitted_at) <= 9 * 60;
   });
   const handoffRate = handoffEligible.length ? handoffOnTime.length / handoffEligible.length : null;
+  const submittedAfterInspection = completedThisWeek.filter((entry) => requestForLead(entry.lead));
+  const handoffStatus = handoffRate === null
+    ? "gray"
+    : handoffRate >= 0.9
+      ? "green"
+      : handoffRate >= 0.75
+        ? "yellow"
+        : "red";
 
   const ivanRequestsThisWeek = submittedRequests.filter((request) => {
     if (!isThisWeek(request.submitted_at)) return false;
@@ -270,9 +278,9 @@ export function calculateIvanKpis(leads = [], proposalRequests = [], options = {
   const hygieneRate = activeInspectionLeads.length ? Math.max(0, 1 - staleLeads.length / activeInspectionLeads.length) : null;
 
   const scoreParts = [
-    [executionRate, 35],
-    [contactSlaRate, 15],
-    [handoffRate, 25],
+    [handoffRate, 40],
+    [executionRate, 25],
+    [contactSlaRate, 10],
     [firstPassRate, 20],
     [hygieneRate, 5],
   ].filter(([rate]) => rate !== null);
@@ -284,6 +292,7 @@ export function calculateIvanKpis(leads = [], proposalRequests = [], options = {
   return {
     weeklyCapacity,
     assignedThisWeek: assignmentsThisWeek.length,
+    availableCapacity: Math.max(0, weeklyCapacity - assignmentsThisWeek.length),
     capacityCoverage,
     completedThisWeek: completedThisWeek.length,
     executionRate,
@@ -293,6 +302,8 @@ export function calculateIvanKpis(leads = [], proposalRequests = [], options = {
     handoffEligible: handoffEligible.length,
     handoffOnTime: handoffOnTime.length,
     handoffRate,
+    handoffStatus,
+    submittedAfterInspection: submittedAfterInspection.length,
     proposalRequestsThisWeek: ivanRequestsThisWeek.length,
     firstPassEligible: firstPassEligible.length,
     acceptedFirstPass: acceptedFirstPass.length,
