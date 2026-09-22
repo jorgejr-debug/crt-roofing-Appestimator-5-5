@@ -101,7 +101,12 @@ Deno.serve(async (request) => {
   const actorName = actorResult.data?.full_name || actorResult.data?.email || "A CRT Roofing team member";
   const safeAppUrl = escapeHtml(appUrl);
   const isComment = notification.notification_type === "comment";
-  const subject = isComment ? `New comment on task: ${task.title}` : `New task: ${task.title}`;
+  const isInspectionAssignment = !isComment && /^Inspection Request:/i.test(String(task.title || ""));
+  const subject = isComment
+    ? `New comment on task: ${task.title}`
+    : isInspectionAssignment
+      ? "New roof inspection assigned"
+      : `New task: ${task.title}`;
   const html = isComment ? `
     <div style="font-family:Arial,sans-serif;color:#102536;line-height:1.5;max-width:640px;margin:auto">
       <h1 style="font-size:24px">New task discussion comment</h1>
@@ -111,6 +116,13 @@ Deno.serve(async (request) => {
         <p style="margin:0;white-space:pre-wrap">${escapeHtml(commentResult.data?.body || "A new comment was added.")}</p>
       </div>
       <p style="margin-top:22px"><a href="${safeAppUrl}" style="display:inline-block;background:#087ec4;color:white;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:bold">Open Task Discussion</a></p>
+    </div>` : isInspectionAssignment ? `
+    <div style="font-family:Arial,sans-serif;color:#102536;line-height:1.5;max-width:640px;margin:auto">
+      <h1 style="font-size:24px">New roof inspection request</h1>
+      <p>Hi ${escapeHtml(recipientName)},</p>
+      <p>A new customer inspection has been assigned to you in the CRT Roofing app.</p>
+      <p>Open the secure task to review the customer, property, work order, and inspection details.</p>
+      <p style="margin-top:22px"><a href="${safeAppUrl}" style="display:inline-block;background:#087ec4;color:white;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:bold">Open Inspection Task</a></p>
     </div>` : `
     <div style="font-family:Arial,sans-serif;color:#102536;line-height:1.5;max-width:640px;margin:auto">
       <h1 style="font-size:24px">You have a new CRT Roofing task</h1>

@@ -13707,7 +13707,7 @@ function App() {
     setSessionMessageType(handoffResult?.error ? "error" : "success");
     setSessionMessage(handoffResult?.error
       ? "Ivan received the inspection task, but the CRM milestone did not sync. Open the lead and save it again before relying on the KPI."
-      : "Inspection request sent to Ivan. He received a task notification and the discussion is ready.");
+      : "Inspection request sent to Ivan. His task and email notification were queued, and the discussion is ready.");
 
     if (resetAfter) {
       startNewCrmLeadDraft({
