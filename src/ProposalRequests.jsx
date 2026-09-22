@@ -19,6 +19,8 @@ import {
 } from "./proposalRequestAttachments.js";
 import "./ProposalRequests.css";
 
+const DRAFT_PROPOSAL_FILE_ACCEPT = ".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 const textFields = [
   ["Customer / Job Information", [
     ["customer_name", "Customer name", true], ["property_name", "Property / job name", true], ["service_address", "Property service address", true],
@@ -86,6 +88,9 @@ const blankDraft = (userId = "") => ({
 });
 
 const labelize = (value) => String(value || "").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+const requestStatusLabel = (request) => request?.draft_handoff_status === "awaiting_review"
+  ? (request.intake_mode === "draft_proposal" ? "Draft Proposal Review" : "Inspection Handoff Review")
+  : labelize(request?.status);
 const money = (value) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(value || 0));
 const dateTime = (value) => value ? new Date(value).toLocaleString() : "—";
 const submittedValue = (value) => {
@@ -102,6 +107,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
   const [audit, setAudit] = useState([]);
   const [attachments, setAttachments] = useState([]);
   const [pendingAttachments, setPendingAttachments] = useState([]);
+  const [pendingDraftProposalFiles, setPendingDraftProposalFiles] = useState([]);
   const [draft, setDraft] = useState(() => blankDraft(authUser?.key));
   const [selectedId, setSelectedId] = useState("");
   const [view, setView] = useState(initialView);
@@ -180,7 +186,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
     finally { setBusy(false); }
   };
 
-  const uploadFilesToRequest = async (requestId, files) => {
+  const uploadFilesToRequest = async (requestId, files, categoryOverride = "") => {
     const uploaded = [];
     const failed = [];
     for (const [index, file] of files.entries()) {
@@ -194,7 +200,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
         if (upload.error) throw upload.error;
         const registration = await supabase.rpc("register_proposal_request_attachment", {
           p_request_id: requestId,
-          p_category: proposalRequestAttachmentCategory(file),
+          p_category: categoryOverride || proposalRequestAttachmentCategory(file),
           p_file_name: file.name,
           p_storage_path: path,
           p_content_type: file.type,
@@ -297,35 +303,35 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
       property_name: String(draft.property_name || draft.customer_name || "").trim(),
       salesperson_notes: [
         String(draft.salesperson_notes || "").trim(),
-        "Created from Ivan's Quick Inspection Handoff. Complete the full Proposal Request before formal submission.",
+        pendingDraftProposalFiles.length
+          ? "Ivan supplied a field-drafted proposal for Daniela to review, correct, and complete."
+          : "Created from Ivan's Quick Inspection Handoff. Complete the full Proposal Request before formal submission.",
       ].filter(Boolean).join("\n\n"),
     };
     const saved = await saveDraft(quickPayload);
     if (!saved?.id) return;
-    const taskDescription = [
-      `Draft Proposal Request PR-${saved.request_number || saved.id}`,
-      `Customer / job: ${quickPayload.customer_name}`,
-      `Address: ${quickPayload.service_address}`,
-      `Work type: ${quickPayload.work_type || "Not entered"}`,
-      `Measurements: ${quickPayload.measurements}`,
-      `Scope observed: ${quickPayload.scope_of_work}`,
-      quickPayload.roof_measurement_notes ? `Measurement notes: ${quickPayload.roof_measurement_notes}` : "",
-      quickPayload.special_conditions ? `Risks / special conditions: ${quickPayload.special_conditions}` : "",
-      "Early field handoff only. The Proposal Request remains Draft and its estimating SLA has not started.",
-    ].filter(Boolean).join("\n");
-    const notification = await supabase.rpc("create_private_company_task", {
-      p_title: `Inspection Handoff: ${quickPayload.customer_name}`,
-      p_description: taskDescription,
-      p_due_date: null,
-      p_priority: quickPayload.priority === "rush" ? "high" : quickPayload.priority,
-      p_assignee_ids: [danielaProfile.id],
-    });
-    if (notification.error) {
-      setError(`The draft was saved, but Daniela's task notification could not be created: ${notification.error.message}`);
+    const draftUpload = pendingDraftProposalFiles.length
+      ? await uploadFilesToRequest(saved.id, pendingDraftProposalFiles, "customer_document")
+      : { uploaded: [], failed: [] };
+    setPendingDraftProposalFiles(draftUpload.failed.map((item) => item.file));
+    if (draftUpload.failed.length) {
+      setError(`The handoff was saved, but the draft proposal was not sent because ${draftUpload.failed.map((item) => `${item.file.name}: ${item.error}`).join("; ")}`);
       return;
     }
-    setMessage("Quick inspection handoff sent to Daniela. It remains a Draft until the full Proposal Request is completed and submitted.");
+    const notification = await supabase.rpc("submit_draft_proposal_handoff", {
+      p_request_id: saved.id,
+      p_has_draft_proposal: draftUpload.uploaded.length > 0,
+    });
+    if (notification.error) {
+      setError(`The draft was saved, but the handoff was not sent to Daniela: ${notification.error.message}`);
+      return;
+    }
+    setPendingDraftProposalFiles([]);
+    setMessage(draftUpload.uploaded.length
+      ? "Draft proposal sent to Daniela for review. The estimating SLA starts only after Daniela accepts it."
+      : "Quick inspection handoff sent to Daniela. The estimating SLA starts only after Daniela accepts it.");
     setView("queue");
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
   };
 
   const openRequest = (request) => {
@@ -334,11 +340,12 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
     setManagementDraft({ estimatorId: request.assigned_estimator_id || "", priority: request.priority || "normal", targetAt: request.target_completion_at ? String(request.target_completion_at).slice(0, 16) : "" });
     setView("detail"); setError(""); setMessage("");
   };
-  const newRequest = () => { setSelectedId(""); setDraft(blankDraft(authUser.key)); setPendingAttachments([]); setSubmissionNotice({ tone: "", text: "" }); setView("form"); };
+  const newRequest = () => { setSelectedId(""); setDraft(blankDraft(authUser.key)); setPendingAttachments([]); setPendingDraftProposalFiles([]); setSubmissionNotice({ tone: "", text: "" }); setView("form"); };
   const newQuickHandoff = () => {
     setSelectedId("");
     setDraft({ ...blankDraft(authUser.key), assigned_estimator_id: danielaProfile?.id || "" });
     setPendingAttachments([]);
+    setPendingDraftProposalFiles([]);
     setView("quick");
     setError("");
     setMessage("");
@@ -377,7 +384,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
       && (!search || [request.customer_name, request.property_name, request.service_address].join(" ").toLowerCase().includes(search));
   }).sort((a, b) => {
     if (filters.sort === "priority") return ({ rush: 0, high: 1, normal: 2 }[a.priority] ?? 3) - ({ rush: 0, high: 1, normal: 2 }[b.priority] ?? 3);
-    if (filters.sort === "submitted") return new Date(b.submitted_at || b.created_at) - new Date(a.submitted_at || a.created_at);
+    if (filters.sort === "submitted") return new Date(b.submitted_at || b.draft_handoff_submitted_at || b.created_at) - new Date(a.submitted_at || a.draft_handoff_submitted_at || a.created_at);
     return new Date(a.target_completion_at || "9999-12-31") - new Date(b.target_completion_at || "9999-12-31");
   }), [filters, requests]);
 
@@ -386,6 +393,15 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
     if (invalid.length) setError(invalid.join(" "));
     const valid = files.filter((file) => !validateProposalRequestAttachment(file));
     setPendingAttachments((current) => [...current, ...valid.filter((file) => !current.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified))]);
+  };
+
+  const addPendingDraftProposalFiles = (files) => {
+    const supported = files.filter((file) => /\.(pdf|doc|docx)$/i.test(String(file.name || "")));
+    if (supported.length !== files.length) setError("Draft proposals must be PDF or Word documents (.pdf, .doc, or .docx).");
+    const invalid = supported.map(validateProposalRequestAttachment).filter(Boolean);
+    if (invalid.length) setError(invalid.join(" "));
+    const valid = supported.filter((file) => !validateProposalRequestAttachment(file));
+    setPendingDraftProposalFiles((current) => [...current, ...valid.filter((file) => !current.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified))]);
   };
 
   const uploadAttachments = async (files) => {
@@ -500,9 +516,9 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
         <select value={filters.sort} onChange={(e) => setFilters((f) => ({ ...f, sort: e.target.value }))}><option value="due">Sort: due date</option><option value="priority">Sort: priority</option><option value="submitted">Sort: submitted</option></select>
       </div>
       <div className="proposalQueue">{queue.map((request) => { const sla = getSlaDisplay(request); return <button type="button" key={request.id} className={`proposalQueueCard ${sla.tone}`} onClick={() => openRequest(request)}>
-        <span className={`proposalStatus ${request.status}`}>{labelize(request.status)}</span><span className={`proposalPriority ${request.priority}`}>{request.priority}</span>
+        <span className={`proposalStatus ${request.draft_handoff_status === "awaiting_review" ? "handoff_review" : request.status}`}>{requestStatusLabel(request)}</span><span className={`proposalPriority ${request.priority}`}>{request.priority}</span>
         <strong>PR-{request.request_number} · {request.property_name || "Untitled job"}</strong><p>{request.customer_name} · {request.service_address}</p>
-        <small>Sales: {profiles.find((p) => p.id === request.salesperson_id)?.full_name || "Unassigned"} · Submitted: {dateTime(request.submitted_at)} · <b>{sla.label}</b></small>
+        <small>Sales: {profiles.find((p) => p.id === request.salesperson_id)?.full_name || "Unassigned"} · Submitted: {dateTime(request.submitted_at || request.draft_handoff_submitted_at)} · <b>{request.draft_handoff_status === "awaiting_review" ? "SLA not started" : sla.label}</b></small>
       </button>; })}{!queue.length ? <p className="emptyState">No Proposal Requests match this view.</p> : null}</div>
     </> : null}
 
@@ -510,11 +526,15 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
       <section className="panel">
         <p className="eyebrow">Ivan's Mobile Field Shortcut</p>
         <h3>Quick Inspection Handoff</h3>
-        <p>Capture the essential field facts while they are fresh. Use your phone's microphone to dictate longer notes. Daniela receives an early heads-up, but her estimating SLA does not begin until you complete and submit the full Proposal Request.</p>
+        <p>Capture the essential field facts while they are fresh. You may attach your own draft proposal for Daniela to review and finish. Daniela receives the handoff immediately, but her estimating SLA begins only after she accepts it.</p>
         <div className="proposalFieldGrid">
           <label className="proposalWide"><span>Source CRM lead</span><select value={draft.source_lead_id || draft.existing_lead_job_id || ""} onChange={(event) => applyCrmLead(event.target.value)}><option value="">No linked lead — manual handoff</option>{crmLeads.filter((lead) => !["Lost", "Not Qualified"].includes(lead.status)).map((lead) => <option key={lead.id} value={lead.id}>{lead.contact_name || lead.company_name || lead.property_address || "Untitled lead"}</option>)}</select></label>
           <label><span>Customer / job name *</span><input autoFocus value={draft.customer_name || ""} onChange={(event) => setDraft((current) => ({ ...current, customer_name: event.target.value, property_name: current.property_name || event.target.value }))} /></label>
           <label><span>Service address *</span><input value={draft.service_address || ""} onChange={(event) => setDraft((current) => ({ ...current, service_address: event.target.value }))} /></label>
+          <label><span>Contact first name</span><input value={draft.project_contact_first_name || ""} onChange={(event) => setDraft((current) => ({ ...current, project_contact_first_name: event.target.value }))} /></label>
+          <label><span>Contact last name</span><input value={draft.project_contact_last_name || ""} onChange={(event) => setDraft((current) => ({ ...current, project_contact_last_name: event.target.value }))} /></label>
+          <label><span>Contact phone</span><input type="tel" value={draft.project_contact_phone || ""} onChange={(event) => setDraft((current) => ({ ...current, project_contact_phone: event.target.value }))} /></label>
+          <label><span>Contact email</span><input type="email" value={draft.project_contact_email || ""} onChange={(event) => setDraft((current) => ({ ...current, project_contact_email: event.target.value }))} /></label>
           <label><span>Work type</span><input value={draft.work_type || ""} onChange={(event) => setDraft((current) => ({ ...current, work_type: event.target.value }))} placeholder="Repair, TPO, SPF, tile, coating…" /></label>
           <label><span>Measurements / squares *</span><input value={draft.measurements || ""} onChange={(event) => setDraft((current) => ({ ...current, measurements: event.target.value }))} placeholder="Example: 24 SQ plus 180 LF parapet" /></label>
           <label className="proposalWide"><span>Main scope observed *</span><textarea rows="4" value={draft.scope_of_work || ""} onChange={(event) => setDraft((current) => ({ ...current, scope_of_work: event.target.value }))} placeholder="Dictate what you saw, what the customer needs, and the recommended system or repair." /></label>
@@ -524,6 +544,13 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
           <label><span>Customer deadline</span><input type="date" value={draft.customer_deadline || ""} onChange={(event) => setDraft((current) => ({ ...current, customer_deadline: event.target.value }))} /></label>
           <label><span>Priority</span><select value={draft.priority} onChange={(event) => setDraft((current) => ({ ...current, priority: event.target.value }))}>{PROPOSAL_REQUEST_PRIORITIES.map((value) => <option key={value}>{value}</option>)}</select></label>
         </div>
+      </section>
+      <section className="panel proposalDraftUpload">
+        <p className="eyebrow">Optional Fast Track</p>
+        <h3>Upload Ivan's Draft Proposal</h3>
+        <p>Attach the proposal you already drafted. Daniela will review it, correct or complete it, and create the controlled final version. PDF and Word files are accepted.</p>
+        <FileDropZone accept={DRAFT_PROPOSAL_FILE_ACCEPT} label={pendingDraftProposalFiles.length ? "Add Another Draft Proposal" : "Choose Draft Proposal PDF or Word File"} help="PDF, DOC, or DOCX — up to 25 MB each." onFiles={addPendingDraftProposalFiles} disabled={busy} />
+        {pendingDraftProposalFiles.length ? <div className="proposalPendingFiles"><strong>Draft proposal ready to send:</strong>{pendingDraftProposalFiles.map((file, index) => <div key={`${file.name}-${file.size}-${file.lastModified}`}><span>{file.name}</span><button type="button" className="secondaryButton" onClick={() => setPendingDraftProposalFiles((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></div>)}</div> : <p className="emptyState">No draft proposal attached. You can still send the inspection handoff with field notes and photos.</p>}
       </section>
       <section className="panel proposalIntakeAttachments">
         <h3>Roof photos &amp; field files</h3>
@@ -560,9 +587,9 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
     </form> : null}
 
     {view === "detail" && selected ? <div className="proposalDetail">
-      <section className="panel proposalDetailHeader"><div><p className="eyebrow">PR-{selected.request_number}</p><h3>{selected.property_name}</h3><p>{selected.customer_name} · {selected.service_address}</p></div><div><span className={`proposalStatus ${selected.status}`}>{labelize(selected.status)}</span><p>{getSlaDisplay(selected).label}</p>{selected.status === "draft" && selected.salesperson_id === authUser.key ? <button type="button" className="primaryButton" onClick={() => setView("form")}>Complete Full Request</button> : null}</div></section>
+      <section className="panel proposalDetailHeader"><div><p className="eyebrow">PR-{selected.request_number}</p><h3>{selected.property_name}</h3><p>{selected.customer_name} · {selected.service_address}</p></div><div><span className={`proposalStatus ${selected.draft_handoff_status === "awaiting_review" ? "handoff_review" : selected.status}`}>{requestStatusLabel(selected)}</span><p>{selected.draft_handoff_status === "awaiting_review" ? "Awaiting Daniela's review — SLA not started" : getSlaDisplay(selected).label}</p>{["draft","missing_information"].includes(selected.status) && selected.salesperson_id === authUser.key ? <button type="button" className="primaryButton" onClick={() => setView("form")}>Complete Full Request</button> : null}</div></section>
       {selected.missing_information_notes ? <section className="panel proposalMissing"><h3>Missing information requested</h3><p>{selected.missing_information_notes}</p><button type="button" className="primaryButton" onClick={() => setView("form")}>Update request</button></section> : null}
-      <section className="panel"><h3>Timing & responsibility</h3><div className="proposalFacts"><span>Submitted <b>{dateTime(selected.submitted_at)}</b></span><span>Target <b>{dateTime(selected.target_completion_at)}</b></span><span>Priority <b>{labelize(selected.priority)}</b></span><span>Estimator <b>{profiles.find((p) => p.id === selected.assigned_estimator_id)?.full_name || "Daniela"}</b></span></div></section>
+      <section className="panel"><h3>Timing & responsibility</h3><div className="proposalFacts"><span>Submitted <b>{dateTime(selected.submitted_at || selected.draft_handoff_submitted_at)}</b></span><span>Target <b>{selected.draft_handoff_status === "awaiting_review" ? "Starts when Daniela accepts" : dateTime(selected.target_completion_at)}</b></span><span>Priority <b>{labelize(selected.priority)}</b></span><span>Estimator <b>{profiles.find((p) => p.id === selected.assigned_estimator_id)?.full_name || "Daniela"}</b></span></div></section>
       <section className="panel proposalSubmittedDetails"><div className="sectionHead"><div><h3>Submitted Request Details</h3><p>The complete information submitted by the salesperson for Daniela's review.</p></div>{isEstimator ? <div className="proposalRequestActions"><button type="button" className="secondaryButton" disabled={Boolean(exportBusy)} onClick={exportPdf}>Download Proposal Info PDF</button><button type="button" className="primaryButton" disabled={Boolean(exportBusy)} onClick={() => void exportZip()}>{exportBusy === "zip" ? "Preparing ZIP..." : "Download Complete ZIP"}</button></div> : null}</div>
         <details open><summary>Request setup</summary><div className="proposalReadOnlyGrid">
           <div><span>Lead originated by</span><strong>{selected.lead_originator_name || selected.lead_originator_email || "Not linked to a CRM lead"}</strong></div>
@@ -582,7 +609,9 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
         {isManager ? <><label><span>Assigned estimator</span><select value={managementDraft.estimatorId} onChange={(e) => setManagementDraft((d) => ({ ...d, estimatorId: e.target.value }))}><option value="">Keep current</option>{profiles.filter((p) => String(p.role).toLowerCase() === "estimator" || String(p.email).toLowerCase() === "daniela@crtroofing.com").map((p) => <option key={p.id} value={p.id}>{p.full_name || p.email}</option>)}</select></label><label><span>Priority</span><select value={managementDraft.priority} onChange={(e) => setManagementDraft((d) => ({ ...d, priority: e.target.value }))}>{PROPOSAL_REQUEST_PRIORITIES.map((value) => <option key={value}>{value}</option>)}</select></label></> : null}
         <button type="button" className="secondaryButton" onClick={() => run(() => supabase.rpc("manage_proposal_request", { p_request_id: selected.id, p_estimator_id: isManager ? managementDraft.estimatorId || null : null, p_priority: isManager ? managementDraft.priority : null, p_target_at: managementDraft.targetAt || null }), "Queue assignment and ETA updated.")}>Save queue settings</button>
       </div></section> : null}
-      {isEstimator && ["submitted","under_review"].includes(selected.status) ? <section className="panel"><h3>Estimator review</h3><div className="proposalRequestActions"><button type="button" className="primaryButton" disabled={busy} onClick={() => run(() => supabase.rpc("review_proposal_request", { p_request_id: selected.id, p_action: "accept", p_missing_notes: "", p_target_at: selected.target_completion_at }), "Accepted into the estimating queue.")}>Accept into queue</button><input value={missingNotes} onChange={(e) => setMissingNotes(e.target.value)} placeholder="Describe exactly what is missing" /><button type="button" className="secondaryButton" disabled={busy || !missingNotes.trim()} onClick={() => run(() => supabase.rpc("review_proposal_request", { p_request_id: selected.id, p_action: "missing_information", p_missing_notes: missingNotes, p_target_at: null }), "Returned to salesperson; SLA paused.")}>Request information</button></div></section> : null}
+      {isEstimator && selected.draft_handoff_status !== "accepted" && ["submitted","under_review"].includes(selected.status) ? <section className="panel"><h3>Estimator review</h3><div className="proposalRequestActions"><button type="button" className="primaryButton" disabled={busy} onClick={() => run(() => supabase.rpc("review_proposal_request", { p_request_id: selected.id, p_action: "accept", p_missing_notes: "", p_target_at: selected.target_completion_at }), "Accepted into the estimating queue.")}>Accept into queue</button><input value={missingNotes} onChange={(e) => setMissingNotes(e.target.value)} placeholder="Describe exactly what is missing" /><button type="button" className="secondaryButton" disabled={busy || !missingNotes.trim()} onClick={() => run(() => supabase.rpc("review_proposal_request", { p_request_id: selected.id, p_action: "missing_information", p_missing_notes: missingNotes, p_target_at: null }), "Returned to salesperson; SLA paused.")}>Request information</button></div></section> : null}
+      {isEstimator && selected.draft_handoff_status === "awaiting_review" ? <section className="panel proposalDraftReview"><p className="eyebrow">Pre-Queue Review</p><h3>{selected.intake_mode === "draft_proposal" ? "Review Ivan's Draft Proposal" : "Review Inspection Handoff"}</h3><p>Accept only when the uploaded draft, field notes, and supporting files give you enough information to begin. Acceptance starts the estimating SLA. Otherwise, describe exactly what Ivan still needs to provide.</p><div className="proposalRequestActions"><button type="button" className="primaryButton" disabled={busy} onClick={() => run(() => supabase.rpc("review_draft_proposal_handoff", { p_request_id: selected.id, p_action: "accept", p_missing_notes: "", p_target_at: managementDraft.targetAt || null }), "Handoff accepted. The estimating SLA has started.")}>Accept &amp; Start Estimating</button><input value={missingNotes} onChange={(e) => setMissingNotes(e.target.value)} placeholder="What information is still missing?" /><button type="button" className="secondaryButton" disabled={busy || !missingNotes.trim()} onClick={() => run(() => supabase.rpc("review_draft_proposal_handoff", { p_request_id: selected.id, p_action: "missing_information", p_missing_notes: missingNotes, p_target_at: null }), "Returned to Ivan for missing information; SLA has not started.")}>Request Information</button></div></section> : null}
+      {isEstimator && selected.draft_handoff_status === "accepted" && selected.status === "under_review" ? <section className="panel"><h3>Accepted Draft Handoff</h3><p>Estimating is underway. If a material gap is discovered, return it to Ivan with a specific request and pause the SLA.</p><div className="proposalRequestActions"><input value={missingNotes} onChange={(e) => setMissingNotes(e.target.value)} placeholder="Describe the newly discovered missing information" /><button type="button" className="secondaryButton" disabled={busy || !missingNotes.trim()} onClick={() => run(() => supabase.rpc("review_proposal_request", { p_request_id: selected.id, p_action: "missing_information", p_missing_notes: missingNotes, p_target_at: null }), "Returned to Ivan; SLA paused.")}>Return for Information</button></div></section> : null}
       {isManager && selected.priority === "rush" && selected.rush_approval_status === "pending" ? <section className="panel"><h3>Rush approval</h3><div className="proposalRequestActions"><button className="primaryButton" onClick={() => run(() => supabase.rpc("approve_rush_proposal_request", { p_request_id: selected.id, p_approved: true, p_notes: "" }), "Rush approved.")}>Approve Rush</button><button className="secondaryButton" onClick={() => run(() => supabase.rpc("approve_rush_proposal_request", { p_request_id: selected.id, p_approved: false, p_notes: "" }), "Rush rejected; priority set to High.")}>Reject Rush</button></div></section> : null}
       <section className="panel proposalIntakeAttachments"><h3>Documentation / attachments</h3><FileDropZone accept={PROPOSAL_REQUEST_FILE_ACCEPT} label="Add Photos & Files" help="Drop or paste multiple photos and documents here." onFiles={uploadAttachments} disabled={busy} /> <small>{selectedAttachments.length} file(s) attached</small>{uploadProgress ? <p className="proposalUploadProgress" role="status">{uploadProgress}</p> : null}{selectedAttachments.length ? <div className="proposalDocumentLinks">{selectedAttachments.map((item) => <button type="button" className="secondaryButton" key={item.id} onClick={() => void openDocument(item.storage_path)}>Open {item.file_name}</button>)}</div> : <p className="emptyState">No supporting files were attached.</p>}</section>
       {isEstimator ? <section className="panel"><h3>Proposal documents</h3><p>Prepare the proposal in Microsoft Word. Upload the working Word file as the editable source, then upload the finalized PDF for Sales Review. The app tracks the workflow and documents; it does not build the proposal.</p><label className="proposalWide"><span>Proposal sections / alternates (one per line)</span><textarea rows="5" value={sectionDraft} onChange={(e) => setSectionDraft(e.target.value)} /></label><div className="proposalFieldGrid proposalDocumentInputs"><label><span>Working Word proposal (.docx) *</span><input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(e) => setWordFile(e.target.files?.[0] || null)} /></label><label><span>Final customer PDF (required for Sales Review)</span><input type="file" accept=".pdf,application/pdf" onChange={(e) => setFinalPdfFile(e.target.files?.[0] || null)} /></label></div><div className="proposalRequestActions"><button className="secondaryButton" disabled={busy || !wordFile} onClick={() => void saveExternalVersion(false)}>Save Word version</button><button className="primaryButton" disabled={busy || !wordFile || !finalPdfFile} onClick={() => void saveExternalVersion(true)}>Finalize PDF for Sales Review</button></div></section> : null}
