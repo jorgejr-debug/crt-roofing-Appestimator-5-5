@@ -524,6 +524,8 @@ const CRM_FOLLOWUP_STATUS_OPTIONS = ["Open", "Scheduled", "Waiting on customer",
 const CRM_FOLLOWUP_TYPE_OPTIONS = ["Call", "Text", "Email", "Site visit", "Office review", "Estimate follow-up", "Other"];
 const CRM_TIMELINE_TYPE_OPTIONS = ["Lead", "Call", "Visit", "Estimate", "Follow-up", "Note", "File", "Job", "Customer update"];
 const CRM_FILE_CATEGORY_OPTIONS = ["Estimate", "Photos", "Contract", "Invoice", "Permit", "Warranty", "Other"];
+const CRM_LEAD_WORK_ORDER_BUCKET = "crm-lead-files";
+const CRM_LEAD_WORK_ORDER_MAX_BYTES = 25 * 1024 * 1024;
 
 const ACTIVE_JOBS_KEY = (userKey) => `crt_roofing_active_jobs_v1:${userKey}`;
 
@@ -3906,6 +3908,39 @@ async function fetchCrmLeadsFromSupabase() {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
   const { data, error } = await supabase.from("crm_leads").select("*").order("updated_at", { ascending: false });
   return { data: Array.isArray(data) ? data.map(mapCrmLeadRow) : [], error };
+}
+
+async function fetchCrmLeadDocumentsFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const { data, error } = await supabase.from("crm_lead_documents").select("*").order("created_at", { ascending: false });
+  return { data: Array.isArray(data) ? data : [], error };
+}
+
+async function uploadCrmLeadWorkOrder(leadId, file) {
+  if (!leadId || !file) return { data: null, error: new Error("Choose a PDF work order to upload.") };
+  if (!/\.pdf$/i.test(String(file.name || "")) || String(file.type || "application/pdf") !== "application/pdf") {
+    return { data: null, error: new Error("Work orders must be PDF files.") };
+  }
+  if (Number(file.size || 0) > CRM_LEAD_WORK_ORDER_MAX_BYTES) {
+    return { data: null, error: new Error(`${file.name || "The work order"} is larger than 25 MB.`) };
+  }
+  const safeName = String(file.name || "work-order.pdf").replace(/[^a-z0-9._-]/gi, "_");
+  const storagePath = `${leadId}/${crypto.randomUUID()}-${safeName}`;
+  const upload = await supabase.storage.from(CRM_LEAD_WORK_ORDER_BUCKET).upload(storagePath, file, { contentType: "application/pdf", upsert: false });
+  if (upload.error) return { data: null, error: upload.error };
+  const registration = await supabase.rpc("register_crm_lead_document", {
+    p_lead_id: leadId,
+    p_category: "work_order",
+    p_file_name: file.name,
+    p_storage_path: storagePath,
+    p_content_type: "application/pdf",
+    p_file_size: file.size,
+  });
+  if (registration.error) {
+    await supabase.storage.from(CRM_LEAD_WORK_ORDER_BUCKET).remove([storagePath]);
+    return { data: null, error: registration.error };
+  }
+  return { data: registration.data, error: null };
 }
 
 async function upsertCrmLeadToSupabase(lead, actor) {
@@ -10304,6 +10339,9 @@ function App() {
   const [crmLeads, setCrmLeads] = useState([]);
   const [crmLeadSyncStatus, setCrmLeadSyncStatus] = useState("idle");
   const [crmLeadSyncError, setCrmLeadSyncError] = useState("");
+  const [crmLeadDocuments, setCrmLeadDocuments] = useState([]);
+  const [crmLeadWorkOrderFile, setCrmLeadWorkOrderFile] = useState(null);
+  const [crmLeadWorkOrderUploading, setCrmLeadWorkOrderUploading] = useState(false);
   const [crmInspectionSending, setCrmInspectionSending] = useState(false);
   const [crmWeeklyInspectionTarget, setCrmWeeklyInspectionTarget] = useState(6);
   const [crmProposalRequests, setCrmProposalRequests] = useState([]);
@@ -10773,9 +10811,13 @@ function App() {
         setCrmLeadSyncStatus("saved");
         setCrmLeadSyncError("");
       }
-      const targetResult = await fetchCrmKpiTargetFromSupabase();
+      const [targetResult, documentResult] = await Promise.all([
+        fetchCrmKpiTargetFromSupabase(),
+        fetchCrmLeadDocumentsFromSupabase(),
+      ]);
       if (!active) return;
       if (!targetResult.error) setCrmWeeklyInspectionTarget(Math.max(1, Number(targetResult.data?.numeric_value) || 6));
+      if (!documentResult.error) setCrmLeadDocuments(documentResult.data || []);
       const [proposalResult, versionResult, auditResult, ivanResult, danielaResult] = await Promise.all([
         fetchCrmProposalRequestsFromSupabase(),
         fetchCrmProposalVersionsFromSupabase(),
@@ -10824,6 +10866,10 @@ function App() {
           setCrmLeads(result.data);
           setCrmLeadSyncStatus("saved");
         }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "crm_lead_documents" }, async () => {
+        const result = await fetchCrmLeadDocumentsFromSupabase();
+        if (!result.error) setCrmLeadDocuments(result.data || []);
       })
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
@@ -13358,6 +13404,7 @@ function App() {
       ...overrides,
     }));
     setCrmLeadEditingId("");
+    setCrmLeadWorkOrderFile(null);
     setCrmTab("quickCapture");
   };
 
@@ -13384,6 +13431,7 @@ function App() {
     const normalized = normalizeCrmLead(lead);
     setCrmLeadDraft(normalized);
     setCrmLeadEditingId(normalized.id);
+    setCrmLeadWorkOrderFile(null);
     setCrmTab("newLead");
   };
 
@@ -13395,7 +13443,37 @@ function App() {
     }));
   };
 
-  const saveCrmLeadDraft = (statusMessage = "Saved lead.", leadOverride = crmLeadDraft) => {
+  const selectCrmLeadWorkOrder = (file) => {
+    if (!file) { setCrmLeadWorkOrderFile(null); return; }
+    if (!/\.pdf$/i.test(String(file.name || "")) || (file.type && file.type !== "application/pdf")) {
+      setCrmLeadWorkOrderFile(null);
+      setSessionMessageType("error");
+      setSessionMessage("Choose a PDF work order.");
+      return;
+    }
+    if (Number(file.size || 0) > CRM_LEAD_WORK_ORDER_MAX_BYTES) {
+      setCrmLeadWorkOrderFile(null);
+      setSessionMessageType("error");
+      setSessionMessage("The PDF work order must be 25 MB or smaller.");
+      return;
+    }
+    setCrmLeadWorkOrderFile(file);
+    setSessionMessageType("");
+    setSessionMessage(`${file.name} is ready to upload with the lead.`);
+  };
+
+  const openCrmLeadDocument = async (document) => {
+    if (!document?.storage_path) return;
+    const { data, error } = await supabase.storage.from(CRM_LEAD_WORK_ORDER_BUCKET).createSignedUrl(document.storage_path, 300);
+    if (error) {
+      setSessionMessageType("error");
+      setSessionMessage(`The work order could not be opened: ${error.message}`);
+      return;
+    }
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const saveCrmLeadDraft = (statusMessage = "Saved lead.", leadOverride = crmLeadDraft, skipRemoteSync = false) => {
     const normalized = normalizeCrmLead({
       ...leadOverride,
       originatorId: leadOverride.originatorId || authUser?.key || "",
@@ -13432,7 +13510,7 @@ function App() {
     setSessionMessageType("success");
     setSessionMessage(statusMessage);
     setCrmLeadSyncStatus("saving");
-    void upsertCrmLeadToSupabase(nextLead, authUser).then((result) => {
+    if (!skipRemoteSync) void upsertCrmLeadToSupabase(nextLead, authUser).then((result) => {
       if (result?.error) {
         setCrmLeadSyncStatus("local");
         setCrmLeadSyncError(result.error.message || "Lead saved locally but not to the shared CRM.");
@@ -13471,11 +13549,37 @@ function App() {
           : { leadStatus: "New", qualificationStatus: "captured" };
     const leadToSave = { ...crmLeadDraft, ...outcomeUpdates };
     const duplicate = findPotentialDuplicateLead(crmLeads, leadToSave);
+    const hasWorkOrder = Boolean(crmLeadWorkOrderFile);
     const saved = saveCrmLeadDraft(
       duplicate ? `Visit saved. Possible duplicate: ${crmLeadDisplayName(duplicate)}.` : "Customer visit saved. Ready for the next one.",
       leadToSave,
+      hasWorkOrder,
     );
     if (!saved) return;
+    if (hasWorkOrder) {
+      setCrmLeadWorkOrderUploading(true);
+      setCrmLeadSyncStatus("saving");
+      const remote = await upsertCrmLeadToSupabase(saved, authUser);
+      if (remote.error) {
+        setCrmLeadWorkOrderUploading(false);
+        setCrmLeadSyncStatus("local");
+        setSessionMessageType("error");
+        setSessionMessage(`The lead is saved on this device, but the PDF work order was not uploaded: ${remote.error.message || remote.error}`);
+        return;
+      }
+      const upload = await uploadCrmLeadWorkOrder(saved.id, crmLeadWorkOrderFile);
+      setCrmLeadWorkOrderUploading(false);
+      if (upload.error) {
+        setSessionMessageType("error");
+        setSessionMessage(`The lead was saved, but the PDF work order could not be uploaded: ${upload.error.message || upload.error}`);
+        return;
+      }
+      setCrmLeadDocuments((current) => [upload.data, ...current.filter((item) => item.id !== upload.data?.id)].filter(Boolean));
+      setCrmLeadWorkOrderFile(null);
+      setCrmLeadSyncStatus("saved");
+      setSessionMessageType("success");
+      setSessionMessage("Lead and PDF work order saved. Ready for the next one.");
+    }
     const fresh = normalizeCrmLead({
       ...createBlankCrmLead(),
       originatorId: authUser?.key || "",
@@ -13540,10 +13644,26 @@ function App() {
     }
 
     const savedLeadBeforeHandoff = normalizeCrmLead(leadResult?.data || normalized);
+    let uploadedWorkOrder = null;
+    if (crmLeadWorkOrderFile) {
+      setCrmLeadWorkOrderUploading(true);
+      const upload = await uploadCrmLeadWorkOrder(savedLeadBeforeHandoff.id, crmLeadWorkOrderFile);
+      setCrmLeadWorkOrderUploading(false);
+      if (upload.error) {
+        setCrmInspectionSending(false);
+        setSessionMessageType("error");
+        setSessionMessage(`The lead was saved, but it was not sent to Ivan because the PDF work order failed to upload: ${upload.error.message || upload.error}`);
+        return;
+      }
+      uploadedWorkOrder = upload.data;
+      setCrmLeadDocuments((current) => [upload.data, ...current.filter((item) => item.id !== upload.data?.id)].filter(Boolean));
+      setCrmLeadWorkOrderFile(null);
+    }
+    const inspectionWorkOrder = uploadedWorkOrder || crmLeadDocuments.find((document) => document.lead_id === savedLeadBeforeHandoff.id) || null;
     const inspectionTask = buildInspectionTask(savedLeadBeforeHandoff);
     const { data: task, error: taskError } = await supabase.rpc("create_private_company_task", {
       p_title: inspectionTask.title,
-      p_description: `${inspectionTask.description}\nCRM lead ID: ${savedLeadBeforeHandoff.id}`,
+      p_description: `${inspectionTask.description}\nCRM lead ID: ${savedLeadBeforeHandoff.id}${inspectionWorkOrder ? `\nPDF work order attached in CRM: ${inspectionWorkOrder.file_name}` : ""}`,
       p_due_date: null,
       p_priority: inspectionTask.priority,
       p_assignee_ids: [ivan.id],
@@ -19620,6 +19740,10 @@ function App() {
               <Field label="One quick note">
                 <textarea rows="3" value={crmLeadDraft.description} onChange={(e) => updateCrmLeadDraftField("description", e.target.value)} placeholder="What did they need or say?" />
               </Field>
+              <Field label="PDF work order (optional)">
+                <input type="file" accept=".pdf,application/pdf" onChange={(e) => selectCrmLeadWorkOrder(e.target.files?.[0] || null)} />
+                <span className="smallNote">{crmLeadWorkOrderFile ? `${crmLeadWorkOrderFile.name} ready to upload` : "Attach the customer's PDF work order if one was provided. Maximum 25 MB."}</span>
+              </Field>
             </div>
             <div className="detailList" style={{ marginTop: 14 }}>
               <DetailRow label="Originator" value={crmLeadDraft.originatorName || authUser?.displayName || "Current user"} />
@@ -19627,13 +19751,13 @@ function App() {
               <DetailRow label="Starting status" value="New · Needs qualification" />
             </div>
             <div className="actionRow" style={{ marginTop: 16 }}>
-              <button type="button" className="primaryButton" disabled={crmInspectionSending} onClick={saveQuickLeadAndAddNext}>
-                {crmLeadDraft.visitOutcome === "inspection" ? (crmInspectionSending ? "Sending to Ivan…" : "Save & Send to Ivan") : "Save & Add Next"}
+              <button type="button" className="primaryButton" disabled={crmInspectionSending || crmLeadWorkOrderUploading} onClick={saveQuickLeadAndAddNext}>
+                {crmLeadWorkOrderUploading ? "Uploading work order…" : crmLeadDraft.visitOutcome === "inspection" ? (crmInspectionSending ? "Sending to Ivan…" : "Save & Send to Ivan") : "Save & Add Next"}
               </button>
               <button
                 type="button"
                 className="secondaryButton"
-                disabled={crmInspectionSending}
+                disabled={crmInspectionSending || crmLeadWorkOrderUploading}
                 onClick={() => sendCrmLeadForInspection(crmLeadDraft, true)}
               >
                 {crmInspectionSending ? "Sending to Ivan…" : "Send for Inspection"}
@@ -19803,6 +19927,14 @@ function App() {
               <DetailRow label="Last activity" value={crmLeadDraft.lastActivityDate ? new Date(crmLeadDraft.lastActivityDate).toLocaleString() : "—"} />
               <DetailRow label="Converted customer" value={crmLeadDraft.convertedCustomerId || "—"} />
               <DetailRow label="Lead created" value={crmLeadDraft.createdAt ? new Date(crmLeadDraft.createdAt).toLocaleString() : "—"} />
+            </div>
+            <div className="summaryCard" style={{ marginTop: 14 }}>
+              <strong>Lead documents</strong>
+              <p className="smallNote">Private PDF work orders attached during Quick Capture.</p>
+              <div className="actionRow">
+                {crmLeadDocuments.filter((document) => document.lead_id === crmLeadDraft.id).map((document) => <button key={document.id} type="button" className="secondaryButton" onClick={() => void openCrmLeadDocument(document)}>Open PDF: {document.file_name}</button>)}
+                {!crmLeadDocuments.some((document) => document.lead_id === crmLeadDraft.id) ? <span className="smallNote">No PDF work order attached.</span> : null}
+              </div>
             </div>
 
             <div className="actionRow" style={{ marginTop: 16 }}>
