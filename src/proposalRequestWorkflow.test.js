@@ -8,6 +8,7 @@ import {
   calculateProposalMetrics,
   getSlaDisplay,
   validateProposalRequest,
+  validateQuickInspectionHandoff,
 } from "./proposalRequestWorkflow.js";
 
 const completeRequest = {
@@ -24,6 +25,21 @@ test("incomplete requests cannot enter the estimating queue", () => {
   const result = validateProposalRequest({ ...completeRequest, scope_of_work: "", measurements: "" });
   assert.equal(result.valid, false);
   assert.deepEqual(result.missing, ["Detailed scope of work", "Measurements / square footage / squares"]);
+});
+
+test("quick inspection handoff requires only the four field essentials", () => {
+  const quick = validateQuickInspectionHandoff({
+    customer_name: "Customer",
+    service_address: "100 Main St",
+    scope_of_work: "Observed damaged TPO field and wet insulation near drain",
+    measurements: "Approximately 24 SQ",
+  });
+  assert.equal(quick.valid, true);
+  assert.deepEqual(validateQuickInspectionHandoff({ customer_name: "Customer" }).missing, [
+    "Service address",
+    "Main scope observed",
+    "Measurements / square footage / squares",
+  ]);
 });
 
 test("Daniela's core estimating intake questions are required", () => {

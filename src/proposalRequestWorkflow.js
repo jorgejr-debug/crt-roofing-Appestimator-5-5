@@ -51,6 +51,13 @@ export const REQUIRED_PROPOSAL_REQUEST_FIELDS = [
   ["customer_deadline", "Customer deadline"],
 ];
 
+export const QUICK_INSPECTION_HANDOFF_FIELDS = [
+  ["customer_name", "Customer / job name"],
+  ["service_address", "Service address"],
+  ["scope_of_work", "Main scope observed"],
+  ["measurements", "Measurements / square footage / squares"],
+];
+
 function present(value) {
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === "number") return Number.isFinite(value) && value > 0;
@@ -62,6 +69,11 @@ export function validateProposalRequest(request = {}) {
   if (request.job_type === "large_rfp" && !present(request.manual_target_at)) {
     missing.push("Manual ETA for a large RFP / multi-building project");
   }
+  return { valid: missing.length === 0, missing };
+}
+
+export function validateQuickInspectionHandoff(request = {}) {
+  const missing = QUICK_INSPECTION_HANDOFF_FIELDS.filter(([key]) => !present(request[key])).map(([, label]) => label);
   return { valid: missing.length === 0, missing };
 }
 

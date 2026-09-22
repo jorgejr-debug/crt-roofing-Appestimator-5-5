@@ -22825,6 +22825,13 @@ function App() {
               <p>Submit scope and estimating information.</p>
             </button>
           ) : null}
+          {String(authUser?.email || "").trim().toLowerCase() === "ivan@crtroofing.com" ? (
+            <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalQuickHandoff")}>
+              <span className="eyebrow">Field Shortcut</span>
+              <strong>Quick Inspection Handoff</strong>
+              <p>Dictate key scope notes and send photos to Daniela.</p>
+            </button>
+          ) : null}
           <button type="button" className="templateCard" onClick={() => setActiveTemplate("activeJobs")}>
             <span className="eyebrow">Projects</span>
             <strong>Active Jobs</strong>
@@ -27460,7 +27467,7 @@ function App() {
       { key: "crm", label: "Customers", icon: "C", matches: ["crm"] },
       { key: "fieldNotes", label: "Inspections", icon: "I", matches: ["fieldNotes"] },
       { key: "estimateTemplates", label: "Estimates", icon: "E", matches: ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"] },
-      { key: "proposalRequests", label: "Proposals", icon: "P", matches: ["proposalRequests"] },
+      { key: "proposalRequests", label: "Proposals", icon: "P", matches: ["proposalRequests", "proposalQuickHandoff"] },
       { key: "subcontractors", label: "Subcontractors", icon: "SC", matches: ["subcontractors"] },
       { key: "approvedJobs", label: "Approved Jobs", icon: "AJ", matches: ["approvedJobs", "approvedJob", "jobMetrics", "pastJobInsights"] },
       { key: "activeJobs", label: "Active Jobs", icon: "J", matches: ["activeJobs", "activeJob", "fieldOperations"] },
@@ -27697,6 +27704,7 @@ function App() {
   if (activeTemplate === "settings") return renderAuthenticatedLayout(renderSettingsScreen());
   if (activeTemplate === "workHub") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTaskId={workHubInitialTaskId} initialCreateTask={workHubInitialCreateTask} />);
   if (activeTemplate === "proposalRequests") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTab="proposals" />);
+  if (activeTemplate === "proposalQuickHandoff") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTab="proposals" initialProposalView="quick" />);
   if (activeTemplate === "subcontractors") return renderAuthenticatedLayout(renderSubcontractorDirectoryScreen());
   if (activeTemplate === "sprayFoam") return renderAuthenticatedLayout(renderSprayFoamScreen());
   if (activeTemplate === "shingle") return renderAuthenticatedLayout(renderShingleScreen());
