@@ -107,6 +107,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
   const [view, setView] = useState(initialView);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [submissionNotice, setSubmissionNotice] = useState({ tone: "", text: "" });
   const [busy, setBusy] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const [exportBusy, setExportBusy] = useState("");
@@ -228,25 +229,55 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
         : "Proposal Request draft saved.");
       await load();
       if (uploadResult.failed.length) {
-        setError(`${uploadResult.failed.length} file${uploadResult.failed.length === 1 ? "" : "s"} could not be uploaded and remain selected for retry: ${uploadResult.failed.map((item) => `${item.file.name} (${item.error})`).join("; ")}`);
+        const uploadMessage = `${uploadResult.failed.length} file${uploadResult.failed.length === 1 ? "" : "s"} could not be uploaded and remain selected for retry: ${uploadResult.failed.map((item) => `${item.file.name} (${item.error})`).join("; ")}`;
+        setError(uploadMessage);
+        setSubmissionNotice({ tone: "error", text: `Not sent: ${uploadMessage}` });
         return null;
       }
       return saved;
     } catch (actionError) {
-      setError(saved?.id
+      const saveMessage = saved?.id
         ? `The draft was saved, but its files could not be uploaded: ${actionError.message || String(actionError)}`
-        : actionError.message || String(actionError));
+        : actionError.message || String(actionError);
+      setError(saveMessage);
+      setSubmissionNotice({ tone: "error", text: `Not sent: ${saveMessage}` });
       return null;
     } finally { setBusy(false); setUploadProgress(""); }
   };
 
   const submit = async () => {
     const validation = validateProposalRequest(draft);
-    if (!validation.valid) { setError(`Complete these required fields before submitting: ${validation.missing.join(", ")}`); return; }
+    if (!validation.valid) {
+      const validationMessage = `Complete these required fields before submitting: ${validation.missing.join(", ")}`;
+      setError(validationMessage);
+      setSubmissionNotice({ tone: "error", text: `Not sent: ${validationMessage}` });
+      return;
+    }
+    setSubmissionNotice({ tone: "", text: "" });
     const saved = await saveDraft();
     if (!saved?.id) return;
-    await run(() => supabase.rpc("submit_proposal_request", { p_request_id: saved.id }), draft.priority === "rush" ? "Rush approval requested." : "Proposal Request submitted to Daniela.");
-    setView("queue");
+    setBusy(true);
+    setError("");
+    try {
+      const result = await supabase.rpc("submit_proposal_request", { p_request_id: saved.id });
+      if (result.error) throw result.error;
+      const successMessage = draft.priority === "rush"
+        ? "Sent — Rush approval requested."
+        : "Sent — Proposal Request successfully submitted to Daniela.";
+      setSubmissionNotice({ tone: "success", text: "Sent ✓" });
+      setMessage(successMessage);
+      await load();
+      window.setTimeout(() => {
+        setView("queue");
+        window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+      }, 650);
+    } catch (submitError) {
+      const submitMessage = submitError.message || String(submitError);
+      setError(`Proposal Request was not sent: ${submitMessage}`);
+      setSubmissionNotice({ tone: "error", text: `Not sent: ${submitMessage}` });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const sendQuickInspectionHandoff = async () => {
@@ -303,7 +334,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
     setManagementDraft({ estimatorId: request.assigned_estimator_id || "", priority: request.priority || "normal", targetAt: request.target_completion_at ? String(request.target_completion_at).slice(0, 16) : "" });
     setView("detail"); setError(""); setMessage("");
   };
-  const newRequest = () => { setSelectedId(""); setDraft(blankDraft(authUser.key)); setPendingAttachments([]); setView("form"); };
+  const newRequest = () => { setSelectedId(""); setDraft(blankDraft(authUser.key)); setPendingAttachments([]); setSubmissionNotice({ tone: "", text: "" }); setView("form"); };
   const newQuickHandoff = () => {
     setSelectedId("");
     setDraft({ ...blankDraft(authUser.key), assigned_estimator_id: danielaProfile?.id || "" });
@@ -525,7 +556,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
         {pendingAttachments.length ? <div className="proposalPendingFiles"><strong>Ready to upload when you save or submit:</strong>{pendingAttachments.map((file, index) => <div key={`${file.name}-${file.size}-${file.lastModified}`}><span>{file.name}</span><button type="button" className="secondaryButton" onClick={() => setPendingAttachments((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></div>)}</div> : <p className="emptyState">No new files selected.</p>}
         {selectedAttachments.length ? <div className="proposalDocumentLinks"><strong>Already uploaded:</strong>{selectedAttachments.map((item) => <button type="button" className="secondaryButton" key={item.id} onClick={() => void openDocument(item.storage_path)}>Open {item.file_name}</button>)}</div> : null}
       </section>
-      <div className="proposalStickyActions"><button type="button" className="secondaryButton" disabled={busy} onClick={() => void saveDraft()}>Save Draft</button><button type="submit" className="primaryButton" disabled={busy}>{busy ? "Saving…" : draft.status === "missing_information" ? "Resubmit Complete Request" : "Submit to Daniela"}</button></div>
+      <div className="proposalStickyActions">{submissionNotice.text ? <p className={`proposalSubmitNotice ${submissionNotice.tone}`} role="status" aria-live="polite">{submissionNotice.text}</p> : null}<button type="button" className="secondaryButton" disabled={busy} onClick={() => void saveDraft()}>Save Draft</button><button type="submit" className="primaryButton" disabled={busy || submissionNotice.tone === "success"}>{busy ? "Sending…" : submissionNotice.tone === "success" ? "Sent ✓" : draft.status === "missing_information" ? "Resubmit Complete Request" : "Submit to Daniela"}</button></div>
     </form> : null}
 
     {view === "detail" && selected ? <div className="proposalDetail">
