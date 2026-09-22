@@ -18787,6 +18787,97 @@ function App() {
     );
   };
 
+  const getTeamKpiOverview = () => {
+    const chris = calculateLeadKpis(crmLeads, {
+      originatorEmail: "chris@crtroofing.com",
+      weeklyInspectionTarget: crmWeeklyInspectionTarget,
+    });
+    const ivan = calculateIvanKpis(crmLeads, crmProposalRequests, {
+      ivanUserId: crmIvanProfileId,
+      weeklyInspectionTarget: crmWeeklyInspectionTarget,
+    });
+    const daniela = calculateDanielaKpis(crmProposalRequests, crmProposalVersions, crmProposalAuditEvents, {
+      danielaUserId: crmDanielaProfileId,
+      periodDays: 30,
+    });
+    const miguel = getMiguelKpiData().kpis;
+    return { chris, ivan, daniela, miguel };
+  };
+
+  const renderTeamKpiOverview = () => {
+    const { chris, ivan, daniela, miguel } = getTeamKpiOverview();
+    const percent = (value) => value === null || value === undefined ? "—" : `${Math.round(value * 100)}%`;
+    const statusColor = (status) => ({ green: "#14804a", yellow: "#9a6700", red: "#c62828", gray: "#687682" }[status] || "#687682");
+    const cards = [
+      {
+        name: "Chris",
+        role: "Business Development",
+        label: "Qualified leads this week",
+        value: `${num(chris.qualifiedThisWeek, 0)} / ${num(chris.weeklyQualifiedTarget, 0)}`,
+        status: chris.qualifiedStatus,
+        context: `${num(chris.customerVisitsThisWeek, 0)} of ${num(chris.weeklyVisitTarget, 0)} visits · ${num(chris.inspectionReadyThisWeek, 0)} of ${num(chris.weeklyChrisInspectionTarget, 0)} inspection handoffs`,
+      },
+      {
+        name: "Ivan",
+        role: "Estimator / Technician / Sales",
+        label: "On-time proposal handoff",
+        value: percent(ivan.handoffRate),
+        status: ivan.handoffStatus,
+        context: `${num(ivan.assignedThisWeek, 0)} of ${num(ivan.weeklyCapacity, 0)} inspection slots assigned · ${num(ivan.availableCapacity, 0)} open`,
+      },
+      {
+        name: "Daniela",
+        role: "Proposals / Estimating",
+        label: "Complete on-time Word + PDF handoff",
+        value: percent(daniela.turnaroundRate),
+        status: daniela.turnaroundStatus,
+        context: `${num(daniela.activeQueueCount, 0)} active requests · ${num(daniela.awaitingSalesReviewCount, 0)} awaiting Sales Review`,
+      },
+      {
+        name: "Miguel",
+        role: "Project Manager / Production",
+        label: "On-time production completion",
+        value: percent(miguel.completionRate),
+        status: miguel.completionStatus,
+        context: `${num(miguel.activeJobs, 0)} active production jobs · ${num(miguel.upcomingCount, 0)} upcoming starts`,
+      },
+    ];
+
+    return (
+      <Section
+        title="Team KPIs"
+        subtitle="Each person's primary result and current workload at a glance. Open the scorecards for supporting measures and context."
+        right={(
+          <button type="button" className="secondaryButton" onClick={() => {
+            if (isProjectManager) {
+              setActiveTemplate("kpis");
+              return;
+            }
+            setCrmTab("reports");
+            setActiveTemplate("crm");
+          }}>
+            Open KPI scorecards
+          </button>
+        )}
+      >
+        <div className="summaryGrid teamKpiOverviewGrid">
+          {cards.map((card) => (
+            <div className="summaryCard" key={card.name}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <span style={{ marginBottom: 0 }}>{card.name} · {card.role}</span>
+                <small style={{ color: statusColor(card.status), fontWeight: 800 }}>{String(card.status || "gray").toUpperCase()}</small>
+              </div>
+              <p style={{ marginTop: 12 }}>{card.label}</p>
+              <strong>{card.value}</strong>
+              <p>{card.context}</p>
+            </div>
+          ))}
+        </div>
+        <p className="smallNote" style={{ margin: "12px 0 0" }}>Gray means there is not enough eligible activity to score yet. Capacity context is visible without unfairly lowering another employee's KPI.</p>
+      </Section>
+    );
+  };
+
   const renderMiguelKpiScreen = () => (
     <div className="appShell">
       <style>{css}</style>
@@ -22699,6 +22790,8 @@ function App() {
         onOpenInvoices={() => setActiveTemplate("invoices")}
         onOpenVendors={() => setActiveTemplate("subcontractors")}
       />
+
+      {renderTeamKpiOverview()}
 
       <Section title="Quick actions" subtitle="Start the work you use most often.">
         <div className="dashboardQuickActions">

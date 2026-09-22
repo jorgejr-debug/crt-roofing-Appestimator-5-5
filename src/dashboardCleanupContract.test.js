@@ -17,6 +17,16 @@ test("dashboard starts with a focused attention center and role-aware quick acti
   assert.match(appSource, /<strong>Proposal Request<\/strong>/);
 });
 
+test("dashboard places the live team KPI overview directly below the attention center", () => {
+  assert.match(appSource, /title="Team KPIs"/);
+  assert.match(appSource, /Qualified leads this week/);
+  assert.match(appSource, /On-time proposal handoff/);
+  assert.match(appSource, /Complete on-time Word \+ PDF handoff/);
+  assert.match(appSource, /On-time production completion/);
+  assert.match(appSource, /Open KPI scorecards/);
+  assert.ok(appSource.indexOf("{renderTeamKpiOverview()}") < appSource.indexOf('<Section title="Quick actions"'));
+});
+
 test("secondary dashboard lists are minimized without removing their workspaces", () => {
   assert.match(appSource, /useState\(true\);\n\s*const \[archivedJobsCollapsed/);
   assert.match(appSource, /dashboardCompletedJobsOpen/);
