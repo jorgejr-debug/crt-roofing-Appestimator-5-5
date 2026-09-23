@@ -27,7 +27,7 @@ test("quick handoff saves a draft and notifies Daniela without starting the esti
 });
 
 test("quick handoff supports phone notes and protected multi-file attachments", () => {
-  assert.match(proposals, /Capture the essential field facts while they are fresh/);
+  assert.match(proposals, /Use a PLAUD summary or transcript to organize the field facts/);
   assert.match(proposals, /Main scope observed/);
   assert.match(proposals, /Measurements \/ squares/);
   assert.match(proposals, /Add Roof Photos & Files/);

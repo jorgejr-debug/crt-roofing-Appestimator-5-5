@@ -27,3 +27,6 @@ verify_jwt = false
 
 [functions.account-access-vault]
 verify_jwt = false
+
+[functions.extract-inspection-handoff]
+verify_jwt = false
