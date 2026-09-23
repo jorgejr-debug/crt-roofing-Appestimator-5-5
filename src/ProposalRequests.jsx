@@ -298,10 +298,22 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
           p_file_size: file.size,
         });
         if (registration.error) throw registration.error;
-        uploaded.push(file);
+        uploaded.push({ file, attachment: registration.data });
       } catch (uploadError) {
         if (path) await supabase.storage.from("proposal-request-files").remove([path]);
         failed.push({ file, error: uploadError.message || String(uploadError) });
+      }
+    }
+    if (uploaded.length) {
+      const attachmentIds = uploaded.map((item) => item.attachment?.id).filter(Boolean);
+      if (attachmentIds.length) {
+        const notification = await supabase.rpc("notify_proposal_attachment_batch", {
+          p_request_id: requestId,
+          p_attachment_ids: attachmentIds,
+        });
+        if (notification.error) {
+          setError(`Files uploaded, but the attachment notification could not be sent: ${notification.error.message}`);
+        }
       }
     }
     setUploadProgress("");
@@ -331,7 +343,10 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
         setSubmissionNotice({ tone: "error", text: `Not sent: ${uploadMessage}` });
         return null;
       }
-      return saved;
+      return {
+        ...saved,
+        uploadedAttachmentIds: uploadResult.uploaded.map((item) => item.attachment?.id).filter(Boolean),
+      };
     } catch (actionError) {
       const saveMessage = saved?.id
         ? `The draft was saved, but its files could not be uploaded: ${actionError.message || String(actionError)}`
@@ -358,6 +373,15 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
     try {
       const result = await supabase.rpc("submit_proposal_request", { p_request_id: saved.id });
       if (result.error) throw result.error;
+      if (saved.status === "draft" && saved.uploadedAttachmentIds?.length) {
+        const notification = await supabase.rpc("notify_proposal_attachment_batch", {
+          p_request_id: saved.id,
+          p_attachment_ids: saved.uploadedAttachmentIds,
+        });
+        if (notification.error) {
+          setError(`The request was submitted, but the attachment notification could not be sent: ${notification.error.message}`);
+        }
+      }
       const successMessage = draft.priority === "rush"
         ? "Sent — Rush approval requested."
         : "Sent — Proposal Request successfully submitted to Daniela.";
