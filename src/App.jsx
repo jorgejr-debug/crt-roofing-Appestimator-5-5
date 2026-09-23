@@ -9967,6 +9967,9 @@ function App() {
   const isAdminUser = authRole === "admin";
   const isFinanceUser = authRole === "admin" || authRole === "cfo";
   const isProjectManager = authRole === "project_manager";
+  const quickInspectionEmail = normalizeEmployeeEmail(authUser?.email);
+  const canCreateQuickInspectionHandoff = new Set(["admin", "cfo", "salesperson", "estimator"]).has(authRole)
+    && quickInspectionEmail !== "daniela@crtroofing.com";
   const canManageEmployeeWages = isFinanceUser;
   const canManageSubcontractorCompliance = isFinanceUser || normalizeEmployeeEmail(authUser?.email) === "natalia@crtroofing.com";
   const canManageSharedJobData = canManageSharedJobs(authRole);
@@ -22957,7 +22960,7 @@ function App() {
               <p>Submit scope and estimating information.</p>
             </button>
           ) : null}
-          {String(authUser?.email || "").trim().toLowerCase() === "ivan@crtroofing.com" ? (
+          {canCreateQuickInspectionHandoff ? (
             <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalQuickHandoff")}>
               <span className="eyebrow">Field Shortcut</span>
               <strong>Quick Inspection Handoff</strong>

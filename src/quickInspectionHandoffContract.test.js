@@ -7,8 +7,9 @@ const workHub = readFileSync(new URL("./WorkHub.jsx", import.meta.url), "utf8");
 const proposals = readFileSync(new URL("./ProposalRequests.jsx", import.meta.url), "utf8");
 const handoffMigration = readFileSync(new URL("../supabase/migrations/20260922100000_draft_proposal_handoff.sql", import.meta.url), "utf8");
 
-test("Ivan receives a dashboard shortcut into the mobile inspection handoff", () => {
+test("authorized inspectors receive a dashboard shortcut into the mobile inspection handoff", () => {
   assert.match(app, /Quick Inspection Handoff/);
+  assert.match(app, /canCreateQuickInspectionHandoff/);
   assert.match(app, /setActiveTemplate\("proposalQuickHandoff"\)/);
   assert.match(app, /initialProposalView="quick"/);
   assert.match(workHub, /initialProposalView = "queue"/);
@@ -32,4 +33,10 @@ test("quick handoff supports phone notes and protected multi-file attachments", 
   assert.match(proposals, /Measurements \/ squares/);
   assert.match(proposals, /Add Roof Photos & Files/);
   assert.match(proposals, /uploadFilesToRequest/);
+});
+
+test("management can preserve the correct salesperson attribution", () => {
+  assert.match(proposals, /Assigned salesperson \/ account owner/);
+  assert.match(proposals, /salesperson_id: draft\.salesperson_id \|\| authUser\.key/);
+  assert.match(proposals, /Inspector-Confirmed Field Evidence/);
 });

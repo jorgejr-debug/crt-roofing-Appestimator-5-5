@@ -17,7 +17,7 @@ test("PLAUD extraction stays behind authenticated server-side controls", () => {
   assert.match(config, /\[functions\.extract-inspection-handoff\][\s\S]*verify_jwt = false/);
 });
 
-test("Ivan must review and confirm before an extracted handoff is sent", () => {
+test("the inspector must review and confirm before an extracted handoff is sent", () => {
   assert.match(ui, /Organize PLAUD Inspection/);
   assert.match(ui, /I reviewed the organized inspection/);
   assert.match(ui, /inspectionExtraction && !inspectionConfirmationValid/);

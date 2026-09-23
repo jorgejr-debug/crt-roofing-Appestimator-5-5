@@ -5,8 +5,8 @@ import test from "node:test";
 const app = readFileSync(new URL("./ProposalRequests.jsx", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../supabase/migrations/20260922100000_draft_proposal_handoff.sql", import.meta.url), "utf8");
 
-test("Ivan can attach a PDF or Word draft proposal to the mobile handoff", () => {
-  assert.match(app, /Upload Ivan's Draft Proposal/);
+test("an authorized inspector can attach a PDF or Word draft proposal to the mobile handoff", () => {
+  assert.match(app, /Upload Inspector's Draft Proposal/);
   assert.match(app, /DRAFT_PROPOSAL_FILE_ACCEPT/);
   assert.match(app, /pendingDraftProposalFiles/);
   assert.match(app, /p_has_draft_proposal: draftUpload\.uploaded\.length > 0/);
