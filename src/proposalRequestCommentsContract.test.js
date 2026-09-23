@@ -4,6 +4,7 @@ import test from "node:test";
 
 const ui = readFileSync(new URL("./ProposalRequests.jsx", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../supabase/migrations/20260923180000_proposal_request_comments.sql", import.meta.url), "utf8");
+const permissionsMigration = readFileSync(new URL("../supabase/migrations/20260923181500_lock_down_proposal_comments.sql", import.meta.url), "utf8");
 const email = readFileSync(new URL("../supabase/functions/send-proposal-notification-email/index.ts", import.meta.url), "utf8");
 
 test("proposal detail includes a persistent comment thread and composer", () => {
@@ -18,6 +19,8 @@ test("comments are guarded, immutable, and visible only to proposal participants
   assert.match(migration, /can_access_proposal_request\(proposal_request_id\)/);
   assert.match(migration, /SECURITY DEFINER/);
   assert.doesNotMatch(migration, /GRANT (INSERT|UPDATE|DELETE)/);
+  assert.match(permissionsMigration, /REVOKE INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER/);
+  assert.match(permissionsMigration, /FROM authenticated/);
   assert.match(migration, /BETWEEN 1 AND 4000/);
 });
 
