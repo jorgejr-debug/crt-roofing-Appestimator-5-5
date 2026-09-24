@@ -145,8 +145,6 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
   const email = String(authUser?.email || "").toLowerCase();
   const isManager = role === "admin" || role === "cfo";
   const isEstimator = role === "estimator" || email === "daniela@crtroofing.com" || isManager;
-  const canCreateQuickHandoff = new Set(["admin", "cfo", "salesperson", "estimator"]).has(role)
-    && email !== "daniela@crtroofing.com";
   const danielaProfile = profiles.find((profile) => String(profile.email || "").trim().toLowerCase() === "daniela@crtroofing.com") || null;
   const selected = requests.find((request) => request.id === selectedId) || null;
   const selectedVersions = versions.filter((version) => version.proposal_request_id === selectedId).sort((a, b) => b.version_number - a.version_number);
@@ -488,20 +486,6 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
     setCommentDraft(""); setView("detail"); setError(""); setMessage("");
   };
   const newRequest = () => { setSelectedId(""); setDraft(blankDraft(authUser.key)); setPendingAttachments([]); setPendingDraftProposalFiles([]); setSubmissionNotice({ tone: "", text: "" }); setView("form"); };
-  const newQuickHandoff = () => {
-    setSelectedId("");
-    setDraft({ ...blankDraft(authUser.key), assigned_estimator_id: danielaProfile?.id || "" });
-    setPendingAttachments([]);
-    setPendingDraftProposalFiles([]);
-    setInspectionText("");
-    setInspectionExtraction(null);
-    setInspectionConfirmed(false);
-    setInspectionConfirmedFingerprint("");
-    setView("quick");
-    setError("");
-    setMessage("");
-  };
-
   const applyCrmLead = (leadId) => {
     const lead = crmLeads.find((item) => item.id === leadId);
     if (!lead) {
@@ -675,7 +659,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
     <ActionFeedback message={error || message} tone={error ? "error" : "success"} onDismiss={() => { setError(""); setMessage(""); }} />
     <div className="proposalRequestTopbar">
       <div><p className="eyebrow">Centralized Estimating</p><h2>Proposal Requests</h2><p>Complete scope in, authorized production scope out.</p></div>
-      <div className="proposalRequestActions"><button type="button" className="secondaryButton" onClick={() => setView("queue")}>Queue</button>{canCreateQuickHandoff ? <button type="button" className="secondaryButton" onClick={newQuickHandoff}>Quick Inspection Handoff</button> : null}<button type="button" className="primaryButton" onClick={newRequest}>New Proposal Request</button></div>
+      <div className="proposalRequestActions"><button type="button" className="secondaryButton" onClick={() => setView("queue")}>Queue</button><button type="button" className="primaryButton" onClick={newRequest}>New Proposal Request</button></div>
     </div>
     {error ? <p className="statusMessage dangerMessage">{error}</p> : null}{message ? <p className="statusMessage proposalSuccess">{message}</p> : null}
 
