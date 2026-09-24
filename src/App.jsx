@@ -11,6 +11,7 @@ import SubcontractorCompliance from "./SubcontractorCompliance.jsx";
 import InvoiceQueue from "./InvoiceQueue.jsx";
 import AccountAccessVault from "./AccountAccessVault.jsx";
 import ActionFeedback from "./ActionFeedback.jsx";
+import { getEmployeeWorkspace } from "./employeeWorkspace.js";
 import { calculateMiguelKpis } from "./productionKpiWorkflow.js";
 import {
   buildInspectionTask,
@@ -210,19 +211,19 @@ const TRAVEL_VEHICLE_OPTIONS = [
 const EMPLOYEE_DIRECTORY_BY_EMAIL = {
   "ivan@crtroofing.com": {
     displayName: "Ivan",
-    title: "Sales / Project Management",
+    title: "Estimator / Technician / Sales",
     canViewAllProposals: false,
     canAccessCfoDashboard: false,
   },
   "chris@crtroofing.com": {
     displayName: "Chris",
-    title: "Sales / Project Management",
+    title: "Business Development",
     canViewAllProposals: false,
     canAccessCfoDashboard: false,
   },
   "daniela@crtroofing.com": {
     displayName: "Daniela",
-    title: "Estimator / Project Assistant",
+    title: "Proposal Specialist / Estimating",
     canViewAllProposals: true,
     canAccessCfoDashboard: false,
   },
@@ -22876,6 +22877,36 @@ function App() {
       return isAdminUser ? "Administration" : "Salesperson";
     })();
 
+    const dashboardWorkspace = getEmployeeWorkspace({
+      email: authUser?.email,
+      role: authRole,
+      capabilities: {
+        canAccessInvoices: canAccessInvoiceQueue,
+        canAccessFinance: canAccessCfoDashboard,
+        canViewApprovedJobs: !isProjectManager,
+      },
+    });
+    const openTaskCreator = () => {
+      setWorkHubInitialTaskId("");
+      setWorkHubInitialCreateTask(true);
+      setActiveTemplate("workHub");
+    };
+    const dashboardActionDefinitions = {
+      collectLead: { eyebrow: "Business Development", title: "Collect Lead", description: "Log a new opportunity quickly.", open: openDashboardLeadCapture },
+      sendInspection: { eyebrow: "Scheduling", title: "Send for Inspection", description: "Capture the caller and notify Ivan.", open: openDashboardInspectionRequest },
+      customers: { eyebrow: "CRM", title: "Customers", description: "Review leads, follow-ups, and customer history.", open: () => setActiveTemplate("crm") },
+      tasks: { eyebrow: "Team", title: "New Task", description: "Assign work and start a discussion.", open: openTaskCreator },
+      inspections: { eyebrow: "Field", title: "Inspections", description: "Open field notes and roof inspection records.", open: () => setActiveTemplate("fieldNotes") },
+      proposalRequests: { eyebrow: "Proposals", title: "Proposal Requests", description: "Submit or process estimating information.", open: () => setActiveTemplate("proposalRequests") },
+      estimates: { eyebrow: "Estimating", title: "Estimate Templates", description: "Build pricing from the approved company defaults.", open: () => setActiveTemplate("estimateTemplates") },
+      approvedJobs: { eyebrow: "Handoff", title: "Approved Jobs", description: "Review work moving into production.", open: () => setActiveTemplate("approvedJobs") },
+      activeJobs: { eyebrow: "Production", title: "Active Jobs", description: activeJobsSummary.activeCount ? `${activeJobsSummary.activeCount} active projects.` : "Open the production workspace.", open: () => setActiveTemplate("activeJobs") },
+      fieldOperations: { eyebrow: "Production", title: "Field Operations", description: "Daily logs and production updates.", open: () => setActiveTemplate("fieldOperations") },
+      vendors: { eyebrow: "Directory", title: "Approved Vendors", description: "Find contacts and compliance documents.", open: () => setActiveTemplate("subcontractors") },
+      invoices: { eyebrow: "Accounting", title: "Invoice Queue", description: "Prepare, send, and follow up on invoices.", open: () => setActiveTemplate("invoices") },
+      finance: { eyebrow: "Finance", title: "Finance Dashboard", description: "Review receivables, payables, and profitability.", open: () => setActiveTemplate("cfoDashboard") },
+    };
+
     return (
     <div className="appShell">
       <style>{css}</style>
@@ -22925,62 +22956,19 @@ function App() {
 
       {renderTeamKpiOverview()}
 
-      <Section title="Quick actions" subtitle="Start the work you use most often.">
+      <Section title="My workspace" subtitle={dashboardWorkspace.focus}>
         <div className="dashboardQuickActions">
-          {!isProjectManager ? (
-            <button type="button" className="templateCard collectLeadCard" onClick={openDashboardLeadCapture}>
-              <span className="eyebrow">CRM</span>
-              <strong>Collect Lead</strong>
-              <p>Add a new customer opportunity.</p>
-            </button>
-          ) : null}
-          {!isProjectManager ? (
-            <button type="button" className="templateCard" onClick={openDashboardInspectionRequest}>
-              <span className="eyebrow">Office Call</span>
-              <strong>Send for Inspection</strong>
-              <p>Capture the caller and email Ivan to schedule the inspection.</p>
-            </button>
-          ) : null}
-          <button type="button" className="templateCard" onClick={() => {
-            setWorkHubInitialTaskId("");
-            setWorkHubInitialCreateTask(true);
-            setActiveTemplate("workHub");
-          }}>
-            <span className="eyebrow">Team</span>
-            <strong>New Task</strong>
-            <p>Assign work and start a discussion.</p>
-          </button>
-          {!isProjectManager ? (
-            <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalRequests")}>
-              <span className="eyebrow">Sales</span>
-              <strong>Proposal Request</strong>
-              <p>Submit scope and estimating information.</p>
-            </button>
-          ) : null}
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("activeJobs")}>
-            <span className="eyebrow">Projects</span>
-            <strong>Active Jobs</strong>
-            <p>{activeJobsSummary.activeCount ? `${activeJobsSummary.activeCount} active projects` : "Open the active jobs workspace."}</p>
-          </button>
-          {canCreateApprovedJobData ? (
-            <button type="button" className="templateCard" onClick={() => setActiveTemplate("approvedJobs")}>
-              <span className="eyebrow">Jobs</span>
-              <strong>Add Approved Job</strong>
-              <p>Create or review upcoming approved work.</p>
-            </button>
-          ) : null}
-          {canAccessInvoiceQueue ? (
-            <button type="button" className="templateCard" onClick={() => setActiveTemplate("invoices")}>
-              <span className="eyebrow">Accounting</span>
-              <strong>Invoice Queue</strong>
-              <p>Prepare and send job invoices.</p>
-            </button>
-          ) : null}
-          <button type="button" className="templateCard" onClick={() => setActiveTemplate("subcontractors")}>
-            <span className="eyebrow">Directory</span>
-            <strong>Approved Vendors</strong>
-            <p>Find vendor contacts and compliance.</p>
-          </button>
+          {dashboardWorkspace.actions.map((actionKey) => {
+            const action = dashboardActionDefinitions[actionKey];
+            if (!action) return null;
+            return (
+              <button type="button" className={`templateCard ${actionKey === "collectLead" ? "collectLeadCard" : ""}`} key={actionKey} onClick={action.open}>
+                <span className="eyebrow">{action.eyebrow}</span>
+                <strong>{action.title}</strong>
+                <p>{action.description}</p>
+              </button>
+            );
+          })}
         </div>
       </Section>
 

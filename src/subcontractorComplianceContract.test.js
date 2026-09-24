@@ -21,8 +21,8 @@ test("subcontractor directory is protected and stores private COI metadata", () 
   assert.match(ui, /tel:/);
   assert.match(app, /label: "Subcontractors"/);
   assert.match(app, /readOnly={!canManageSubcontractorCompliance}/);
-  assert.match(app, /<strong>Approved Vendors<\/strong>/);
-  assert.match(app, /onClick=\{\(\) => setActiveTemplate\("subcontractors"\)\}/);
+  assert.match(app, /title: "Approved Vendors"/);
+  assert.match(app, /open: \(\) => setActiveTemplate\("subcontractors"\)/);
   assert.match(ui, /Approved \/ active\?/);
   assert.match(ui, /Approved Vendors &amp; Subcontractors/);
 });
