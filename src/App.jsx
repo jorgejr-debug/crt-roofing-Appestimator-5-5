@@ -22972,9 +22972,9 @@ function App() {
         </div>
       </Section>
 
-      <Section
-        title="More tools"
-        subtitle="Estimating, inspections, analytics, administration, and finance."
+      {isFinanceUser ? <Section
+        title="Management tools"
+        subtitle="Specialist administration, analytics, and finance tools."
         right={(
           <button type="button" className="secondaryButton" aria-expanded={dashboardToolsOpen} onClick={() => setDashboardToolsOpen((current) => !current)}>
             {dashboardToolsOpen ? "Minimize" : "Show tools"}
@@ -23065,7 +23065,7 @@ function App() {
         </div> : (
           <p className="emptyState">Specialist tools are tucked away here to keep the dashboard focused.</p>
         )}
-      </Section>
+      </Section> : null}
 
       {jobsSyncStatus === "loading" || jobsSyncStatus === "refreshing" || jobsSyncStatus === "reconnecting" || jobsSyncStatus === "offline" || jobsSyncStatus === "error" ? (
         <div className="summaryCard" style={{ marginBottom: 16 }}>

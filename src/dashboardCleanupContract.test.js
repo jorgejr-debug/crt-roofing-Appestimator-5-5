@@ -37,6 +37,11 @@ test("secondary dashboard lists are minimized without removing their workspaces"
   assert.match(appSource, /setActiveTemplate\("approvedJobs"\)/);
 });
 
+test("the duplicate specialist tool maze is limited to management accounts", () => {
+  assert.match(appSource, /\{isFinanceUser \? <Section[\s\S]*?title="Management tools"/);
+  assert.doesNotMatch(appSource, /title="More tools"/);
+});
+
 test("New Task quick action opens the existing task creator", () => {
   assert.match(appSource, /setWorkHubInitialCreateTask\(true\)/);
   assert.match(appSource, /initialCreateTask=\{workHubInitialCreateTask\}/);
