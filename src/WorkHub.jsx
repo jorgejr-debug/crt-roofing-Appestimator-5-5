@@ -46,7 +46,7 @@ function PersonAvatar({ profile, size = "normal" }) {
   );
 }
 
-export default function WorkHub({ supabase, authUser, initialTab = "tasks", initialTaskId = "", initialCreateTask = false, initialProposalView = "queue" }) {
+export default function WorkHub({ supabase, authUser, initialTab = "tasks", initialTaskId = "", initialCreateTask = false }) {
   const authUserKey = authUser?.key;
   const [activeTab, setActiveTab] = useState(initialTaskId ? "tasks" : initialTab);
   const [profiles, setProfiles] = useState([]);
@@ -380,7 +380,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
         </>
       ) : null}
 
-      {!loading && activeTab === "proposals" ? <ProposalRequests supabase={supabase} authUser={authUser} profiles={profiles} initialView={initialProposalView} /> : null}
+      {!loading && activeTab === "proposals" ? <ProposalRequests supabase={supabase} authUser={authUser} profiles={profiles} /> : null}
 
       {!loading && activeTab === "messages" ? (
         <div className="workHubMessaging">

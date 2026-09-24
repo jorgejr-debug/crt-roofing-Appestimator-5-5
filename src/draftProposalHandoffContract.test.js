@@ -5,12 +5,11 @@ import test from "node:test";
 const app = readFileSync(new URL("./ProposalRequests.jsx", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../supabase/migrations/20260922100000_draft_proposal_handoff.sql", import.meta.url), "utf8");
 
-test("an authorized inspector can attach a PDF or Word draft proposal to the mobile handoff", () => {
-  assert.match(app, /Upload Inspector's Draft Proposal/);
-  assert.match(app, /DRAFT_PROPOSAL_FILE_ACCEPT/);
-  assert.match(app, /pendingDraftProposalFiles/);
-  assert.match(app, /p_has_draft_proposal: draftUpload\.uploaded\.length > 0/);
-  assert.match(app, /customer_document/);
+test("proposal requests accept PDF or Word drafts through protected attachments", () => {
+  assert.match(app, /PROPOSAL_REQUEST_FILE_ACCEPT/);
+  assert.match(app, /Photos & supporting files/);
+  assert.match(app, /Ready to upload when you save or submit/);
+  assert.match(app, /uploadFilesToRequest/);
 });
 
 test("draft handoff waits for Daniela before beginning the estimating SLA", () => {
@@ -21,6 +20,14 @@ test("draft handoff waits for Daniela before beginning the estimating SLA", () =
   assert.match(migration, /SLA started/);
   assert.match(app, /Accept &amp; Start Estimating/);
   assert.match(app, /Request Information/);
+});
+
+test("retired quick inspection entry points are absent while historical packets remain readable", () => {
+  assert.doesNotMatch(app, /extract-inspection-handoff/);
+  assert.doesNotMatch(app, /Quick Inspection Handoff/);
+  assert.doesNotMatch(app, /Organize PLAUD Inspection/);
+  assert.match(app, /Historical Inspection Packet/);
+  assert.match(app, /Original inspection summary or transcript/);
 });
 
 test("draft proposal remains subject to final sales review and production controls", () => {

@@ -7,7 +7,6 @@ import {
   calculateProposalMetrics,
   getSlaDisplay,
   validateProposalRequest,
-  validateQuickInspectionHandoff,
 } from "./proposalRequestWorkflow.js";
 import { downloadProposalRequestPdf, downloadProposalRequestZip } from "./proposalRequestExport.js";
 import FileDropZone from "./FileDropZone.jsx";
@@ -20,12 +19,8 @@ import {
 } from "./proposalRequestAttachments.js";
 import {
   INSPECTION_HANDOFF_FIELD_LABELS,
-  applyInspectionExtractionToDraft,
-  inspectionExtractionReadiness,
 } from "./inspectionHandoffExtraction.js";
 import "./ProposalRequests.css";
-
-const DRAFT_PROPOSAL_FILE_ACCEPT = ".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 const textFields = [
   ["Customer / Job Information", [
@@ -105,7 +100,7 @@ const submittedValue = (value) => {
   return text || "Not provided";
 };
 
-export default function ProposalRequests({ supabase, authUser, profiles = [], initialView = "queue" }) {
+export default function ProposalRequests({ supabase, authUser, profiles = [] }) {
   const [requests, setRequests] = useState([]);
   const [crmLeads, setCrmLeads] = useState([]);
   const [versions, setVersions] = useState([]);
@@ -114,15 +109,9 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
   const [comments, setComments] = useState([]);
   const [attachments, setAttachments] = useState([]);
   const [pendingAttachments, setPendingAttachments] = useState([]);
-  const [pendingDraftProposalFiles, setPendingDraftProposalFiles] = useState([]);
-  const [inspectionText, setInspectionText] = useState("");
-  const [inspectionExtraction, setInspectionExtraction] = useState(null);
-  const [inspectionConfirmed, setInspectionConfirmed] = useState(false);
-  const [inspectionConfirmedFingerprint, setInspectionConfirmedFingerprint] = useState("");
-  const [inspectionBusy, setInspectionBusy] = useState(false);
   const [draft, setDraft] = useState(() => blankDraft(authUser?.key));
   const [selectedId, setSelectedId] = useState("");
-  const [view, setView] = useState(initialView);
+  const [view, setView] = useState("queue");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [submissionNotice, setSubmissionNotice] = useState({ tone: "", text: "" });
@@ -145,7 +134,6 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
   const email = String(authUser?.email || "").toLowerCase();
   const isManager = role === "admin" || role === "cfo";
   const isEstimator = role === "estimator" || email === "daniela@crtroofing.com" || isManager;
-  const danielaProfile = profiles.find((profile) => String(profile.email || "").trim().toLowerCase() === "daniela@crtroofing.com") || null;
   const selected = requests.find((request) => request.id === selectedId) || null;
   const selectedVersions = versions.filter((version) => version.proposal_request_id === selectedId).sort((a, b) => b.version_number - a.version_number);
   const selectedOrders = changeOrders.filter((order) => order.proposal_request_id === selectedId);
@@ -169,15 +157,6 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
       name: profile.full_name || profile.email || "Unknown salesperson",
       ...calculateProposalMetrics(requests.filter((request) => request.salesperson_id === profile.id)),
     })), [profiles, requests]);
-  const inspectionReadiness = useMemo(
-    () => inspectionExtractionReadiness(draft, inspectionExtraction || {}),
-    [draft, inspectionExtraction],
-  );
-  const inspectionFingerprint = useMemo(
-    () => JSON.stringify(Object.keys(INSPECTION_HANDOFF_FIELD_LABELS).map((key) => [key, String(draft[key] ?? "").trim()])),
-    [draft],
-  );
-  const inspectionConfirmationValid = inspectionConfirmed && inspectionConfirmedFingerprint === inspectionFingerprint;
 
   const load = useCallback(async () => {
     const [requestResult, versionResult, orderResult, auditResult, attachmentResult, commentResult, leadResult] = await Promise.all([
@@ -217,72 +196,6 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
       setMessage(success); await load(); return result.data;
     } catch (actionError) { setError(actionError.message || String(actionError)); return null; }
     finally { setBusy(false); }
-  };
-
-  const readFunctionError = async (functionError, fallback) => {
-    let message = functionError?.message || fallback;
-    try {
-      const payload = await functionError?.context?.json();
-      if (payload?.error) message = payload.error;
-    } catch { /* Supabase did not return a JSON error body. */ }
-    return message;
-  };
-
-  const organizeInspectionText = async () => {
-    if (inspectionText.trim().length < 40) {
-      setError("Paste or upload a longer PLAUD summary or transcript before organizing it.");
-      return;
-    }
-    setInspectionBusy(true); setError(""); setMessage(""); setInspectionConfirmed(false); setInspectionConfirmedFingerprint("");
-    const context = {
-      customer_name: draft.customer_name || "",
-      property_name: draft.property_name || "",
-      service_address: draft.service_address || "",
-      project_contact_first_name: draft.project_contact_first_name || "",
-      project_contact_last_name: draft.project_contact_last_name || "",
-      project_contact_phone: draft.project_contact_phone || "",
-      project_contact_email: draft.project_contact_email || "",
-    };
-    try {
-      const { data, error: functionError } = await supabase.functions.invoke("extract-inspection-handoff", {
-        body: { transcript: inspectionText.trim(), context },
-      });
-      if (functionError) throw new Error(await readFunctionError(functionError, "The inspection could not be organized."));
-      if (data?.error) throw new Error(data.error);
-      const organized = applyInspectionExtractionToDraft(draft, data?.extraction || {});
-      setDraft(organized.draft);
-      setInspectionExtraction(organized.extraction);
-      setMessage("Inspection organized. Review the extracted facts, correct anything needed, then confirm before sending.");
-    } catch (organizeError) {
-      setInspectionExtraction(null);
-      setError(organizeError.message || String(organizeError));
-    } finally { setInspectionBusy(false); }
-  };
-
-  const loadInspectionTextFile = async (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      setError("Use a PLAUD text export smaller than 2 MB, or paste the summary.");
-      return;
-    }
-    const extension = String(file.name || "").split(".").pop()?.toLowerCase();
-    if (!["txt", "md", "json"].includes(extension)) {
-      setError("For automatic organization, upload a PLAUD TXT, Markdown, or JSON export. PDFs can still be added as supporting files below.");
-      return;
-    }
-    try {
-      const content = await file.text();
-      setInspectionText(content);
-      setInspectionExtraction(null);
-      setInspectionConfirmed(false);
-      setInspectionConfirmedFingerprint("");
-      setMessage(`${file.name} loaded. Press Organize Inspection.`);
-      setError("");
-    } catch {
-      setError("The PLAUD text export could not be read.");
-    }
   };
 
   const uploadFilesToRequest = async (requestId, files, categoryOverride = "") => {
@@ -409,83 +322,13 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
     }
   };
 
-  const sendQuickInspectionHandoff = async () => {
-    if (inspectionText.trim() && !inspectionExtraction) {
-      setError("Press Organize Inspection and review the result before sending this PLAUD transcript.");
-      return;
-    }
-    if (inspectionExtraction && !inspectionConfirmationValid) {
-      setError("Confirm that the organized inspection accurately reflects what you observed before sending it to Daniela.");
-      return;
-    }
-    const validation = validateQuickInspectionHandoff(draft);
-    if (!validation.valid) {
-      setError(`Add these field essentials before sending: ${validation.missing.join(", ")}`);
-      return;
-    }
-    if (!danielaProfile?.id) {
-      setError("Daniela's active employee profile could not be found. The handoff has not been sent.");
-      return;
-    }
-    const quickPayload = {
-      ...draft,
-      salesperson_id: draft.salesperson_id || authUser.key,
-      assigned_estimator_id: danielaProfile.id,
-      property_name: String(draft.property_name || draft.customer_name || "").trim(),
-      salesperson_notes: [
-        String(draft.salesperson_notes || "").trim(),
-        pendingDraftProposalFiles.length
-          ? "The field inspector supplied a drafted proposal for Daniela to review, correct, and complete."
-          : "Created from a Quick Inspection Handoff. Complete the full Proposal Request before formal submission.",
-      ].filter(Boolean).join("\n\n"),
-    };
-    const saved = await saveDraft(quickPayload);
-    if (!saved?.id) return;
-    if (inspectionExtraction) {
-      const confirmedResult = await supabase.rpc("save_confirmed_inspection_extraction", {
-        p_request_id: saved.id,
-        p_transcript: inspectionText.trim(),
-        p_summary: inspectionExtraction.summary || "",
-        p_extraction: inspectionExtraction,
-        p_confirmed: inspectionConfirmationValid,
-      });
-      if (confirmedResult.error) {
-        setError(`The draft was saved, but the confirmed inspection packet could not be attached: ${confirmedResult.error.message}`);
-        return;
-      }
-    }
-    const draftUpload = pendingDraftProposalFiles.length
-      ? await uploadFilesToRequest(saved.id, pendingDraftProposalFiles, "customer_document")
-      : { uploaded: [], failed: [] };
-    setPendingDraftProposalFiles(draftUpload.failed.map((item) => item.file));
-    if (draftUpload.failed.length) {
-      setError(`The handoff was saved, but the draft proposal was not sent because ${draftUpload.failed.map((item) => `${item.file.name}: ${item.error}`).join("; ")}`);
-      return;
-    }
-    const notification = await supabase.rpc("submit_draft_proposal_handoff", {
-      p_request_id: saved.id,
-      p_has_draft_proposal: draftUpload.uploaded.length > 0,
-    });
-    if (notification.error) {
-      setError(`The draft was saved, but the handoff was not sent to Daniela: ${notification.error.message}`);
-      return;
-    }
-    setPendingDraftProposalFiles([]);
-    setInspectionText(""); setInspectionExtraction(null); setInspectionConfirmed(false); setInspectionConfirmedFingerprint("");
-    setMessage(draftUpload.uploaded.length
-      ? "Draft proposal sent to Daniela for review. The estimating SLA starts only after Daniela accepts it."
-      : "Quick inspection handoff sent to Daniela. The estimating SLA starts only after Daniela accepts it.");
-    setView("queue");
-    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
-  };
-
   const openRequest = (request) => {
     setSelectedId(request.id); setDraft({ ...blankDraft(authUser.key), ...request });
     setPendingAttachments([]);
     setManagementDraft({ estimatorId: request.assigned_estimator_id || "", priority: request.priority || "normal", targetAt: request.target_completion_at ? String(request.target_completion_at).slice(0, 16) : "" });
     setCommentDraft(""); setView("detail"); setError(""); setMessage("");
   };
-  const newRequest = () => { setSelectedId(""); setDraft(blankDraft(authUser.key)); setPendingAttachments([]); setPendingDraftProposalFiles([]); setSubmissionNotice({ tone: "", text: "" }); setView("form"); };
+  const newRequest = () => { setSelectedId(""); setDraft(blankDraft(authUser.key)); setPendingAttachments([]); setSubmissionNotice({ tone: "", text: "" }); setView("form"); };
   const applyCrmLead = (leadId) => {
     const lead = crmLeads.find((item) => item.id === leadId);
     if (!lead) {
@@ -528,15 +371,6 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
     if (invalid.length) setError(invalid.join(" "));
     const valid = files.filter((file) => !validateProposalRequestAttachment(file));
     setPendingAttachments((current) => [...current, ...valid.filter((file) => !current.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified))]);
-  };
-
-  const addPendingDraftProposalFiles = (files) => {
-    const supported = files.filter((file) => /\.(pdf|doc|docx)$/i.test(String(file.name || "")));
-    if (supported.length !== files.length) setError("Draft proposals must be PDF or Word documents (.pdf, .doc, or .docx).");
-    const invalid = supported.map(validateProposalRequestAttachment).filter(Boolean);
-    if (invalid.length) setError(invalid.join(" "));
-    const valid = supported.filter((file) => !validateProposalRequestAttachment(file));
-    setPendingDraftProposalFiles((current) => [...current, ...valid.filter((file) => !current.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified))]);
   };
 
   const uploadAttachments = async (files) => {
@@ -688,65 +522,6 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
       </button>; })}{!queue.length ? <p className="emptyState">No Proposal Requests match this view.</p> : null}</div>
     </> : null}
 
-    {view === "quick" ? <form className="proposalRequestForm" onSubmit={(event) => { event.preventDefault(); void sendQuickInspectionHandoff(); }}>
-      <section className="panel">
-        <p className="eyebrow">Mobile Field Shortcut</p>
-        <h3>Quick Inspection Handoff</h3>
-        <p>Use a PLAUD summary or transcript to organize the field facts, then review and confirm them before sending. Daniela receives the handoff immediately, but her estimating SLA begins only after she accepts it.</p>
-        <div className="proposalAiIntake">
-          <div className="sectionHead"><div><p className="eyebrow">Voice-First Closeout</p><h4>Organize PLAUD Inspection</h4></div><span className="proposalAiPrivacy">Transcript + job contact only · no photos, documents, or pricing sent to AI</span></div>
-          <label className="proposalWide"><span>Paste PLAUD summary or transcript</span><textarea rows="8" value={inspectionText} onChange={(event) => { setInspectionText(event.target.value); setInspectionExtraction(null); setInspectionConfirmed(false); setInspectionConfirmedFingerprint(""); }} placeholder="Paste the inspector's PLAUD summary or transcript here…" /></label>
-          <div className="proposalRequestActions">
-            <label className="secondaryButton proposalTextUpload">Upload PLAUD Text<input type="file" accept=".txt,.md,.json,text/plain,application/json" onChange={(event) => void loadInspectionTextFile(event)} disabled={inspectionBusy || busy} /></label>
-            <button type="button" className="primaryButton" onClick={() => void organizeInspectionText()} disabled={inspectionBusy || busy || inspectionText.trim().length < 40}>{inspectionBusy ? "Organizing…" : inspectionExtraction ? "Organize Again" : "Organize Inspection"}</button>
-          </div>
-          {inspectionExtraction ? <div className="proposalAiReview">
-            <div className="proposalAiSummary"><strong>Estimator summary</strong><p>{inspectionExtraction.summary || "The transcript was organized into the fields below."}</p></div>
-            <div className="proposalAiStatusGrid">
-              <div className={inspectionReadiness.ready ? "ready" : "missing"}><strong>{inspectionReadiness.ready ? "Critical facts found" : "Still required"}</strong>{inspectionReadiness.ready ? <p>Customer, address, scope, and measurements are ready for review.</p> : <ul>{inspectionReadiness.missing.map((item) => <li key={item}>{item}</li>)}</ul>}</div>
-              <div className={inspectionExtraction.needs_confirmation.length ? "confirm" : "ready"}><strong>Needs inspector attention</strong>{inspectionExtraction.needs_confirmation.length ? <ul>{inspectionExtraction.needs_confirmation.map((item) => <li key={item}>{item}</li>)}</ul> : <p>No uncertainty was flagged.</p>}</div>
-            </div>
-            <details><summary>See extracted facts and supporting transcript phrases</summary><div className="proposalAiFacts">{inspectionExtraction.fields.map((item) => <div key={item.key}><span>{INSPECTION_HANDOFF_FIELD_LABELS[item.key] || labelize(item.key)} · {item.confidence} confidence</span><strong>{item.value}</strong><small>Source: {item.evidence || "No supporting phrase returned—verify carefully."}</small></div>)}</div></details>
-            <label className="proposalAcknowledgement"><input type="checkbox" checked={inspectionConfirmationValid} disabled={!inspectionReadiness.ready} onChange={(event) => { setInspectionConfirmed(event.target.checked); setInspectionConfirmedFingerprint(event.target.checked ? inspectionFingerprint : ""); }} /><span><strong>I reviewed the organized inspection.</strong><br />I confirm it accurately reflects what I observed and discussed. I corrected any errors in the fields below.{inspectionConfirmed && !inspectionConfirmationValid ? <><br /><b>Information changed—please review and confirm again.</b></> : null}</span></label>
-          </div> : null}
-        </div>
-        <h4>Review field facts</h4>
-        <p className="smallNote">The organizer fills these fields. The inspector can correct any value before confirming and sending.</p>
-        <div className="proposalFieldGrid">
-          {isManager ? <label className="proposalWide"><span>Assigned salesperson / account owner *</span><select value={draft.salesperson_id || authUser.key} onChange={(event) => setDraft((current) => ({ ...current, salesperson_id: event.target.value }))}>{profiles.filter((profile) => ["salesperson", "admin", "cfo"].includes(String(profile.role || "").toLowerCase())).map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name || profile.email}</option>)}</select><small>Select yourself when this is your customer. This keeps ownership and KPI attribution accurate.</small></label> : null}
-          <label className="proposalWide"><span>Source CRM lead</span><select value={draft.source_lead_id || draft.existing_lead_job_id || ""} onChange={(event) => applyCrmLead(event.target.value)}><option value="">No linked lead — manual handoff</option>{crmLeads.filter((lead) => !["Lost", "Not Qualified"].includes(lead.status)).map((lead) => <option key={lead.id} value={lead.id}>{lead.contact_name || lead.company_name || lead.property_address || "Untitled lead"}</option>)}</select></label>
-          <label><span>Customer / job name *</span><input autoFocus value={draft.customer_name || ""} onChange={(event) => setDraft((current) => ({ ...current, customer_name: event.target.value, property_name: current.property_name || event.target.value }))} /></label>
-          <label><span>Service address *</span><input value={draft.service_address || ""} onChange={(event) => setDraft((current) => ({ ...current, service_address: event.target.value }))} /></label>
-          <label><span>Contact first name</span><input value={draft.project_contact_first_name || ""} onChange={(event) => setDraft((current) => ({ ...current, project_contact_first_name: event.target.value }))} /></label>
-          <label><span>Contact last name</span><input value={draft.project_contact_last_name || ""} onChange={(event) => setDraft((current) => ({ ...current, project_contact_last_name: event.target.value }))} /></label>
-          <label><span>Contact phone</span><input type="tel" value={draft.project_contact_phone || ""} onChange={(event) => setDraft((current) => ({ ...current, project_contact_phone: event.target.value }))} /></label>
-          <label><span>Contact email</span><input type="email" value={draft.project_contact_email || ""} onChange={(event) => setDraft((current) => ({ ...current, project_contact_email: event.target.value }))} /></label>
-          <label><span>Work type</span><input value={draft.work_type || ""} onChange={(event) => setDraft((current) => ({ ...current, work_type: event.target.value }))} placeholder="Repair, TPO, SPF, tile, coating…" /></label>
-          <label><span>Measurements / squares *</span><input value={draft.measurements || ""} onChange={(event) => setDraft((current) => ({ ...current, measurements: event.target.value }))} placeholder="Example: 24 SQ plus 180 LF parapet" /></label>
-          <label className="proposalWide"><span>Main scope observed *</span><textarea rows="4" value={draft.scope_of_work || ""} onChange={(event) => setDraft((current) => ({ ...current, scope_of_work: event.target.value }))} placeholder="Dictate what you saw, what the customer needs, and the recommended system or repair." /></label>
-          <label className="proposalWide"><span>Roof measurement notes</span><textarea rows="3" value={draft.roof_measurement_notes || ""} onChange={(event) => setDraft((current) => ({ ...current, roof_measurement_notes: event.target.value }))} placeholder="Sections, linear feet, layers, penetrations, parapets…" /></label>
-          <label className="proposalWide"><span>Risks, access, or special conditions</span><textarea rows="3" value={draft.special_conditions || ""} onChange={(event) => setDraft((current) => ({ ...current, special_conditions: event.target.value }))} placeholder="Roof access, overspray, parking, HVAC, crane, permits…" /></label>
-          <label className="proposalWide"><span>Customer requests or verbal commitments</span><textarea rows="3" value={draft.customer_requests || ""} onChange={(event) => setDraft((current) => ({ ...current, customer_requests: event.target.value }))} /></label>
-          <label><span>Customer deadline</span><input type="date" value={draft.customer_deadline || ""} onChange={(event) => setDraft((current) => ({ ...current, customer_deadline: event.target.value }))} /></label>
-          <label><span>Priority</span><select value={draft.priority} onChange={(event) => setDraft((current) => ({ ...current, priority: event.target.value }))}>{PROPOSAL_REQUEST_PRIORITIES.map((value) => <option key={value}>{value}</option>)}</select></label>
-        </div>
-      </section>
-      <section className="panel proposalDraftUpload">
-        <p className="eyebrow">Optional Fast Track</p>
-        <h3>Upload Inspector's Draft Proposal</h3>
-        <p>Attach the proposal you already drafted. Daniela will review it, correct or complete it, and create the controlled final version. PDF and Word files are accepted.</p>
-        <FileDropZone accept={DRAFT_PROPOSAL_FILE_ACCEPT} label={pendingDraftProposalFiles.length ? "Add Another Draft Proposal" : "Choose Draft Proposal PDF or Word File"} help="PDF, DOC, or DOCX — up to 25 MB each." onFiles={addPendingDraftProposalFiles} disabled={busy} />
-        {pendingDraftProposalFiles.length ? <div className="proposalPendingFiles"><strong>Draft proposal ready to send:</strong>{pendingDraftProposalFiles.map((file, index) => <div key={`${file.name}-${file.size}-${file.lastModified}`}><span>{file.name}</span><button type="button" className="secondaryButton" onClick={() => setPendingDraftProposalFiles((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></div>)}</div> : <p className="emptyState">No draft proposal attached. You can still send the inspection handoff with field notes and photos.</p>}
-      </section>
-      <section className="panel proposalIntakeAttachments">
-        <h3>Roof photos &amp; field files</h3>
-        <p>Select, photograph, paste, or drop multiple photos and reports. Files upload into the same protected Proposal Request folder.</p>
-        <FileDropZone accept={PROPOSAL_REQUEST_FILE_ACCEPT} label={pendingAttachments.length ? "Add More Photos & Files" : "Add Roof Photos & Files"} help="Multiple photos and documents are supported." onFiles={addPendingAttachments} disabled={busy} />
-        {pendingAttachments.length ? <div className="proposalPendingFiles"><strong>Ready to send:</strong>{pendingAttachments.map((file, index) => <div key={`${file.name}-${file.size}-${file.lastModified}`}><span>{file.name}</span><button type="button" className="secondaryButton" onClick={() => setPendingAttachments((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></div>)}</div> : <p className="emptyState">No photos or files selected yet.</p>}
-      </section>
-      <div className="proposalStickyActions"><button type="button" className="secondaryButton" disabled={busy} onClick={() => setView("queue")}>Cancel</button><button type="submit" className="primaryButton" disabled={busy || inspectionBusy || Boolean(inspectionExtraction && !inspectionConfirmationValid)}>{busy ? "Sending…" : inspectionExtraction && !inspectionConfirmationValid ? "Confirm Inspection First" : "Send Quick Handoff to Daniela"}</button></div>
-    </form> : null}
-
     {view === "form" ? <form className="proposalRequestForm" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
       <section className="panel"><h3>Request setup</h3><div className="proposalFieldGrid">
         <label className="proposalWide"><span>Source CRM lead</span><select value={draft.source_lead_id || draft.existing_lead_job_id || ""} onChange={(e) => applyCrmLead(e.target.value)}><option value="">No linked lead — manual request</option>{crmLeads.filter((lead) => !["Lost", "Not Qualified"].includes(lead.status)).map((lead) => <option key={lead.id} value={lead.id}>{lead.contact_name || lead.company_name || lead.property_address || "Untitled lead"} · Originated by {lead.originator_name || lead.originator_email || "Unknown"}</option>)}</select></label>
@@ -777,11 +552,11 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
       {selected.missing_information_notes ? <section className="panel proposalMissing"><h3>Missing information requested</h3><p>{selected.missing_information_notes}</p><button type="button" className="primaryButton" onClick={() => setView("form")}>Update request</button></section> : null}
       <section className="panel"><h3>Timing & responsibility</h3><div className="proposalFacts"><span>Submitted <b>{dateTime(selected.submitted_at || selected.draft_handoff_submitted_at)}</b></span><span>Target <b>{selected.draft_handoff_status === "awaiting_review" ? "Starts when Daniela accepts" : dateTime(selected.target_completion_at)}</b></span><span>Priority <b>{labelize(selected.priority)}</b></span><span>Estimator <b>{profiles.find((p) => p.id === selected.assigned_estimator_id)?.full_name || "Daniela"}</b></span></div></section>
       {selected.inspection_confirmed_at ? <section className="panel proposalAiPacket">
-        <div className="sectionHead"><div><p className="eyebrow">Inspector-Confirmed Field Evidence</p><h3>PLAUD Inspection Packet</h3></div><span className="proposalStatus signed">Confirmed by {inspectionConfirmerName} · {dateTime(selected.inspection_confirmed_at)}</span></div>
+        <div className="sectionHead"><div><p className="eyebrow">Legacy Inspector-Confirmed Evidence</p><h3>Historical Inspection Packet</h3></div><span className="proposalStatus signed">Confirmed by {inspectionConfirmerName} · {dateTime(selected.inspection_confirmed_at)}</span></div>
         <p className="proposalAiPacketSummary">{selected.inspection_summary || "The inspector confirmed the structured field facts below."}</p>
         <div className="proposalAiFacts">{(selected.inspection_extraction?.fields || []).map((item) => <div key={item.key}><span>{INSPECTION_HANDOFF_FIELD_LABELS[item.key] || labelize(item.key)} · {item.confidence || "unrated"} confidence</span><strong>{item.value}</strong><small>Source: {item.evidence || "Review the original transcript."}</small></div>)}</div>
         {(selected.inspection_extraction?.missing_critical || []).length ? <div className="proposalAiWarning"><strong>Extractor flagged missing information</strong><ul>{selected.inspection_extraction.missing_critical.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
-        <details><summary>Original PLAUD summary or transcript</summary><pre className="proposalTranscript">{selected.inspection_transcript}</pre></details>
+        <details><summary>Original inspection summary or transcript</summary><pre className="proposalTranscript">{selected.inspection_transcript}</pre></details>
       </section> : null}
       <section className="panel proposalSubmittedDetails"><div className="sectionHead"><div><h3>Submitted Request Details</h3><p>The complete information submitted by the salesperson for Daniela's review.</p></div>{isEstimator ? <div className="proposalRequestActions"><button type="button" className="secondaryButton" disabled={Boolean(exportBusy)} onClick={exportPdf}>Download Proposal Info PDF</button><button type="button" className="primaryButton" disabled={Boolean(exportBusy)} onClick={() => void exportZip()}>{exportBusy === "zip" ? "Preparing ZIP..." : "Download Complete ZIP"}</button></div> : null}</div>
         <details open><summary>Request setup</summary><div className="proposalReadOnlyGrid">

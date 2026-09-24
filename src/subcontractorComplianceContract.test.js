@@ -28,7 +28,7 @@ test("subcontractor directory is protected and stores private COI metadata", () 
 });
 
 test("multiple subcontractor documents remain private and manager-only", () => {
-  assert.match(documentsMigration, /CREATE TABLE public\.subcontractor_documents/);
+  assert.match(documentsMigration, /CREATE TABLE(?: IF NOT EXISTS)? public\.subcontractor_documents/);
   assert.match(documentsMigration, /ALTER TABLE public\.subcontractor_documents ENABLE ROW LEVEL SECURITY/);
   assert.match(documentsMigration, /can_manage_subcontractor_compliance\(\)/);
   assert.doesNotMatch(documentsMigration, /TO anon/);

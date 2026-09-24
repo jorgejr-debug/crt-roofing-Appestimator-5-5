@@ -1850,7 +1850,6 @@ const DEFAULT_INPUTS = {
   tileCustomMaterials: [],
   tileFieldTileQuantity: 0,
   tileFieldTileCost: 0,
-  tileUnderlaymentType: "syntheticTitanium50",
   tileFlatTileNailsQuantityManual: "",
   tileSTileNailsQuantityManual: "",
   tileUnderlaymentQuantity: 0,
@@ -16538,7 +16537,7 @@ function App() {
                 shingleRakeLinearFeet: quickMeasureData.rakeLinearFeet || current.shingleRakeLinearFeet,
                 shingleEaveLinearFeet: quickMeasureData.eaveLinearFeet || current.shingleEaveLinearFeet,
                 shingleRidgeLinearFeet: quickMeasureData.ridgeHipLinearFeet || current.shingleRidgeLinearFeet,
-                shingleHipLinearFeet: 0 || current.shingleHipLinearFeet,
+                shingleHipLinearFeet: current.shingleHipLinearFeet,
                 shinglePerimeterLinearFeet: quickMeasureData.dripEdgeLinearFeet || current.shinglePerimeterLinearFeet,
                 shingleDripEdgeLinearFeet: quickMeasureData.dripEdgeLinearFeet || current.shingleDripEdgeLinearFeet,
               }));
@@ -22306,9 +22305,9 @@ function App() {
                         </Field>
                       </div>
                       <div className="detailList" style={{ marginTop: 12 }}>
-                        <DetailRow label="Selected underlayment type" value={tileUnderlaymentType === "felt30" ? "30# Felt" : "Synthetic Titanium-50 Felt"} />
-                        <DetailRow label="Coverage per roll" value={`${num(tileUnderlaymentCoverageSqPerRoll, 0)} SQ / roll`} />
-                        <DetailRow label="Rolls needed" value={num(tileUnderlaymentRollsCalculated, 0)} />
+                        <DetailRow label="Selected underlayment type" value={calculation.tileUnderlaymentType === "felt30" ? "30# Felt" : "Synthetic Titanium-50 Felt"} />
+                        <DetailRow label="Coverage per roll" value={`${num(calculation.tileUnderlaymentCoverageSqPerRoll, 0)} SQ / roll`} />
+                        <DetailRow label="Rolls needed" value={num(calculation.tileUnderlaymentRollsCalculated, 0)} />
                         <DetailRow
                           label="Unit cost"
                           value={money2(calculation.materialItems.find((item) => item.key === "tileUnderlayment")?.unitPrice || 0)}
@@ -27593,7 +27592,7 @@ function App() {
       { key: "crm", label: "Customers", icon: "C", matches: ["crm"] },
       { key: "fieldNotes", label: "Inspections", icon: "I", matches: ["fieldNotes"] },
       { key: "estimateTemplates", label: "Estimates", icon: "E", matches: ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"] },
-      { key: "proposalRequests", label: "Proposals", icon: "P", matches: ["proposalRequests", "proposalQuickHandoff"] },
+      { key: "proposalRequests", label: "Proposals", icon: "P", matches: ["proposalRequests"] },
       { key: "subcontractors", label: "Subcontractors", icon: "SC", matches: ["subcontractors"] },
       { key: "approvedJobs", label: "Approved Jobs", icon: "AJ", matches: ["approvedJobs", "approvedJob", "jobMetrics", "pastJobInsights"] },
       { key: "activeJobs", label: "Active Jobs", icon: "J", matches: ["activeJobs", "activeJob", "fieldOperations"] },
@@ -27835,7 +27834,6 @@ function App() {
   if (activeTemplate === "settings") return renderAuthenticatedLayout(renderSettingsScreen());
   if (activeTemplate === "workHub") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTaskId={workHubInitialTaskId} initialCreateTask={workHubInitialCreateTask} />);
   if (activeTemplate === "proposalRequests") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTab="proposals" />);
-  if (activeTemplate === "proposalQuickHandoff") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTab="proposals" initialProposalView="quick" />);
   if (activeTemplate === "subcontractors") return renderAuthenticatedLayout(renderSubcontractorDirectoryScreen());
   if (activeTemplate === "sprayFoam") return renderAuthenticatedLayout(renderSprayFoamScreen());
   if (activeTemplate === "shingle") return renderAuthenticatedLayout(renderShingleScreen());
