@@ -3,8 +3,6 @@ import React from "react";
 import { useLoadScript } from "@react-google-maps/api";
 import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
-import { getDocument, GlobalWorkerOptions } from "pdfjs-dist/build/pdf.mjs";
-import pdfWorkerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import WorkHub from "./WorkHub.jsx";
 import DashboardTasks from "./DashboardTasks.jsx";
 import SubcontractorCompliance from "./SubcontractorCompliance.jsx";
@@ -108,7 +106,20 @@ import {
   routeGoogleDirectionsDirect,
 } from "./googleMapsTravelService.js";
 
-GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
+let pdfReaderPromise = null;
+
+async function loadPdfReader() {
+  if (!pdfReaderPromise) {
+    pdfReaderPromise = Promise.all([
+      import("pdfjs-dist/build/pdf.mjs"),
+      import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
+    ]).then(([pdfModule, workerModule]) => {
+      pdfModule.GlobalWorkerOptions.workerSrc = workerModule.default;
+      return pdfModule;
+    });
+  }
+  return pdfReaderPromise;
+}
 
 const AUTH_KEY = "crt_roofing_auth_v1";
 const USERS_KEY = "crt_roofing_users_v1";
@@ -12324,6 +12335,7 @@ function App() {
 
     try {
       const arrayBuffer = await file.arrayBuffer();
+      const { getDocument } = await loadPdfReader();
       const pdf = await getDocument({ data: arrayBuffer }).promise;
       let extractedText = "";
 
