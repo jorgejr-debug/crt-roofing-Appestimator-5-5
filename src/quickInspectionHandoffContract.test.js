@@ -7,10 +7,9 @@ const workHub = readFileSync(new URL("./WorkHub.jsx", import.meta.url), "utf8");
 const proposals = readFileSync(new URL("./ProposalRequests.jsx", import.meta.url), "utf8");
 const handoffMigration = readFileSync(new URL("../supabase/migrations/20260922100000_draft_proposal_handoff.sql", import.meta.url), "utf8");
 
-test("authorized inspectors receive a dashboard shortcut into the mobile inspection handoff", () => {
-  assert.match(app, /Quick Inspection Handoff/);
-  assert.match(app, /canCreateQuickInspectionHandoff/);
-  assert.match(app, /setActiveTemplate\("proposalQuickHandoff"\)/);
+test("the dashboard no longer exposes the quick inspection handoff shortcut", () => {
+  assert.doesNotMatch(app, /<strong>Quick Inspection Handoff<\/strong>/);
+  assert.doesNotMatch(app, /canCreateQuickInspectionHandoff/);
   assert.match(app, /initialProposalView="quick"/);
   assert.match(workHub, /initialProposalView = "queue"/);
   assert.match(workHub, /initialView=\{initialProposalView\}/);

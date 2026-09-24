@@ -9967,9 +9967,6 @@ function App() {
   const isAdminUser = authRole === "admin";
   const isFinanceUser = authRole === "admin" || authRole === "cfo";
   const isProjectManager = authRole === "project_manager";
-  const quickInspectionEmail = normalizeEmployeeEmail(authUser?.email);
-  const canCreateQuickInspectionHandoff = new Set(["admin", "cfo", "salesperson", "estimator"]).has(authRole)
-    && quickInspectionEmail !== "daniela@crtroofing.com";
   const canManageEmployeeWages = isFinanceUser;
   const canManageSubcontractorCompliance = isFinanceUser || normalizeEmployeeEmail(authUser?.email) === "natalia@crtroofing.com";
   const canManageSharedJobData = canManageSharedJobs(authRole);
@@ -19769,7 +19766,7 @@ function App() {
               <button type="button" className="dangerButton" onClick={() => startNewCrmLeadDraft()}>Clear</button>
             </div>
             <p className="smallNote" style={{ margin: "10px 0 0" }}>
-              Use Send for Inspection only when the caller needs a roof inspection. Ivan will receive a task notification with these details.
+              Use Send for Inspection only when the caller needs a roof inspection. Ivan will receive an in-app task and an email that a customer is waiting to be scheduled.
             </p>
           </Section>
         ) : null}
@@ -22941,7 +22938,7 @@ function App() {
             <button type="button" className="templateCard" onClick={openDashboardInspectionRequest}>
               <span className="eyebrow">Office Call</span>
               <strong>Send for Inspection</strong>
-              <p>Capture the caller and notify Ivan.</p>
+              <p>Capture the caller and email Ivan to schedule the inspection.</p>
             </button>
           ) : null}
           <button type="button" className="templateCard" onClick={() => {
@@ -22958,13 +22955,6 @@ function App() {
               <span className="eyebrow">Sales</span>
               <strong>Proposal Request</strong>
               <p>Submit scope and estimating information.</p>
-            </button>
-          ) : null}
-          {canCreateQuickInspectionHandoff ? (
-            <button type="button" className="templateCard" onClick={() => setActiveTemplate("proposalQuickHandoff")}>
-              <span className="eyebrow">Field Shortcut</span>
-              <strong>Quick Inspection Handoff</strong>
-              <p>Dictate key scope notes and send photos to Daniela.</p>
             </button>
           ) : null}
           <button type="button" className="templateCard" onClick={() => setActiveTemplate("activeJobs")}>

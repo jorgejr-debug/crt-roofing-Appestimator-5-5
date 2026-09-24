@@ -105,7 +105,7 @@ Deno.serve(async (request) => {
   const subject = isComment
     ? `New comment on task: ${task.title}`
     : isInspectionAssignment
-      ? "New roof inspection assigned"
+      ? "Customer waiting to schedule a roof inspection"
       : `New task: ${task.title}`;
   const html = isComment ? `
     <div style="font-family:Arial,sans-serif;color:#102536;line-height:1.5;max-width:640px;margin:auto">
@@ -120,7 +120,7 @@ Deno.serve(async (request) => {
     <div style="font-family:Arial,sans-serif;color:#102536;line-height:1.5;max-width:640px;margin:auto">
       <h1 style="font-size:24px">New roof inspection request</h1>
       <p>Hi ${escapeHtml(recipientName)},</p>
-      <p>A new customer inspection has been assigned to you in the CRT Roofing app.</p>
+      <p>A customer is waiting for you to contact them and schedule their roof inspection.</p>
       <p>Open the secure task to review the customer, property, work order, and inspection details.</p>
       <p style="margin-top:22px"><a href="${safeAppUrl}" style="display:inline-block;background:#087ec4;color:white;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:bold">Open Inspection Task</a></p>
     </div>` : `

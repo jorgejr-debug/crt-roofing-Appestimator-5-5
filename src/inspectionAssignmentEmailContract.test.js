@@ -15,7 +15,8 @@ test("sending a lead for inspection queues Ivan's task and email notification", 
 
 test("inspection assignments receive a privacy-safe dedicated email", () => {
   assert.match(emailFunction, /isInspectionAssignment/);
-  assert.match(emailFunction, /New roof inspection assigned/);
+  assert.match(emailFunction, /Customer waiting to schedule a roof inspection/);
   assert.match(emailFunction, /New roof inspection request/);
+  assert.match(emailFunction, /A customer is waiting for you to contact them and schedule their roof inspection/);
   assert.match(emailFunction, /Open Inspection Task/);
 });
