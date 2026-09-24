@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import jsPDF from "jspdf";
 import FileDropZone from "./FileDropZone.jsx";
 import { INVOICE_REQUEST_STATUSES } from "./invoiceWorkflow.js";
+import ActionFeedback from "./ActionFeedback.jsx";
 
 const money = (value) => Number(value || 0).toLocaleString("en-US", { style: "currency", currency: "USD" });
 const safeFileName = (value) => String(value || "invoice.pdf").replace(/[^a-zA-Z0-9._-]+/g, "-");
@@ -343,6 +344,7 @@ export default function InvoiceQueue({ supabase, authUser, onClose }) {
 
   return (
     <div className="appShell">
+      <ActionFeedback message={message} tone={messageType === "error" ? "error" : "success"} onDismiss={() => { setMessage(""); setMessageType(""); }} />
       <header className="hero">
         <div><p className="eyebrow">Accounting</p><h1>Invoice Requests</h1><p className="intro">Create invoices directly or complete jobs sent from the field.</p></div>
         <div className="actionRow"><button type="button" className="primaryButton" onClick={() => setShowNewInvoice((value) => !value)}>{showNewInvoice ? "Cancel New Invoice" : "New Invoice"}</button><button type="button" className="secondaryButton" onClick={onClose}>Back to dashboard</button></div>

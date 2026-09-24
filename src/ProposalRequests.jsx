@@ -11,6 +11,7 @@ import {
 } from "./proposalRequestWorkflow.js";
 import { downloadProposalRequestPdf, downloadProposalRequestZip } from "./proposalRequestExport.js";
 import FileDropZone from "./FileDropZone.jsx";
+import ActionFeedback from "./ActionFeedback.jsx";
 import {
   PROPOSAL_REQUEST_FILE_ACCEPT,
   buildProposalRequestAttachmentPath,
@@ -671,6 +672,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
   };
 
   return <section className="proposalRequestWorkspace">
+    <ActionFeedback message={error || message} tone={error ? "error" : "success"} onDismiss={() => { setError(""); setMessage(""); }} />
     <div className="proposalRequestTopbar">
       <div><p className="eyebrow">Centralized Estimating</p><h2>Proposal Requests</h2><p>Complete scope in, authorized production scope out.</p></div>
       <div className="proposalRequestActions"><button type="button" className="secondaryButton" onClick={() => setView("queue")}>Queue</button>{canCreateQuickHandoff ? <button type="button" className="secondaryButton" onClick={newQuickHandoff}>Quick Inspection Handoff</button> : null}<button type="button" className="primaryButton" onClick={newRequest}>New Proposal Request</button></div>

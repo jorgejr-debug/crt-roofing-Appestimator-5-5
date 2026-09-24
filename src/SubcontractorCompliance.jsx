@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { SUBCONTRACTOR_COI_BUCKET, buildCoiStoragePath, getSubcontractorComplianceStatus, normalizeSubcontractorPayload, validateSubcontractor } from "./subcontractorCompliance.js";
 import FileDropZone from "./FileDropZone.jsx";
+import ActionFeedback from "./ActionFeedback.jsx";
 import "./SubcontractorCompliance.css";
 
 const blankRecord = () => ({ id: crypto.randomUUID(), company_name: "", trade: "", contact_name: "", phone: "", email: "", license_status: "unlicensed", license_number: "", license_expiration_date: "", workers_comp_active: false, workers_comp_expiration_date: "", coi_names_crt_insured: false, coi_storage_path: "", coi_file_name: "", notes: "", is_active: true });
@@ -81,6 +82,7 @@ export default function SubcontractorCompliance({ supabase, authUser, readOnly =
   };
 
   return <section className="subcontractorCompliance">
+    <ActionFeedback message={error || message} tone={error ? "error" : "success"} onDismiss={() => { setError(""); setMessage(""); }} />
     <div className="subcontractorSummary">
       <span><b>{records.filter((record) => record.is_active).length}</b> Approved vendors</span>
       <span><b>{statuses.filter((status) => status.key === "compliant").length}</b> Compliant</span>

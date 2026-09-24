@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import ActionFeedback from "./ActionFeedback.jsx";
 
 const blankEntry = { entryId: "", websiteName: "", websiteUrl: "", category: "Other", username: "", password: "", secretNotes: "" };
 
@@ -87,6 +88,7 @@ export default function AccountAccessVault({ supabase, onClose }) {
 
   return (
     <div className="appShell">
+      <ActionFeedback message={error || message} tone={error ? "error" : "success"} onDismiss={() => { setError(""); setMessage(""); }} />
       <header className="hero">
         <div><p className="eyebrow">Administration</p><h1>Account Access</h1><p className="intro">Two approvals protect company website and account login information.</p></div>
         <button type="button" className="secondaryButton" onClick={onClose}>Back to dashboard</button>

@@ -1,0 +1,58 @@
+.actionFeedbackToast {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 10000;
+  width: min(430px, calc(100vw - 36px));
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: start;
+  padding: 14px 15px;
+  border: 1px solid #6fc996;
+  border-radius: 14px;
+  background: #e8fff4;
+  color: #0b5d38;
+  box-shadow: 0 18px 46px rgba(13, 42, 57, 0.24);
+}
+
+.actionFeedbackToast.error {
+  border-color: #ed9aa7;
+  background: #fff0f2;
+  color: #8b1e2d;
+}
+
+.actionFeedbackIcon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: #168554;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.actionFeedbackToast.error .actionFeedbackIcon { background: #b62d40; }
+.actionFeedbackCopy { display: grid; gap: 3px; min-width: 0; }
+.actionFeedbackCopy strong { font-size: 15px; line-height: 1.25; }
+.actionFeedbackCopy p { margin: 0; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
+.actionFeedbackClose {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  cursor: pointer;
+  font: inherit;
+  font-size: 22px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.72;
+}
+.actionFeedbackClose:hover { opacity: 1; }
+
+@media (max-width: 600px) {
+  .actionFeedbackToast { top: 10px; right: 10px; left: 10px; width: auto; }
+}

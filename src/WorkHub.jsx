@@ -3,6 +3,7 @@ import "./WorkHub.css";
 import { TASK_DELETE_CONFIRMATION, canDeleteTask } from "./taskDeletion.js";
 import { isTaskClosed, taskMatchesView, taskStatusLabel, taskType, taskTypeLabel } from "./taskStatus.js";
 import ProposalRequests from "./ProposalRequests.jsx";
+import ActionFeedback from "./ActionFeedback.jsx";
 
 const PROFILE_BUCKET = "profile-photos";
 
@@ -258,6 +259,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
 
   return (
     <div className="appShell workHub">
+      <ActionFeedback message={error || taskNotice} tone={error ? "error" : "success"} onDismiss={() => { setError(""); setTaskNotice(""); }} />
       <header className="workHubHeader">
         <div><p className="eyebrow">Collaboration</p><h1>Tasks & Messages</h1><p className="intro">Assign work, discuss projects, and reach your team from one place.</p></div>
         <div className="workHubStats">

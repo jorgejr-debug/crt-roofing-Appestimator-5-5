@@ -10,6 +10,7 @@ import DashboardTasks from "./DashboardTasks.jsx";
 import SubcontractorCompliance from "./SubcontractorCompliance.jsx";
 import InvoiceQueue from "./InvoiceQueue.jsx";
 import AccountAccessVault from "./AccountAccessVault.jsx";
+import ActionFeedback from "./ActionFeedback.jsx";
 import { calculateMiguelKpis } from "./productionKpiWorkflow.js";
 import {
   buildInspectionTask,
@@ -13707,7 +13708,7 @@ function App() {
     setSessionMessageType(handoffResult?.error ? "error" : "success");
     setSessionMessage(handoffResult?.error
       ? "Ivan received the inspection task, but the CRM milestone did not sync. Open the lead and save it again before relying on the KPI."
-      : "Inspection request sent to Ivan. His task and email notification were queued, and the discussion is ready.");
+      : "Inspection request sent to Ivan. His task and email notification were queued successfully.");
 
     if (resetAfter) {
       startNewCrmLeadDraft({
@@ -27650,6 +27651,11 @@ function App() {
         </aside>
         <button type="button" className="portalDesktopLauncher" onClick={() => setSidebarCollapsed(false)} aria-label="Open sidebar" title="Open sidebar">☰</button>
         <button type="button" className="portalMobileMenu" onClick={() => setSidebarMobileOpen(true)} aria-label="Open navigation">Menu</button>
+        <ActionFeedback
+          message={sessionMessage}
+          tone={sessionMessageType === "error" ? "error" : "success"}
+          onDismiss={() => { setSessionMessage(""); setSessionMessageType(""); }}
+        />
         <main className="portalMain">{screen}</main>
       </div>
     );
