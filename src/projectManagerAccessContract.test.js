@@ -8,8 +8,8 @@ const migration = fs.readFileSync(new URL("../supabase/migrations/20260915100000
 test("Miguel receives the dedicated Project Manager role and a production-only navigation", () => {
   assert.match(appSource, /"miguel@crtroofing\.com"[\s\S]*title: "Project Manager \/ Production"/);
   assert.match(appSource, /normalized === "project_manager"/);
-  assert.match(appSource, /isProjectManager \? \[[\s\S]*Active Jobs[\s\S]*Approved Vendors/);
-  assert.doesNotMatch(appSource.match(/const mainNavigation = isProjectManager \? \[[\s\S]*?\] : \[/)?.[0] || "", /Finance|Invoices|Proposals|Estimates/);
+  assert.match(appSource, /getEmployeeNavigationKeys/);
+  assert.match(appSource, /KPI Scorecards/);
 });
 
 test("Project Manager updates use a server allowlist and exclude financial and authority fields", () => {

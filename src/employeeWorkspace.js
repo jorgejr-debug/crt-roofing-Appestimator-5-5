@@ -59,3 +59,29 @@ export function getEmployeeWorkspace({ email = "", role = "", capabilities = {} 
 
   return { ...workspace, actions: allowed };
 }
+
+export function getEmployeeNavigationKeys({ email = "", role = "", capabilities = {} } = {}) {
+  const normalizedEmail = normalize(email);
+  const normalizedRole = normalize(role);
+  let keys = ["dashboard", "workHub", "crm", "fieldNotes", "proposalRequests", "activeJobs"];
+
+  if (normalizedEmail === "chris@crtroofing.com") {
+    keys = ["dashboard", "workHub", "crm", "proposalRequests"];
+  } else if (normalizedEmail === "ivan@crtroofing.com") {
+    keys = ["dashboard", "workHub", "crm", "fieldNotes", "estimateTemplates", "proposalRequests", "approvedJobs"];
+  } else if (normalizedEmail === "daniela@crtroofing.com") {
+    keys = ["dashboard", "workHub", "crm", "proposalRequests", "approvedJobs", "activeJobs"];
+  } else if (normalizedEmail === "miguel@crtroofing.com" || normalizedRole === "project_manager") {
+    keys = ["dashboard", "workHub", "kpis", "activeJobs", "subcontractors"];
+  } else if (normalizedEmail === "natalia@crtroofing.com") {
+    keys = ["dashboard", "workHub", "subcontractors", "approvedJobs", "activeJobs", "invoices", "cfoDashboard"];
+  } else if (normalizedRole === "cfo" || normalizedRole === "admin") {
+    keys = ["dashboard", "workHub", "crm", "fieldNotes", "estimateTemplates", "proposalRequests", "subcontractors", "approvedJobs", "activeJobs", "invoices", "archive", "cfoDashboard"];
+  }
+
+  return keys.filter((key) => {
+    if (key === "invoices") return Boolean(capabilities.canAccessInvoices);
+    if (key === "cfoDashboard") return Boolean(capabilities.canAccessFinance);
+    return true;
+  });
+}

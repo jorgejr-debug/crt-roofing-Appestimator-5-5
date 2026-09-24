@@ -11,7 +11,7 @@ import SubcontractorCompliance from "./SubcontractorCompliance.jsx";
 import InvoiceQueue from "./InvoiceQueue.jsx";
 import AccountAccessVault from "./AccountAccessVault.jsx";
 import ActionFeedback from "./ActionFeedback.jsx";
-import { getEmployeeWorkspace } from "./employeeWorkspace.js";
+import { getEmployeeNavigationKeys, getEmployeeWorkspace } from "./employeeWorkspace.js";
 import { calculateMiguelKpis } from "./productionKpiWorkflow.js";
 import {
   buildInspectionTask,
@@ -241,7 +241,7 @@ const EMPLOYEE_DIRECTORY_BY_EMAIL = {
   },
   "jorge@crtroofing.com": {
     displayName: "Jorge",
-    title: "CFO",
+    title: "CEO / Spray Foam Production",
     canViewAllProposals: true,
     canAccessCfoDashboard: true,
   },
@@ -27568,26 +27568,26 @@ function App() {
   );
 
   const renderAuthenticatedLayout = (screen) => {
-    const mainNavigation = isProjectManager ? [
-      { key: "dashboard", label: "Dashboard", icon: "D", matches: ["dashboard"] },
-      { key: "workHub", label: "Tasks & Messages", icon: "T", matches: ["workHub"] },
-      { key: "kpis", label: "KPI Scorecards", icon: "K", matches: ["kpis"] },
-      { key: "activeJobs", label: "Active Jobs", icon: "J", matches: ["activeJobs", "activeJob", "fieldOperations", "approvedJob"] },
-      { key: "subcontractors", label: "Approved Vendors", icon: "SC", matches: ["subcontractors"] },
-    ] : [
-      { key: "dashboard", label: "Dashboard", icon: "D", matches: ["dashboard"] },
-      { key: "workHub", label: "Tasks & Messages", icon: "T", matches: ["workHub"] },
-      { key: "crm", label: "Customers", icon: "C", matches: ["crm"] },
-      { key: "fieldNotes", label: "Inspections", icon: "I", matches: ["fieldNotes"] },
-      { key: "estimateTemplates", label: "Estimates", icon: "E", matches: ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"] },
-      { key: "proposalRequests", label: "Proposals", icon: "P", matches: ["proposalRequests"] },
-      { key: "subcontractors", label: "Subcontractors", icon: "SC", matches: ["subcontractors"] },
-      { key: "approvedJobs", label: "Approved Jobs", icon: "AJ", matches: ["approvedJobs", "approvedJob", "jobMetrics", "pastJobInsights"] },
-      { key: "activeJobs", label: "Active Jobs", icon: "J", matches: ["activeJobs", "activeJob", "fieldOperations"] },
-      ...(canAccessInvoiceQueue ? [{ key: "invoices", label: "Invoices", icon: "I$", matches: ["invoices"] }] : []),
-      { key: "archive", label: "Archive", icon: "A", matches: ["archive"] },
-      ...(canAccessCfoDashboard ? [{ key: "cfoDashboard", label: "Finance", icon: "$", matches: ["cfoDashboard"] }] : []),
-    ];
+    const navigationDefinitions = {
+      dashboard: { key: "dashboard", label: "Dashboard", icon: "D", matches: ["dashboard"] },
+      workHub: { key: "workHub", label: "Tasks & Messages", icon: "T", matches: ["workHub"] },
+      kpis: { key: "kpis", label: "KPI Scorecards", icon: "K", matches: ["kpis"] },
+      crm: { key: "crm", label: "Customers", icon: "C", matches: ["crm"] },
+      fieldNotes: { key: "fieldNotes", label: "Inspections", icon: "I", matches: ["fieldNotes"] },
+      estimateTemplates: { key: "estimateTemplates", label: "Estimates", icon: "E", matches: ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"] },
+      proposalRequests: { key: "proposalRequests", label: "Proposals", icon: "P", matches: ["proposalRequests"] },
+      subcontractors: { key: "subcontractors", label: "Approved Vendors", icon: "SC", matches: ["subcontractors"] },
+      approvedJobs: { key: "approvedJobs", label: "Approved Jobs", icon: "AJ", matches: ["approvedJobs", "approvedJob", "jobMetrics", "pastJobInsights"] },
+      activeJobs: { key: "activeJobs", label: "Active Jobs", icon: "J", matches: ["activeJobs", "activeJob", "fieldOperations"] },
+      invoices: { key: "invoices", label: "Invoices", icon: "I$", matches: ["invoices"] },
+      archive: { key: "archive", label: "Archive", icon: "A", matches: ["archive"] },
+      cfoDashboard: { key: "cfoDashboard", label: "Finance", icon: "$", matches: ["cfoDashboard"] },
+    };
+    const mainNavigation = getEmployeeNavigationKeys({
+      email: authUser?.email,
+      role: authRole,
+      capabilities: { canAccessInvoices: canAccessInvoiceQueue, canAccessFinance: canAccessCfoDashboard },
+    }).map((key) => navigationDefinitions[key]).filter(Boolean);
     const accountNavigation = [
       { key: "profile", label: "User Profile", icon: "U", matches: ["profile"] },
       { key: "accountAccess", label: "Account Access", icon: "K", matches: ["accountAccess"] },
