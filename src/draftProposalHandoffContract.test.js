@@ -25,6 +25,7 @@ test("draft handoff waits for Daniela before beginning the estimating SLA", () =
 
 test("draft proposal remains subject to final sales review and production controls", () => {
   assert.match(app, /SALES_APPROVAL_ACKNOWLEDGEMENT/);
-  assert.match(app, /release_proposal_to_production/);
+  assert.match(app, /Send Approved Job to Miguel/);
+  assert.match(app, /blockers\.length === 0/);
   assert.match(app, /Final customer PDF \(required for Sales Review\)/);
 });
