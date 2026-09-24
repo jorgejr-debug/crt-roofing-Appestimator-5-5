@@ -85,3 +85,29 @@ export function getEmployeeNavigationKeys({ email = "", role = "", capabilities 
     return true;
   });
 }
+
+export function getEmployeeDashboardSections({ email = "", role = "" } = {}) {
+  const normalizedEmail = normalize(email);
+  const normalizedRole = normalize(role);
+  const management = normalizedRole === "cfo" || normalizedRole === "admin";
+
+  if (management && normalizedEmail !== "natalia@crtroofing.com") {
+    return { activeJobs: true, completedJobs: true, archivedJobs: true, approvedJobs: true, savedEstimates: true };
+  }
+  if (normalizedEmail === "chris@crtroofing.com") {
+    return { activeJobs: false, completedJobs: false, archivedJobs: false, approvedJobs: false, savedEstimates: false };
+  }
+  if (normalizedEmail === "ivan@crtroofing.com") {
+    return { activeJobs: false, completedJobs: false, archivedJobs: false, approvedJobs: true, savedEstimates: true };
+  }
+  if (normalizedEmail === "daniela@crtroofing.com") {
+    return { activeJobs: true, completedJobs: false, archivedJobs: false, approvedJobs: true, savedEstimates: false };
+  }
+  if (normalizedEmail === "miguel@crtroofing.com" || normalizedRole === "project_manager") {
+    return { activeJobs: true, completedJobs: false, archivedJobs: false, approvedJobs: false, savedEstimates: false };
+  }
+  if (normalizedEmail === "natalia@crtroofing.com") {
+    return { activeJobs: true, completedJobs: false, archivedJobs: false, approvedJobs: true, savedEstimates: false };
+  }
+  return { activeJobs: true, completedJobs: false, archivedJobs: false, approvedJobs: false, savedEstimates: false };
+}

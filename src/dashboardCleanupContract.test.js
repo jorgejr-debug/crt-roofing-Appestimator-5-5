@@ -42,6 +42,13 @@ test("the duplicate specialist tool maze is limited to management accounts", () 
   assert.doesNotMatch(appSource, /title="More tools"/);
 });
 
+test("dashboard job lists are selected from the employee SOP", () => {
+  assert.match(appSource, /getEmployeeDashboardSections/);
+  assert.match(appSource, /dashboardSections\.activeJobs \? <Section/);
+  assert.match(appSource, /dashboardSections\.completedJobs \? <Section/);
+  assert.match(appSource, /dashboardSections\.savedEstimates \? <Section/);
+});
+
 test("New Task quick action opens the existing task creator", () => {
   assert.match(appSource, /setWorkHubInitialCreateTask\(true\)/);
   assert.match(appSource, /initialCreateTask=\{workHubInitialCreateTask\}/);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getEmployeeNavigationKeys, getEmployeeWorkspace } from "./employeeWorkspace.js";
+import { getEmployeeDashboardSections, getEmployeeNavigationKeys, getEmployeeWorkspace } from "./employeeWorkspace.js";
 
 const allCapabilities = {
   canAccessInvoices: true,
@@ -50,4 +50,22 @@ test("financial navigation remains capability-gated", () => {
   const keys = getEmployeeNavigationKeys({ email: "natalia@crtroofing.com", role: "admin" });
   assert.equal(keys.includes("invoices"), false);
   assert.equal(keys.includes("cfoDashboard"), false);
+});
+
+test("dashboard job lists follow operational responsibility", () => {
+  assert.deepEqual(getEmployeeDashboardSections({ email: "chris@crtroofing.com", role: "salesperson" }), {
+    activeJobs: false, completedJobs: false, archivedJobs: false, approvedJobs: false, savedEstimates: false,
+  });
+  assert.deepEqual(getEmployeeDashboardSections({ email: "ivan@crtroofing.com", role: "salesperson" }), {
+    activeJobs: false, completedJobs: false, archivedJobs: false, approvedJobs: true, savedEstimates: true,
+  });
+  assert.deepEqual(getEmployeeDashboardSections({ email: "miguel@crtroofing.com", role: "project_manager" }), {
+    activeJobs: true, completedJobs: false, archivedJobs: false, approvedJobs: false, savedEstimates: false,
+  });
+});
+
+test("management retains the complete operational dashboard history", () => {
+  assert.deepEqual(getEmployeeDashboardSections({ email: "jorgejr@crtroofing.com", role: "cfo" }), {
+    activeJobs: true, completedJobs: true, archivedJobs: true, approvedJobs: true, savedEstimates: true,
+  });
 });

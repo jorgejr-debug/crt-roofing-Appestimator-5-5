@@ -9,7 +9,7 @@ import SubcontractorCompliance from "./SubcontractorCompliance.jsx";
 import InvoiceQueue from "./InvoiceQueue.jsx";
 import AccountAccessVault from "./AccountAccessVault.jsx";
 import ActionFeedback from "./ActionFeedback.jsx";
-import { getEmployeeNavigationKeys, getEmployeeWorkspace } from "./employeeWorkspace.js";
+import { getEmployeeDashboardSections, getEmployeeNavigationKeys, getEmployeeWorkspace } from "./employeeWorkspace.js";
 import { calculateMiguelKpis } from "./productionKpiWorkflow.js";
 import {
   buildInspectionTask,
@@ -22898,6 +22898,7 @@ function App() {
         canViewApprovedJobs: !isProjectManager,
       },
     });
+    const dashboardSections = getEmployeeDashboardSections({ email: authUser?.email, role: authRole });
     const openTaskCreator = () => {
       setWorkHubInitialTaskId("");
       setWorkHubInitialCreateTask(true);
@@ -23096,7 +23097,7 @@ function App() {
         </div>
       ) : null}
 
-      <Section title="Active jobs preview" subtitle="A quick look at open work and what starts next.">
+      {dashboardSections.activeJobs ? <Section title="Active jobs preview" subtitle="A quick look at open work and what starts next.">
         {activeJobsSummary.activeCount ? (
           <div className="savedList">
             {activeJobsSummary.upcoming.map((job) => {
@@ -23176,9 +23177,9 @@ function App() {
             </span>
           ) : null}
         </div>
-      </Section>
+      </Section> : null}
 
-      <Section
+      {dashboardSections.completedJobs ? <Section
         title={`Past Completed Jobs (${pastCompletedJobs.length})`}
         subtitle="Completed job history retained with project details and recorded costs."
         right={(
@@ -23223,9 +23224,9 @@ function App() {
         ) : (
           <p className="emptyState">No completed jobs yet.</p>
         )}
-      </Section>
+      </Section> : null}
 
-      <Section
+      {dashboardSections.archivedJobs ? <Section
         title={`Archived jobs (${archivedJobs.length})`}
         subtitle="Saved jobs removed from the active preview. Restore a job whenever it becomes active again."
         right={(
@@ -23265,9 +23266,9 @@ function App() {
         ) : (
           <p className="emptyState">No archived jobs yet.</p>
         )}
-      </Section>
+      </Section> : null}
 
-      {!isProjectManager ? <Section
+      {dashboardSections.approvedJobs ? <Section
         title="Approved Jobs / Upcoming Projects"
         subtitle="Track approved work that is starting soon or still needs attention."
         right={
@@ -23305,7 +23306,7 @@ function App() {
         )}
       </Section> : null}
 
-      {!isProjectManager ? <Section title="Saved estimates" subtitle="Recent estimates in this browser.">
+      {dashboardSections.savedEstimates ? <Section title="Saved estimates" subtitle="Recent estimates in this browser.">
         <div className="dashboardTabBar">
           <button
             type="button"
