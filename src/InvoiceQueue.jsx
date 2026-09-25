@@ -141,7 +141,6 @@ export default function InvoiceQueue({ supabase, authUser, onClose }) {
     Promise.resolve().then(async () => {
       if (cancelled) return;
       setDraft(createDraft(selected || {}));
-      setMessage("");
       if (!selected?.id) {
         setAuditLog([]);
         setSupportDocuments([]);
@@ -168,6 +167,20 @@ export default function InvoiceQueue({ supabase, authUser, onClose }) {
 
   const updateDraft = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
   const updateManualDraft = (key, value) => setManualDraft((current) => ({ ...current, [key]: value }));
+
+  const persistRequest = (nextStatus) => supabase.rpc("update_invoice_request", {
+    p_request_id: selected.id,
+    p_status: nextStatus,
+    p_invoice_number: draft.invoiceNumber,
+    p_due_date: draft.dueDate || null,
+    p_payment_terms: draft.paymentTerms,
+    p_amount_to_invoice: lineTotal(draft.lineItems) || Number(draft.amountToInvoice || 0),
+    p_missing_information_notes: draft.missingInformationNotes,
+    p_notes: draft.notes,
+    p_invoice_file_name: draft.invoiceFileName,
+    p_invoice_storage_path: draft.invoiceStoragePath,
+    p_line_items: draft.lineItems,
+  });
 
   const createManualInvoice = async () => {
     const validItems = manualDraft.lineItems.filter((item) => String(item.description).trim() && Number(item.quantity) > 0 && Number(item.unit_price) >= 0);
@@ -208,33 +221,24 @@ export default function InvoiceQueue({ supabase, authUser, onClose }) {
   };
 
   const saveRequest = async (statusOverride = "") => {
-    if (!selected) return null;
+    if (!selected || saving) return null;
     const nextStatus = statusOverride || draft.status;
     setSaving(true);
     setMessage("");
-    const { data, error } = await supabase.rpc("update_invoice_request", {
-      p_request_id: selected.id,
-      p_status: nextStatus,
-      p_invoice_number: draft.invoiceNumber,
-      p_due_date: draft.dueDate || null,
-      p_payment_terms: draft.paymentTerms,
-      p_amount_to_invoice: lineTotal(draft.lineItems) || Number(draft.amountToInvoice || 0),
-      p_missing_information_notes: draft.missingInformationNotes,
-      p_notes: draft.notes,
-      p_invoice_file_name: draft.invoiceFileName,
-      p_invoice_storage_path: draft.invoiceStoragePath,
-      p_line_items: draft.lineItems,
-    });
-    setSaving(false);
-    if (error) {
+    try {
+      const { data, error } = await persistRequest(nextStatus);
+      if (error) throw error;
+      setMessageType("success");
+      setMessage(nextStatus === "Ready to Send" ? "Invoice is ready to send." : "Invoice request saved.");
+      await loadRequests();
+      return data;
+    } catch (saveError) {
       setMessageType("error");
-      setMessage(error.message || "Invoice request could not be saved.");
+      setMessage(saveError.message || "Invoice request could not be saved.");
       return null;
+    } finally {
+      setSaving(false);
     }
-    setMessageType("success");
-    setMessage(nextStatus === "Ready to Send" ? "Invoice is ready to send." : "Invoice request saved.");
-    await loadRequests();
-    return data;
   };
 
   const storeInvoicePdf = async (file) => {
@@ -324,22 +328,25 @@ export default function InvoiceQueue({ supabase, authUser, onClose }) {
   };
 
   const sendInvoice = async () => {
-    const saved = await saveRequest("Ready to Send");
-    if (!saved || !selected) return;
+    if (!selected || saving) return;
     if (!window.confirm(`Send invoice ${draft.invoiceNumber} to ${selected.billing_email} and CC natalia@crtroofing.com?`)) return;
     setSaving(true);
     setMessage("");
-    const { data, error } = await supabase.functions.invoke("send-customer-invoice", { body: { requestId: selected.id } });
-    setSaving(false);
-    if (error || !data?.ok) {
-      setMessageType("error");
-      setMessage(error?.message || data?.error || "Invoice email failed. It was not added to Waiting on Payment.");
+    try {
+      const { error: saveError } = await persistRequest("Ready to Send");
+      if (saveError) throw new Error(`Invoice was not sent because its latest changes could not be saved: ${saveError.message}`);
+      const { data, error } = await supabase.functions.invoke("send-customer-invoice", { body: { requestId: selected.id } });
+      if (error || !data?.ok) throw new Error(error?.message || data?.error || "Invoice email failed. It was not added to Waiting on Payment.");
+      setMessageType(data.warning ? "error" : "success");
+      setMessage(data.warning || "Invoice sent to the customer, Natalia was copied, and Waiting on Payment was updated.");
       await loadRequests();
-      return;
+    } catch (sendError) {
+      setMessageType("error");
+      setMessage(sendError.message || "Invoice email failed. It was not added to Waiting on Payment.");
+      await loadRequests();
+    } finally {
+      setSaving(false);
     }
-    setMessageType(data.warning ? "error" : "success");
-    setMessage(data.warning || "Invoice sent to the customer, Natalia was copied, and Waiting on Payment was updated.");
-    await loadRequests();
   };
 
   return (
@@ -350,7 +357,6 @@ export default function InvoiceQueue({ supabase, authUser, onClose }) {
         <div className="actionRow"><button type="button" className="primaryButton" onClick={() => setShowNewInvoice((value) => !value)}>{showNewInvoice ? "Cancel New Invoice" : "New Invoice"}</button><button type="button" className="secondaryButton" onClick={onClose}>Back to dashboard</button></div>
       </header>
 
-      {message ? <div className={messageType === "error" ? "errorBanner" : "successBanner"}>{message}</div> : null}
       {showNewInvoice ? <section className="panel">
         <h2>Start a new invoice</h2>
         <p>Create an invoice even when a job has not been sent through the completed-job queue.</p>
@@ -430,7 +436,7 @@ export default function InvoiceQueue({ supabase, authUser, onClose }) {
             </div>
             <div className="actionRow" style={{ marginTop: 14 }}>
               <button type="button" className="secondaryButton" disabled={saving || selected.status === "Sent"} onClick={() => saveRequest()}>{saving ? "Saving…" : "Save Invoice"}</button>
-              <button type="button" className="primaryButton" disabled={saving || selected.status === "Sent"} onClick={sendInvoice}>Send Invoice to Customer</button>
+              <button type="button" className="primaryButton" disabled={saving || selected.status === "Sent"} onClick={sendInvoice}>{saving ? "Sending…" : "Send Invoice to Customer"}</button>
             </div>
             <h3 style={{ marginTop: 22 }}>Audit history</h3>
             {auditLog.length ? <div className="savedList">{auditLog.map((entry) => <div className="savedCard" key={entry.id}><div><strong>{String(entry.action).replaceAll("_", " ")}</strong><p>{entry.notes || "No additional notes"}</p><small>{new Date(entry.created_at).toLocaleString()}</small></div></div>)}</div> : <p className="emptyState">No audit events yet.</p>}
