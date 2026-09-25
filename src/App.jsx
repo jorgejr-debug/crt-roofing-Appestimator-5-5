@@ -536,7 +536,6 @@ const CRM_URGENCY_OPTIONS = ["Low", "Normal", "High", "Emergency"];
 const CRM_FOLLOWUP_STATUS_OPTIONS = ["Open", "Scheduled", "Waiting on customer", "Completed", "Canceled"];
 const CRM_FOLLOWUP_TYPE_OPTIONS = ["Call", "Text", "Email", "Site visit", "Office review", "Estimate follow-up", "Other"];
 const CRM_TIMELINE_TYPE_OPTIONS = ["Lead", "Call", "Visit", "Estimate", "Follow-up", "Note", "File", "Job", "Customer update"];
-const CRM_FILE_CATEGORY_OPTIONS = ["Estimate", "Photos", "Contract", "Invoice", "Permit", "Warranty", "Other"];
 const CRM_LEAD_WORK_ORDER_BUCKET = "crm-lead-files";
 const CRM_LEAD_WORK_ORDER_MAX_BYTES = 25 * 1024 * 1024;
 
@@ -13969,24 +13968,6 @@ function App() {
     updateCrmCustomerArrayField("timeline", (current) => current.filter((entry) => entry.id !== timelineId));
   };
 
-  const handleCrmCustomerFileUpload = (event) => {
-    const files = Array.from(event.target.files || []);
-    if (!files.length) return;
-    updateCrmCustomerArrayField("files", (current) => [
-      ...current,
-      ...files.map((file) =>
-        normalizeCrmFile({
-          fileName: file.name,
-          category: "Other",
-          uploadedAt: new Date().toISOString(),
-          uploadedBy: authUser?.displayName || "",
-          notes: "Uploaded locally",
-        }),
-      ),
-    ]);
-    event.target.value = "";
-  };
-
   const removeCrmFile = (fileId) => {
     updateCrmCustomerArrayField("files", (current) => current.filter((file) => file.id !== fileId));
   };
@@ -19446,26 +19427,21 @@ function App() {
             )}
           </Section>
 
-          <Section title="D. Files and Documents" subtitle="Local upload section for customer files until storage is connected later.">
-            <div className="formGrid" style={{ marginBottom: 12 }}>
-              <Field label="Upload files">
-                <input type="file" multiple onChange={handleCrmCustomerFileUpload} />
-              </Field>
-              <Field label="File category">
-                <select
-                  value={crmCustomerDraft.fileCategory || "Other"}
-                  onChange={(e) => updateCrmCustomerDraftField("fileCategory", e.target.value)}
-                >
-                  {CRM_FILE_CATEGORY_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </Field>
+          <Section title="D. Files and Documents" subtitle="Use a protected shared workflow so the team receives the actual document.">
+            <div className="statusMessage warningMessage" role="note" style={{ marginBottom: 12 }}>
+              Customer-record file storage is not connected. Upload work orders in Quick Lead Capture and inspection or proposal documents in Proposal Requests. Those files are stored securely and shared with the assigned team.
+            </div>
+            <div className="actionRow" style={{ marginBottom: 12 }}>
+              <button type="button" className="secondaryButton" onClick={openDashboardLeadCapture}>
+                Open Quick Lead Capture
+              </button>
+              <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("proposalRequests")}>
+                Open Proposal Requests
+              </button>
             </div>
             {fileRows.length ? (
-              <div className="savedList">
+              <div className="savedList" aria-label="Legacy browser-only file references">
+                <p className="smallNote">Legacy references below contain filenames only; the original files were not uploaded or shared.</p>
                 {fileRows.map((file) => (
                   <div className="savedCard crmFileRow" key={file.id}>
                     <div>
@@ -19483,7 +19459,7 @@ function App() {
                 ))}
               </div>
             ) : (
-              <p className="emptyState">No files uploaded yet.</p>
+              <p className="emptyState">No legacy filename references.</p>
             )}
           </Section>
 
