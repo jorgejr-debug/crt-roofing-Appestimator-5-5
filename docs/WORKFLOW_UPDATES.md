@@ -14,7 +14,7 @@ The notification function is deployed through the dashboard, using an exact conc
 
 Scheduling and delivery verification are recorded in the deployment results below. Authenticated user acceptance remains pending sign-in.
 
-Source implementation commit: `6be51d0`, pushed to `feat/production-workflow-updates`. Updating the default `main` branch was rejected by automatic approval review because that repository mutation requires specific authorization. `main` remains at the prior baseline. Obtain approval and merge the feature branch before any future deployment from `main`; redeploying the old branch could restore the legacy issue-saving UI while the new backend protection remains active.
+Source implementation commit: `6be51d0`. After the user authorized the pending merge, remote `main` was safely fast-forwarded from `be9aee5` to `7d76f3c` on September 25, 2026. The feature branch and production implementation are now included in the default branch. No force push or history rewrite was used. The earlier automatic approval block is resolved. The production browser still shows the sign-in page, so authenticated acceptance requires a company user to sign in.
 
 ## Implemented changes
 
