@@ -15609,12 +15609,13 @@ function App() {
   };
 
   const handleArchiveActiveJob = async (job) => {
-    if (!job || !authUser?.key) return;
+    if (!job || !authUser?.key || activeJobMutationKey) return;
     if (!canManageSharedJobData) {
       setSessionMessageType("error");
       setSessionMessage("You do not have permission to archive shared jobs.");
       return;
     }
+    if (!window.confirm(`Archive ${job.projectName || "this job"}? You can restore it later.`)) return;
 
     const archivedAt = new Date().toISOString();
     const archivedJob = {
@@ -15634,27 +15635,35 @@ function App() {
       ],
     };
 
+    setActiveJobMutationKey(`archive:${job.id}`);
     setJobsSyncStatus("saving");
-    const { error } = await upsertSharedJobToSupabase(
-      archivedJob,
-      authUser.key,
-      authUser.id || authUser.key,
-    );
-    if (error) {
-      setJobsSyncStatus("error");
-      setJobsSyncError(error.message || String(error));
-      setSessionMessageType("error");
-      setSessionMessage(`Archive failed: ${error.message || error}`);
-      return;
-    }
+    try {
+      const { error } = await upsertSharedJobToSupabase(
+        archivedJob,
+        authUser.key,
+        authUser.id || authUser.key,
+      );
+      if (error) throw error;
 
-    const refreshed = await fetchSharedJobsFromSupabase();
-    if (!refreshed.error) applySharedJobRows(refreshed.data);
-    setActiveJobSelectedId((current) => (current === job.id ? "" : current));
-    setJobsSyncStatus(refreshed.error ? "error" : "saved");
-    setJobsSyncError(refreshed.error?.message || "");
-    setSessionMessageType("success");
-    setSessionMessage(`${job.projectName || "Job"} moved to the archive.`);
+      const refreshed = await fetchSharedJobsFromSupabase();
+      if (refreshed.error) throw new Error(
+        `The job was archived, but the job list could not refresh: ${refreshed.error.message || refreshed.error}`,
+      );
+      applySharedJobRows(refreshed.data);
+      setActiveJobSelectedId((current) => (current === job.id ? "" : current));
+      setJobsSyncStatus("saved");
+      setJobsSyncError("");
+      setSessionMessageType("success");
+      setSessionMessage(`${job.projectName || "Job"} moved to the archive.`);
+    } catch (archiveError) {
+      const archiveMessage = archiveError.message || String(archiveError);
+      setJobsSyncStatus("error");
+      setJobsSyncError(archiveMessage);
+      setSessionMessageType("error");
+      setSessionMessage(`Archive failed: ${archiveMessage}`);
+    } finally {
+      setActiveJobMutationKey("");
+    }
   };
 
   const openInvoiceHandoff = (job) => {
@@ -15759,7 +15768,7 @@ function App() {
   };
 
   const handleRestoreArchivedJob = async (job) => {
-    if (!job || !authUser?.key) return;
+    if (!job || !authUser?.key || activeJobMutationKey) return;
     if (!canManageSharedJobData) {
       setSessionMessageType("error");
       setSessionMessage("You do not have permission to restore shared jobs.");
@@ -15786,26 +15795,34 @@ function App() {
       ],
     };
 
+    setActiveJobMutationKey(`restore:${job.id}`);
     setJobsSyncStatus("saving");
-    const { error } = await upsertSharedJobToSupabase(
-      restoredJob,
-      authUser.key,
-      authUser.id || authUser.key,
-    );
-    if (error) {
-      setJobsSyncStatus("error");
-      setJobsSyncError(error.message || String(error));
-      setSessionMessageType("error");
-      setSessionMessage(`Restore failed: ${error.message || error}`);
-      return;
-    }
+    try {
+      const { error } = await upsertSharedJobToSupabase(
+        restoredJob,
+        authUser.key,
+        authUser.id || authUser.key,
+      );
+      if (error) throw error;
 
-    const refreshed = await fetchSharedJobsFromSupabase();
-    if (!refreshed.error) applySharedJobRows(refreshed.data);
-    setJobsSyncStatus(refreshed.error ? "error" : "saved");
-    setJobsSyncError(refreshed.error?.message || "");
-    setSessionMessageType("success");
-    setSessionMessage(`${job.projectName || "Job"} restored from the archive.`);
+      const refreshed = await fetchSharedJobsFromSupabase();
+      if (refreshed.error) throw new Error(
+        `The job was restored, but the job list could not refresh: ${refreshed.error.message || refreshed.error}`,
+      );
+      applySharedJobRows(refreshed.data);
+      setJobsSyncStatus("saved");
+      setJobsSyncError("");
+      setSessionMessageType("success");
+      setSessionMessage(`${job.projectName || "Job"} restored from the archive.`);
+    } catch (restoreError) {
+      const restoreMessage = restoreError.message || String(restoreError);
+      setJobsSyncStatus("error");
+      setJobsSyncError(restoreMessage);
+      setSessionMessageType("error");
+      setSessionMessage(`Restore failed: ${restoreMessage}`);
+    } finally {
+      setActiveJobMutationKey("");
+    }
   };
 
   const openApprovedJobDetail = (job) => {
@@ -21339,8 +21356,8 @@ function App() {
                 </div>
                 {canManageSharedJobData ? (
                   <div className="savedActions">
-                    <button type="button" className="secondaryButton" onClick={() => handleRestoreArchivedJob(job)}>
-                      Restore
+                    <button type="button" className="secondaryButton" disabled={Boolean(activeJobMutationKey)} onClick={() => handleRestoreArchivedJob(job)}>
+                      {activeJobMutationKey === `restore:${job.id}` ? "Restoring…" : "Restore"}
                     </button>
                   </div>
                 ) : null}
@@ -23473,8 +23490,8 @@ function App() {
                     </button>
                   ) : null}
                   {canManageSharedJobData ? (
-                    <button type="button" className="secondaryButton" onClick={() => handleArchiveActiveJob(job)}>
-                      Archive
+                    <button type="button" className="secondaryButton" disabled={Boolean(activeJobMutationKey)} onClick={() => handleArchiveActiveJob(job)}>
+                      {activeJobMutationKey === `archive:${job.id}` ? "Archiving…" : "Archive"}
                     </button>
                   ) : null}
                 </div>
@@ -23580,8 +23597,8 @@ function App() {
                 </div>
                 {canManageSharedJobData ? (
                   <div className="savedActions">
-                    <button type="button" className="secondaryButton" onClick={() => handleRestoreArchivedJob(job)}>
-                      Restore
+                    <button type="button" className="secondaryButton" disabled={Boolean(activeJobMutationKey)} onClick={() => handleRestoreArchivedJob(job)}>
+                      {activeJobMutationKey === `restore:${job.id}` ? "Restoring…" : "Restore"}
                     </button>
                   </div>
                 ) : null}
@@ -24177,8 +24194,8 @@ function App() {
                               </button>
                             ) : null}
                             {canManageSharedJobData ? (
-                              <button type="button" className="secondaryButton" onClick={(e) => { e.stopPropagation(); handleArchiveActiveJob(job); }}>
-                                Archive
+                              <button type="button" className="secondaryButton" disabled={Boolean(activeJobMutationKey)} onClick={(e) => { e.stopPropagation(); handleArchiveActiveJob(job); }}>
+                                {activeJobMutationKey === `archive:${job.id}` ? "Archiving…" : "Archive"}
                               </button>
                             ) : null}
                           </div>
@@ -24240,8 +24257,8 @@ function App() {
                       <td>{job.archivedAt ? new Date(job.archivedAt).toLocaleString() : "—"}</td>
                       <td>
                         {canManageSharedJobData ? (
-                          <button type="button" className="secondaryButton" onClick={() => handleRestoreArchivedJob(job)}>
-                            Restore
+                          <button type="button" className="secondaryButton" disabled={Boolean(activeJobMutationKey)} onClick={() => handleRestoreArchivedJob(job)}>
+                            {activeJobMutationKey === `restore:${job.id}` ? "Restoring…" : "Restore"}
                           </button>
                         ) : (
                           <span>View only</span>
@@ -27228,12 +27245,13 @@ function App() {
                               <button
                                 type="button"
                                 className="secondaryButton"
+                                disabled={Boolean(activeJobMutationKey)}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleArchiveActiveJob(job);
                                 }}
                               >
-                                Archive
+                                {activeJobMutationKey === `archive:${job.id}` ? "Archiving…" : "Archive"}
                               </button>
                             </>
                           ) : null}
@@ -27938,7 +27956,9 @@ function App() {
                 </div>
                 <div className="savedActions">
                   {canManageSharedJobData ? (
-                    <button type="button" className="primaryButton" onClick={() => handleRestoreArchivedJob(job)}>Restore</button>
+                    <button type="button" className="primaryButton" disabled={Boolean(activeJobMutationKey)} onClick={() => handleRestoreArchivedJob(job)}>
+                      {activeJobMutationKey === `restore:${job.id}` ? "Restoring…" : "Restore"}
+                    </button>
                   ) : null}
                 </div>
               </div>
