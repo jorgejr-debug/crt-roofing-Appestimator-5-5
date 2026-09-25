@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import React from "react";
-import { useLoadScript } from "@react-google-maps/api";
 import { createClient } from "@supabase/supabase-js";
 import DashboardTasks from "./DashboardTasks.jsx";
 import ActionFeedback from "./ActionFeedback.jsx";
@@ -94,7 +93,6 @@ import {
 } from "./sharedJobWorkflow.js";
 import {
   GOOGLE_MAPS_API_KEY,
-  GOOGLE_MAPS_LIBRARIES,
   buildTravelLookupMessage,
   fetchPlacePredictions,
   routeGoogleDirections,
@@ -105,23 +103,8 @@ const WorkHub = React.lazy(() => import("./WorkHub.jsx"));
 const SubcontractorCompliance = React.lazy(() => import("./SubcontractorCompliance.jsx"));
 const InvoiceQueue = React.lazy(() => import("./InvoiceQueue.jsx"));
 const AccountAccessVault = React.lazy(() => import("./AccountAccessVault.jsx"));
+const DeferredGoogleMapsLoader = React.lazy(() => import("./DeferredGoogleMapsLoader.jsx"));
 const GOOGLE_MAPS_WORKSPACES = new Set(["tpo", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"]);
-
-function DeferredGoogleMapsLoader({ onStatusChange }) {
-  const { isLoaded, loadError } = useLoadScript({
-    googleMapsApiKey: GOOGLE_MAPS_API_KEY,
-    libraries: GOOGLE_MAPS_LIBRARIES,
-  });
-
-  useEffect(() => {
-    onStatusChange((current) => {
-      if (current.isLoaded === isLoaded && current.loadError === loadError) return current;
-      return { isLoaded, loadError: loadError || null };
-    });
-  }, [isLoaded, loadError, onStatusChange]);
-
-  return null;
-}
 
 class WorkspaceErrorBoundary extends React.Component {
   constructor(props) {
@@ -28142,7 +28125,11 @@ function App() {
           tone={sessionMessageType || "info"}
           onDismiss={() => { setSessionMessage(""); setSessionMessageType(""); }}
         />
-        {shouldLoadGoogleMaps ? <DeferredGoogleMapsLoader onStatusChange={setGoogleMapsStatus} /> : null}
+        {shouldLoadGoogleMaps ? (
+          <React.Suspense fallback={null}>
+            <DeferredGoogleMapsLoader onStatusChange={setGoogleMapsStatus} />
+          </React.Suspense>
+        ) : null}
         <main className="portalMain">
           <WorkspaceErrorBoundary key={activeTemplate} onReturnDashboard={() => setActiveTemplate("dashboard")}>
             <React.Suspense fallback={(
