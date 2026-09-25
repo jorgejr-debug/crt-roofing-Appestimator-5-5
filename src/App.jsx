@@ -3,11 +3,7 @@ import React from "react";
 import { useLoadScript } from "@react-google-maps/api";
 import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
-import WorkHub from "./WorkHub.jsx";
 import DashboardTasks from "./DashboardTasks.jsx";
-import SubcontractorCompliance from "./SubcontractorCompliance.jsx";
-import InvoiceQueue from "./InvoiceQueue.jsx";
-import AccountAccessVault from "./AccountAccessVault.jsx";
 import ActionFeedback from "./ActionFeedback.jsx";
 import { getEmployeeAllowedTemplates, getEmployeeDashboardSections, getEmployeeNavigationKeys, getEmployeeWorkspace } from "./employeeWorkspace.js";
 import { calculateMiguelKpis } from "./productionKpiWorkflow.js";
@@ -105,6 +101,11 @@ import {
   routeGoogleDirections,
   routeGoogleDirectionsDirect,
 } from "./googleMapsTravelService.js";
+
+const WorkHub = React.lazy(() => import("./WorkHub.jsx"));
+const SubcontractorCompliance = React.lazy(() => import("./SubcontractorCompliance.jsx"));
+const InvoiceQueue = React.lazy(() => import("./InvoiceQueue.jsx"));
+const AccountAccessVault = React.lazy(() => import("./AccountAccessVault.jsx"));
 
 let pdfReaderPromise = null;
 
@@ -28082,7 +28083,15 @@ function App() {
           tone={sessionMessageType || "info"}
           onDismiss={() => { setSessionMessage(""); setSessionMessageType(""); }}
         />
-        <main className="portalMain">{screen}</main>
+        <main className="portalMain">
+          <React.Suspense fallback={(
+            <section className="panel" aria-live="polite" aria-busy="true">
+              <p className="intro" style={{ margin: 0 }}>Opening workspace…</p>
+            </section>
+          )}>
+            {screen}
+          </React.Suspense>
+        </main>
       </div>
     );
   };
