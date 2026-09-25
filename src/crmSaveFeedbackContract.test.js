@@ -16,3 +16,9 @@ test("lead save failures do not display a green completion state", () => {
   assert.match(appSource, /disabled=\{crmLeadSyncStatus === "saving"\}/);
   assert.match(appSource, /crmLeadSyncStatus === "saving" \? "Saving…" : "Save Lead"/);
 });
+
+test("quick lead actions lock while the shared save is pending", () => {
+  assert.match(appSource, /disabled=\{crmInspectionSending \|\| crmLeadWorkOrderUploading \|\| crmLeadSyncStatus === "saving"\}/);
+  assert.match(appSource, /crmLeadSyncStatus === "saving"[\s\S]*\? "Saving…"/);
+  assert.match(appSource, /className="dangerButton" disabled=\{crmLeadSyncStatus === "saving"\}/);
+});

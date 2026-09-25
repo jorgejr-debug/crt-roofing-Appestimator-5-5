@@ -19785,19 +19785,25 @@ function App() {
               <DetailRow label="Starting status" value="New · Needs qualification" />
             </div>
             <div className="actionRow" style={{ marginTop: 16 }}>
-              <button type="button" className="primaryButton" disabled={crmInspectionSending || crmLeadWorkOrderUploading} onClick={saveQuickLeadAndAddNext}>
-                {crmLeadWorkOrderUploading ? "Uploading work order…" : crmLeadDraft.visitOutcome === "inspection" ? (crmInspectionSending ? "Sending to Ivan…" : "Save & Send to Ivan") : "Save & Add Next"}
+              <button type="button" className="primaryButton" disabled={crmInspectionSending || crmLeadWorkOrderUploading || crmLeadSyncStatus === "saving"} onClick={saveQuickLeadAndAddNext}>
+                {crmLeadWorkOrderUploading
+                  ? "Uploading work order…"
+                  : crmLeadSyncStatus === "saving"
+                    ? "Saving…"
+                    : crmLeadDraft.visitOutcome === "inspection"
+                      ? (crmInspectionSending ? "Sending to Ivan…" : "Save & Send to Ivan")
+                      : "Save & Add Next"}
               </button>
               <button
                 type="button"
                 className="secondaryButton"
-                disabled={crmInspectionSending || crmLeadWorkOrderUploading}
+                disabled={crmInspectionSending || crmLeadWorkOrderUploading || crmLeadSyncStatus === "saving"}
                 onClick={() => sendCrmLeadForInspection(crmLeadDraft, true)}
               >
                 {crmInspectionSending ? "Sending to Ivan…" : "Send for Inspection"}
               </button>
-              <button type="button" className="secondaryButton" onClick={() => setCrmTab("newLead")}>Continue to Qualification</button>
-              <button type="button" className="dangerButton" onClick={() => startNewCrmLeadDraft()}>Clear</button>
+              <button type="button" className="secondaryButton" disabled={crmLeadSyncStatus === "saving"} onClick={() => setCrmTab("newLead")}>Continue to Qualification</button>
+              <button type="button" className="dangerButton" disabled={crmLeadSyncStatus === "saving"} onClick={() => startNewCrmLeadDraft()}>Clear</button>
             </div>
             <p className="smallNote" style={{ margin: "10px 0 0" }}>
               Use Send for Inspection only when the caller needs a roof inspection. Ivan will receive an in-app task and an email that a customer is waiting to be scheduled.
