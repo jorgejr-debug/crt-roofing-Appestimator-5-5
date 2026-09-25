@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getEmployeeDashboardSections, getEmployeeNavigationKeys, getEmployeeWorkspace } from "./employeeWorkspace.js";
+import { getEmployeeAllowedTemplates, getEmployeeDashboardSections, getEmployeeNavigationKeys, getEmployeeWorkspace } from "./employeeWorkspace.js";
 
 const allCapabilities = {
   canAccessInvoices: true,
@@ -50,6 +50,28 @@ test("financial navigation remains capability-gated", () => {
   const keys = getEmployeeNavigationKeys({ email: "natalia@crtroofing.com", role: "admin" });
   assert.equal(keys.includes("invoices"), false);
   assert.equal(keys.includes("cfoDashboard"), false);
+});
+
+test("employee SOP access blocks hidden workspaces while preserving required detail screens", () => {
+  const chrisTemplates = getEmployeeAllowedTemplates({ email: "chris@crtroofing.com", role: "salesperson", capabilities: allCapabilities });
+  assert.equal(chrisTemplates.includes("crm"), true);
+  assert.equal(chrisTemplates.includes("cfoDashboard"), false);
+  assert.equal(chrisTemplates.includes("administration"), false);
+
+  const ivanTemplates = getEmployeeAllowedTemplates({ email: "ivan@crtroofing.com", role: "salesperson", capabilities: allCapabilities });
+  assert.equal(ivanTemplates.includes("sprayFoam"), true);
+  assert.equal(ivanTemplates.includes("approvedJob"), true);
+  assert.equal(ivanTemplates.includes("invoices"), false);
+
+  const miguelTemplates = getEmployeeAllowedTemplates({ email: "miguel@crtroofing.com", role: "project_manager", capabilities: allCapabilities });
+  assert.equal(miguelTemplates.includes("activeJob"), true);
+  assert.equal(miguelTemplates.includes("approvedJob"), true);
+  assert.equal(miguelTemplates.includes("crm"), false);
+  assert.equal(miguelTemplates.includes("adminPricing"), false);
+});
+
+test("executive management keeps complete app access", () => {
+  assert.equal(getEmployeeAllowedTemplates({ email: "jorgejr@crtroofing.com", role: "cfo", capabilities: allCapabilities }), null);
 });
 
 test("dashboard job lists follow operational responsibility", () => {

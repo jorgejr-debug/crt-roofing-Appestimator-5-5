@@ -9,7 +9,7 @@ import SubcontractorCompliance from "./SubcontractorCompliance.jsx";
 import InvoiceQueue from "./InvoiceQueue.jsx";
 import AccountAccessVault from "./AccountAccessVault.jsx";
 import ActionFeedback from "./ActionFeedback.jsx";
-import { getEmployeeDashboardSections, getEmployeeNavigationKeys, getEmployeeWorkspace } from "./employeeWorkspace.js";
+import { getEmployeeAllowedTemplates, getEmployeeDashboardSections, getEmployeeNavigationKeys, getEmployeeWorkspace } from "./employeeWorkspace.js";
 import { calculateMiguelKpis } from "./productionKpiWorkflow.js";
 import {
   buildInspectionTask,
@@ -27805,18 +27805,12 @@ function App() {
     return renderAuthenticatedLayout(renderDashboard());
   }
 
-  if (isProjectManager && !new Set([
-    "workHub",
-    "kpis",
-    "activeJobs",
-    "activeJob",
-    "approvedJob",
-    "fieldOperations",
-    "subcontractors",
-    "profile",
-    "accountAccess",
-    "settings",
-  ]).has(activeTemplate)) {
+  const employeeAllowedTemplates = getEmployeeAllowedTemplates({
+    email: authUser?.email,
+    role: authRole,
+    capabilities: { canAccessInvoices: canAccessInvoiceQueue, canAccessFinance: canAccessCfoDashboard },
+  });
+  if (employeeAllowedTemplates && !employeeAllowedTemplates.includes(activeTemplate)) {
     return renderAuthenticatedLayout(renderDashboard());
   }
 

@@ -38,6 +38,24 @@ const WORKSPACES = {
   },
 };
 
+const NAVIGATION_TEMPLATE_GROUPS = {
+  dashboard: ["dashboard"],
+  workHub: ["workHub"],
+  kpis: ["kpis"],
+  crm: ["crm"],
+  fieldNotes: ["fieldNotes"],
+  estimateTemplates: ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"],
+  proposalRequests: ["proposalRequests", "proposalBuilder"],
+  subcontractors: ["subcontractors"],
+  approvedJobs: ["approvedJobs", "approvedJob", "jobMetrics", "pastJobInsights"],
+  activeJobs: ["activeJobs", "activeJob", "fieldOperations", "approvedJob"],
+  invoices: ["invoices"],
+  archive: ["archive"],
+  cfoDashboard: ["cfoDashboard"],
+};
+
+const ACCOUNT_TEMPLATES = ["profile", "accountAccess", "settings"];
+
 export function getEmployeeWorkspace({ email = "", role = "", capabilities = {} } = {}) {
   const normalizedEmail = normalize(email);
   const normalizedRole = normalize(role);
@@ -84,6 +102,26 @@ export function getEmployeeNavigationKeys({ email = "", role = "", capabilities 
     if (key === "cfoDashboard") return Boolean(capabilities.canAccessFinance);
     return true;
   });
+}
+
+export function getEmployeeAllowedTemplates({ email = "", role = "", capabilities = {} } = {}) {
+  const normalizedEmail = normalize(email);
+  const normalizedRole = normalize(role);
+  const followsLimitedSop = [
+    "chris@crtroofing.com",
+    "ivan@crtroofing.com",
+    "daniela@crtroofing.com",
+    "miguel@crtroofing.com",
+    "natalia@crtroofing.com",
+  ].includes(normalizedEmail) || normalizedRole === "project_manager";
+
+  if (!followsLimitedSop) return null;
+
+  const navigationKeys = getEmployeeNavigationKeys({ email, role, capabilities });
+  return [...new Set([
+    ...ACCOUNT_TEMPLATES,
+    ...navigationKeys.flatMap((key) => NAVIGATION_TEMPLATE_GROUPS[key] || [key]),
+  ])];
 }
 
 export function getEmployeeDashboardSections({ email = "", role = "" } = {}) {
