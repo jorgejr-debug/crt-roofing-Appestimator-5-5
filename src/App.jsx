@@ -1,4 +1,5 @@
 import ConnectionStatus from "./ConnectionStatus.jsx";
+import { toPlainObject } from "./settingsObject.js";
 import "./WorkflowMobile.css";
 const WorkflowNotifications = React.lazy(() => import("./WorkflowNotifications.jsx"));
 import { SERVICE_TEMPLATES, calculateServiceEstimate, validateServiceEstimate } from "./serviceEstimate.js";
@@ -18318,7 +18319,7 @@ function App() {
                   <button type="button" className="templateCard" onClick={() => setActiveTemplate("estimateTemplates")}>
                     <span className="eyebrow">Templates</span>
                     <strong>Estimate Templates</strong>
-                    <p>Open TPO and future estimate templates.</p>
+                    <p>Open roofing, coating, repair, and maintenance estimates.</p>
                   </button>
                   <button type="button" className="templateCard" onClick={() => setActiveTemplate("jobMetrics")}>
                     <span className="eyebrow">Tracking</span>

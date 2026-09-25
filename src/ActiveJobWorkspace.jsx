@@ -357,7 +357,7 @@ export default function ActiveJobWorkspace({ workspace }) {
           )}
         </Section>
 
-        <Section title="Activity log" subtitle="Timeline placeholder for status changes, corrections, and office notes.">
+        <Section title="Activity log" subtitle="Recorded project activity and issue changes.">
           {(project.activityLog || []).length ? (
             <div className="savedList">
               {project.activityLog.map((entry) => (
@@ -376,11 +376,11 @@ export default function ActiveJobWorkspace({ workspace }) {
           )}
         </Section>
 
-        <Section title="Notifications / escalation placeholders" subtitle="Future workflow hooks for office follow-up and alerts.">
+        <Section title="Notifications and escalation" subtitle="Issue follow-up, response deadlines, and recorded changes.">
           <div className="detailList">
-            <DetailRow label="Office notification" value="Placeholder" note="Send a message to office staff when an issue is reported." />
-            <DetailRow label="Escalation" value="Placeholder" note="Critical issues can be escalated to management later." />
-            <DetailRow label="Audit trail" value="Placeholder" note="Future changes will be tracked with old value, new value, person, and time." />
+            <DetailRow label="Office notification" value="Automatic on save" note="Issue changes notify Jorge, Natalia, and the owner's linked account. Email delivery is queued." />
+            <DetailRow label="Escalation" value="Owner and deadline required" note="Critical and Emergency issues require a response within one hour. Open serious and overdue issues receive daily reminders." />
+            <DetailRow label="Audit trail" value="Recorded for each issue change" note="Open an issue to review who changed it, when, and the before-and-after details. Resolution requires a note and explicit confirmation." />
           </div>
         </Section>
 

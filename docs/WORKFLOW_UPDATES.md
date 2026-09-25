@@ -12,9 +12,9 @@ Three new migrations were validated against production in a transaction ending i
 
 The notification function is deployed through the dashboard, using an exact concatenation of the checked-in shared evaluator and handler (local import removed). Legacy JWT verification remains ON and the handler additionally checks the existing webhook secret. Vault holds the existing notification secret, endpoint, and existing public legacy anon gateway token; the notification secret was copied inside the database without being displayed. No API credentials were rotated.
 
-Scheduling and delivery verification are recorded in the deployment results below. Authenticated user acceptance remains pending sign-in.
+Scheduling and delivery verification are recorded in the deployment results below. Authenticated read-only acceptance was performed after company sign-in; remaining write/device checks are listed below.
 
-Source implementation commit: `6be51d0`. After the user authorized the pending merge, remote `main` was safely fast-forwarded from `be9aee5` to `7d76f3c` on September 25, 2026. The feature branch and production implementation are now included in the default branch. No force push or history rewrite was used. The earlier automatic approval block is resolved. The production browser still shows the sign-in page, so authenticated acceptance requires a company user to sign in.
+Source implementation commit: `6be51d0`. After the user authorized the pending merge, remote `main` was safely fast-forwarded from `be9aee5` to `7d76f3c` on September 25, 2026. The feature branch and production implementation are now included in the default branch. No force push or history rewrite was used. The earlier automatic approval block is resolved. The user subsequently signed in for the acceptance checks below.
 
 ## Implemented changes
 
@@ -134,3 +134,16 @@ npm run preview:mobile
 The mobile fixture generator copies real rendering/calculation code into ignored local helper modules and disables its database client. The fixture data is synthetic and never written to company storage.
 
 References: [Supabase Cron](https://supabase.com/docs/guides/cron), [Resend idempotency keys](https://resend.com/changelog/idempotency-keys).
+
+
+## Signed-in follow-up verification — September 25, 2026
+
+- Signed in as the existing CFO account. Confirmed all three service estimate workspaces, CFO dashboard, CRM, Approved Jobs list and detail, Active Jobs list and detail, Field Operations, and Administration render with the existing company data.
+- Opened the issue form and confirmed the employee owner list, severity choices, deadline, audit section, and resolution workflow entry points. No issue was saved or fabricated.
+- Blank coating estimate save was rejected with “Enter a job name and customer.” No estimate, proposal, job, employee, or field-log records were created or changed by this acceptance pass.
+- Workflow inbox displayed 24 actual alerts with sent email status. Did not acknowledge alerts on the user's behalf.
+- Found and corrected obsolete placeholder wording on the active-job page, field review, and estimate dashboard shortcut.
+- Browser logs exposed a pre-existing missing `toPlainObject` helper that interrupted shared pricing/travel-settings hydration. Added the missing import and a tested parser that preserves object/serialized-object settings and falls back for invalid values.
+- Missing `company_vehicles` table still causes a warning; the field form displays its existing fallback vehicles. Google Maps has no configured API key; manual travel input remains available.
+- Source inspection identified an additional limitation: field-log reads and photo access are owner-restricted, so Office Review currently cannot retrieve other employees' submissions. Company-wide office review still needs a narrowly scoped role-based read policy, matching query changes, and cross-account validation. Existing ownership protections were not widened during this pass.
+- End-to-end production issue saves/resolution, estimate saves/proposals/PDF downloads, uploads, and actual-phone/weak-network acceptance remain unverified. This pass used read-only navigation and rejected invalid input to preserve real records; local transaction and PDF tests remain the write-path evidence.

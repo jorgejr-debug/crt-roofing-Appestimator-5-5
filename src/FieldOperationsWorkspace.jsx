@@ -67,7 +67,7 @@ export default function FieldOperationsWorkspace({ workspace }) {
           </button>
         </div>
 
-        <Section title="Field Operations" subtitle="Phase 1: create daily logs, save drafts, submit logs, and review submitted work.">
+        <Section title="Field Operations" subtitle="Create daily logs, save drafts, submit logs, and review saved work.">
           <div className="dashboardTabBar">
             <button
               type="button"
@@ -576,7 +576,7 @@ export default function FieldOperationsWorkspace({ workspace }) {
               </div>
             </Section>
 
-            <Section title="Selected log review" subtitle="Read-only details for office review and future correction handling.">
+            <Section title="Selected log review" subtitle="Read-only log details. Submitted logs stay locked; corrections are saved separately.">
               {fieldDailyLogSelectedLog ? (
                 <>
                   <div className="detailList">
