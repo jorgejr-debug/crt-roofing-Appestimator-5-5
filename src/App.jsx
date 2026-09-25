@@ -13780,13 +13780,35 @@ function App() {
     setSessionMessage("Ivan's weekly inspection capacity target was saved.");
   };
 
-  const convertCrmLeadToCustomer = () => {
-    const savedLead = saveCrmLeadDraft("Lead saved and ready to convert.");
+  const convertCrmLeadToCustomer = async () => {
+    const savedLead = saveCrmLeadDraft("Saving customer conversion…", crmLeadDraft, true);
     if (!savedLead) return;
     const customerName = [savedLead.firstName, savedLead.lastName].filter(Boolean).join(" ").trim() || savedLead.companyName || savedLead.propertyAddress || "New customer";
+    const convertedAt = new Date().toISOString();
+    const customerId = savedLead.convertedCustomerId || createFieldDailyLogId();
+    const convertedLead = addCrmLeadHistory(
+      {
+        ...savedLead,
+        convertedCustomerId: customerId,
+        leadStatus: "Approved",
+        updatedAt: convertedAt,
+      },
+      "Converted to customer",
+      `${customerName} was converted into a customer record.`,
+    );
+    setCrmLeadSyncStatus("saving");
+    const conversionResult = await upsertCrmLeadToSupabase(convertedLead, authUser);
+    if (conversionResult?.error) {
+      setCrmLeadSyncStatus("local");
+      setCrmLeadSyncError(conversionResult.error.message || "Customer conversion could not sync.");
+      setSessionMessageType("error");
+      setSessionMessage(`The lead was not converted because shared CRM sync failed: ${conversionResult.error.message || conversionResult.error}`);
+      return;
+    }
+    const sharedConvertedLead = normalizeCrmLead(conversionResult?.data || convertedLead);
     const nextCustomer = normalizeCrmCustomer({
       ...createBlankCrmCustomer(),
-      id: savedLead.convertedCustomerId || createFieldDailyLogId(),
+      id: customerId,
       customerName,
       firstName: savedLead.firstName,
       lastName: savedLead.lastName,
@@ -13847,13 +13869,16 @@ function App() {
     });
     setCrmSelectedCustomerId(nextCustomer.id);
     setCrmCustomerDraft(nextCustomer);
-    setCrmLeadDraft({ ...savedLead, convertedCustomerId: nextCustomer.id, leadStatus: "Approved", updatedAt: new Date().toISOString() });
+    setCrmLeadDraft(sharedConvertedLead);
     setCrmLeads((current) =>
-      current.map((lead) => (lead.id === savedLead.id ? { ...lead, convertedCustomerId: nextCustomer.id, leadStatus: "Approved", updatedAt: new Date().toISOString() } : lead)),
+      [sharedConvertedLead, ...current.filter((lead) => lead.id !== savedLead.id)]
+        .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""))),
     );
+    setCrmLeadSyncStatus("saved");
+    setCrmLeadSyncError("");
     setCrmTab("customers");
     setSessionMessageType("success");
-    setSessionMessage("Lead converted to customer.");
+    setSessionMessage("Lead conversion saved to the shared CRM. Detailed customer notes on this tab remain on this browser.");
   };
 
   const startNewCrmCustomerDraft = () => {
@@ -19650,7 +19675,7 @@ function App() {
               <div>
                 <p className="eyebrow">CRT Roofing CRM</p>
                 <h1>CRM / Leads</h1>
-                <p className="intro">Track new leads, customer files, and follow-up tasks in one place.</p>
+                <p className="intro">Capture shared leads and move qualified opportunities into CRT Roofing's operating workflow.</p>
               </div>
             </div>
           </div>
@@ -19670,10 +19695,10 @@ function App() {
             + New lead
           </button>
           <button type="button" className="secondaryButton" onClick={startNewCrmCustomerDraft}>
-            + New customer
+            + Local customer note
           </button>
           <button type="button" className="secondaryButton" onClick={startNewCrmFollowupDraft}>
-            + New follow-up
+            + Local reminder
           </button>
         </div>
 
@@ -19683,8 +19708,8 @@ function App() {
               ["quickCapture", "Quick Capture"],
               ["newLead", "Qualify / Edit"],
               ["pipeline", "Lead Pipeline"],
-              ["customers", "Customers"],
-              ["followUps", "Follow-Ups"],
+              ["customers", "Local Customer Notes"],
+              ["followUps", "Local Reminders"],
               ["reports", "KPI Scorecards"],
             ].map(([key, label]) => (
               <button
@@ -20109,8 +20134,8 @@ function App() {
 
         {crmTab === "customers" ? (
           <Section
-            title="Customers"
-            subtitle="Search the directory and open a customer file to review properties, jobs, files, and notes."
+            title="Local Customer Notes"
+            subtitle="Converted lead status is shared; the detailed notes in this legacy section remain on this browser."
             right={
               <div className="actionRow" style={{ margin: 0 }}>
                 <button type="button" className="secondaryButton" onClick={startNewCrmCustomerDraft}>
@@ -20122,6 +20147,9 @@ function App() {
               </div>
             }
           >
+            <div className="statusMessage warningMessage" role="note" style={{ marginBottom: 14 }}>
+              Do not rely on this section for team handoff. Use the shared Lead Pipeline, Proposal Requests, Active Jobs, and Tasks & Messages as the company record.
+            </div>
             <div className="detailList" style={{ marginBottom: 14 }}>
               <DetailRow label="Customer records" value={num(crmCustomers.length, 0)} />
               <DetailRow label="Selected customer" value={crmSelectedCustomer ? crmCustomerDisplayName(crmSelectedCustomer) : "None"} />
@@ -20166,8 +20194,8 @@ function App() {
 
         {crmTab === "followUps" ? (
           <Section
-            title="Follow-Ups"
-            subtitle="Track next-step tasks for leads and customers."
+            title="Local Reminders"
+            subtitle="Legacy reminders here remain on this browser; assign shared follow-up in Tasks & Messages."
             right={
               <div className="actionRow" style={{ margin: 0 }}>
                 <button type="button" className="secondaryButton" onClick={startNewCrmFollowupDraft}>
@@ -20179,6 +20207,12 @@ function App() {
               </div>
             }
           >
+            <div className="statusMessage warningMessage" role="note" style={{ marginBottom: 14 }}>
+              For anything another employee must see or complete, create a task in Tasks & Messages.
+              <div className="actionRow" style={{ marginTop: 10 }}>
+                <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("workHub")}>Open Tasks & Messages</button>
+              </div>
+            </div>
             <div className="formGrid">
               <Field label="Search follow-ups">
                 <input type="search" value={crmFollowupSearch} onChange={(e) => setCrmFollowupSearch(e.target.value)} placeholder="Search tasks, due dates, or notes" />
