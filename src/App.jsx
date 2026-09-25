@@ -21164,7 +21164,9 @@ function App() {
                     <p className="approvedDailyProgressEyebrow">Day {dayIndex + 1}</p>
                     <h3>{day.date || "Date not selected"}</h3>
                     <p className="approvedDailyProgressSummary">
-                      Crew {toNumber(day.crewSize)} · {round(daySummary.laborHours, 2)} labor hours · {money2(daySummary.laborCost)} loaded labor · {money2(daySummary.subcontractorCost)} subcontractors · {money2(daySummary.materialCost)} materials · {money2(daySummary.travelCost)} travel/fuel
+                      {isProjectManager
+                        ? `Crew ${toNumber(day.crewSize)} · ${round(daySummary.laborHours, 2)} labor hours · ${round(daySummary.travelMiles, 2)} travel miles`
+                        : `Crew ${toNumber(day.crewSize)} · ${round(daySummary.laborHours, 2)} labor hours · ${money2(daySummary.laborCost)} loaded labor · ${money2(daySummary.subcontractorCost)} subcontractors · ${money2(daySummary.materialCost)} materials · ${money2(daySummary.travelCost)} travel/fuel`}
                     </p>
                   </div>
                   <div className="approvedDailyProgressActions">
@@ -21234,9 +21236,11 @@ function App() {
                                   </Field>
                                 </>
                               ) : null}
-                              <Field label="Total loaded labor cost">
-                                <input type="text" value={money2(laborCost.totalLaborCost)} disabled />
-                              </Field>
+                              {!isProjectManager ? (
+                                <Field label="Total loaded labor cost">
+                                  <input type="text" value={money2(laborCost.totalLaborCost)} disabled />
+                                </Field>
+                              ) : null}
                             </div>
                             <div className="actionRow" style={{ marginTop: 12 }}>
                               <button type="button" className="secondaryButton" onClick={() => handleDeleteEmployeeRow(day.id, employee.id)}>
@@ -21504,10 +21508,12 @@ function App() {
                 </div>
               </>
             ) : null}
-            <div className="detailRow">
-              <span>Total loaded labor cost</span>
-              <strong>{money2(totals.totalActualLaborCost)}</strong>
-            </div>
+            {!isProjectManager ? (
+              <div className="detailRow">
+                <span>Total loaded labor cost</span>
+                <strong>{money2(totals.totalActualLaborCost)}</strong>
+              </div>
+            ) : null}
             <div className="detailRow">
               <span>Total subcontractor cost</span>
               <strong>{money2(totals.totalSubcontractorCost)}</strong>
@@ -21548,10 +21554,12 @@ function App() {
               <span>Total material cost</span>
               <strong>{money2(totals.totalMaterialCost)}</strong>
             </div>
-            <div className="detailRow">
-              <span>Direct cost before operating / overhead</span>
-              <strong>{money2(totals.directActualCost)}</strong>
-            </div>
+            {!isProjectManager ? (
+              <div className="detailRow">
+                <span>Direct cost before operating / overhead</span>
+                <strong>{money2(totals.directActualCost)}</strong>
+              </div>
+            ) : null}
             {!isProjectManager ? (
               <>
                 <div className="detailRow">

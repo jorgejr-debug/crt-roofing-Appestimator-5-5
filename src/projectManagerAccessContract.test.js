@@ -25,6 +25,8 @@ test("Project Manager cannot enter the invoice-authoring or finance workflow", (
   assert.match(appSource, /const isFinanceUser = authRole === "admin" \|\| authRole === "cfo"/);
   assert.match(appSource, /const canSubmitInvoiceHandoff = canSubmitJobForInvoice\(authRole\)/);
   assert.match(appSource, /!isProjectManager \? \([\s\S]*Approved bid amount/);
+  assert.match(appSource, /!isProjectManager \? \([\s\S]*Total loaded labor cost/);
+  assert.match(appSource, /!isProjectManager \? \([\s\S]*Direct cost before operating \/ overhead/);
   assert.match(appSource, /!isProjectManager \? \([\s\S]*Net company profit/);
 });
 
