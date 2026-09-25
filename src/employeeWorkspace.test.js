@@ -40,9 +40,9 @@ test("capability checks remove financial shortcuts even if a role configuration 
 });
 
 test("navigation follows each employee's SOP instead of showing every module", () => {
-  assert.deepEqual(getEmployeeNavigationKeys({ email: "chris@crtroofing.com", role: "salesperson", capabilities: allCapabilities }), ["dashboard", "workHub", "crm", "proposalRequests"]);
-  assert.deepEqual(getEmployeeNavigationKeys({ email: "ivan@crtroofing.com", role: "salesperson", capabilities: allCapabilities }), ["dashboard", "workHub", "crm", "fieldNotes", "estimateTemplates", "proposalRequests", "approvedJobs"]);
-  assert.deepEqual(getEmployeeNavigationKeys({ email: "daniela@crtroofing.com", role: "estimator", capabilities: allCapabilities }), ["dashboard", "workHub", "crm", "proposalRequests", "approvedJobs", "activeJobs"]);
+  assert.deepEqual(getEmployeeNavigationKeys({ email: "chris@crtroofing.com", role: "salesperson", capabilities: allCapabilities }), ["dashboard", "workHub", "inspectionRequests", "crm", "proposalRequests"]);
+  assert.deepEqual(getEmployeeNavigationKeys({ email: "ivan@crtroofing.com", role: "salesperson", capabilities: allCapabilities }), ["dashboard", "workHub", "inspectionRequests", "crm", "fieldNotes", "estimateTemplates", "proposalRequests", "approvedJobs"]);
+  assert.deepEqual(getEmployeeNavigationKeys({ email: "daniela@crtroofing.com", role: "estimator", capabilities: allCapabilities }), ["dashboard", "workHub", "inspectionRequests", "crm", "proposalRequests", "approvedJobs", "activeJobs"]);
   assert.deepEqual(getEmployeeNavigationKeys({ email: "miguel@crtroofing.com", role: "project_manager", capabilities: allCapabilities }), ["dashboard", "workHub", "kpis", "activeJobs", "subcontractors"]);
 });
 

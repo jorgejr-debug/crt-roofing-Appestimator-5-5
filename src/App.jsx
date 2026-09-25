@@ -13446,7 +13446,7 @@ function App() {
   const openDashboardInspectionRequest = () => {
     setWorkHubInitialTaskId("");
     setWorkHubInitialCreateTask(false);
-    setWorkHubInitialTab("inspections");
+    setWorkHubInitialTab("inspectionNew");
     setActiveTemplate("workHub");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -18226,7 +18226,7 @@ function App() {
       sendInspection: { eyebrow: "Scheduling", title: "Send for Inspection", description: "Capture the caller and notify Ivan.", open: openDashboardInspectionRequest },
       customers: { eyebrow: "CRM", title: "Customers", description: "Review leads, follow-ups, and customer history.", open: () => setActiveTemplate("crm") },
       tasks: { eyebrow: "Team", title: "New Task", description: "Assign work and start a discussion.", open: openTaskCreator },
-      inspections: { eyebrow: "Field", title: "Inspections", description: "Open field notes and roof inspection records.", open: () => setActiveTemplate("fieldNotes") },
+      inspections: { eyebrow: "Field", title: "Inspection Request Center", description: "Schedule inspections, capture findings, and send the proposal handoff.", open: () => setActiveTemplate("inspectionRequests") },
       proposalRequests: { eyebrow: "Proposals", title: "Proposal Requests", description: "Submit or process estimating information.", open: () => setActiveTemplate("proposalRequests") },
       estimates: { eyebrow: "Estimating", title: "Estimate Templates", description: "Build pricing from the approved company defaults.", open: () => setActiveTemplate("estimateTemplates") },
       approvedJobs: { eyebrow: "Handoff", title: "Approved Jobs", description: "Review work moving into production.", open: () => setActiveTemplate("approvedJobs") },
@@ -19916,6 +19916,7 @@ function App() {
       dashboard: { key: "dashboard", label: "Dashboard", icon: "D", matches: ["dashboard"] },
       workHub: { key: "workHub", label: "Tasks & Messages", icon: "T", matches: ["workHub"] },
       kpis: { key: "kpis", label: "KPI Scorecards", icon: "K", matches: ["kpis"] },
+      inspectionRequests: { key: "inspectionRequests", label: "Inspection Requests", icon: "IR", matches: ["inspectionRequests"] },
       crm: { key: "crm", label: "Customers", icon: "C", matches: ["crm"] },
       fieldNotes: { key: "fieldNotes", label: "Inspections", icon: "I", matches: ["fieldNotes"] },
       estimateTemplates: { key: "estimateTemplates", label: "Estimates", icon: "E", matches: ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"] },
@@ -20176,6 +20177,7 @@ function App() {
   if (activeTemplate === "profile") return renderAuthenticatedLayout(renderProfileScreen());
   if (activeTemplate === "settings") return renderAuthenticatedLayout(renderSettingsScreen());
   if (activeTemplate === "workHub") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab={workHubInitialTab} initialTaskId={workHubInitialTaskId} initialCreateTask={workHubInitialCreateTask} />);
+  if (activeTemplate === "inspectionRequests") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab="inspections" />);
   if (activeTemplate === "proposalRequests") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab="proposals" />);
   if (activeTemplate === "subcontractors") return renderAuthenticatedLayout(renderSubcontractorDirectoryScreen());
   if (activeTemplate === "sprayFoam") return renderAuthenticatedLayout(renderSprayFoamScreen());

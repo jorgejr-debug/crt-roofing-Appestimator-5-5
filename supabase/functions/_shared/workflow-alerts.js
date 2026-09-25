@@ -3,11 +3,11 @@ const closed = value => ['completed','closed','archived','deleted'].includes(low
 const dateTime = value => value && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
 const positive = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0;
 /**
- * @param {{jobs?: Array<Record<string, any>>, logs?: Array<Record<string, any>>, estimates?: Array<Record<string, any>>, proposals?: Array<Record<string, any>>, invoices?: Array<Record<string, any>>, receivables?: Array<Record<string, any>>}} data
+ * @param {{jobs?: Array<Record<string, any>>, logs?: Array<Record<string, any>>, estimates?: Array<Record<string, any>>, proposals?: Array<Record<string, any>>, invoices?: Array<Record<string, any>>, receivables?: Array<Record<string, any>>, inspections?: Array<Record<string, any>>}} data
  * @param {Date} now
  * @param {{timezone?: string, dailyLogHour?: number, proposalWaitingDays?: number, dailyLogsAvailable?: boolean}} options
  */
-export function collectWorkflowAlerts({ jobs = [], logs = [], estimates = [], proposals = [], invoices = [], receivables = [] }, now = new Date(), options = {}) {
+export function collectWorkflowAlerts({ jobs = [], logs = [], estimates = [], proposals = [], invoices = [], receivables = [], inspections = [] }, now = new Date(), options = {}) {
   const timezone = options.timezone || 'America/Los_Angeles';
   const today = new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
   const currentHour = Number(new Intl.DateTimeFormat('en-US',{timeZone:timezone,hour:'numeric',hourCycle:'h23'}).format(now));
@@ -43,6 +43,17 @@ export function collectWorkflowAlerts({ jobs = [], logs = [], estimates = [], pr
     const estimatedCost = positive(summary.totalCostBeforeProfit);
     const actualCost = positive(job.actualCost ?? row.actual_cost);
     if (estimatedCost && actualCost>estimatedCost) add(source,'cost_exceeded',`${name} is above its estimated cost. Review the job cost report.`,'finance');
+  }
+  for (const request of inspections) {
+    if (['draft','on_hold','cancelled','proposal_requested','inspected'].includes(request.status) || !request.assigned_to) continue;
+    const appointment = dateTime(request.appointment_at), submitted = dateTime(request.submitted_at);
+    const name = `Inspection IR-${request.request_number} for ${request.contact_name || 'customer'}`;
+    const recipients = [{userId:request.assigned_to}];
+    if (request.status === 'new' && submitted !== null && now.getTime()-submitted >= 86400000) add(request.id,'inspection_contact_due',`${name} is waiting for first contact. Contact the customer and update its status.`,'inspection',recipients);
+    if (request.status === 'scheduled' && appointment !== null) {
+      if (appointment < now.getTime()) add(request.id,'inspection_appointment_missed',`${name}: the scheduled appointment has passed. Confirm the outcome or reschedule.`,'inspection',recipients,String(appointment));
+      else if (appointment-now.getTime() <= 86400000) add(request.id,'inspection_appointment_upcoming',`${name} is scheduled within 24 hours (${request.appointment_at}).`,'inspection',recipients,String(appointment));
+    }
   }
   for (const proposal of proposals) {
     if (lower(proposal.status) === 'sent') {

@@ -1,3 +1,4 @@
+import InspectionEvidence from "./InspectionEvidence.jsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   PROPOSAL_JOB_TYPES,
@@ -107,7 +108,7 @@ const proposalMatchesStatusFilter = (request, filter) => {
   return status === filter;
 };
 
-export default function ProposalRequests({ supabase, authUser, profiles = [] }) {
+export default function ProposalRequests({ supabase, authUser, profiles = [], initialRequestId = "" }) {
   const [requests, setRequests] = useState([]);
   const [crmLeads, setCrmLeads] = useState([]);
   const [versions, setVersions] = useState([]);
@@ -117,8 +118,8 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
   const [attachments, setAttachments] = useState([]);
   const [pendingAttachments, setPendingAttachments] = useState([]);
   const [draft, setDraft] = useState(() => blankDraft(authUser?.key));
-  const [selectedId, setSelectedId] = useState("");
-  const [view, setView] = useState("queue");
+  const [selectedId, setSelectedId] = useState(initialRequestId);
+  const [view, setView] = useState(initialRequestId ? "detail" : "queue");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [submissionNotice, setSubmissionNotice] = useState({ tone: "", text: "" });
@@ -543,6 +544,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
         <label className="proposalCheckbox"><input type="checkbox" checked={Boolean(draft.deposit_required)} onChange={(e) => setDraft((d) => ({ ...d, deposit_required: e.target.checked }))} /><span>Deposit required before production</span></label>
       </div></section>
       {textFields.map(([title, fields]) => <section className="panel" key={title}><h3>{title}</h3><div className="proposalFieldGrid">{fields.map(([key, label, required, kind, options]) => <label key={key} className={kind === "textarea" ? "proposalWide" : ""}><span>{label}{required ? " *" : ""}</span>{kind === "textarea" ? <textarea rows="3" value={draft[key] || ""} onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))} /> : kind === "select" ? <select value={draft[key] || ""} onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}><option value="">Select an answer</option>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input value={draft[key] || ""} onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))} />}</label>)}</div></section>)}
+      {selected ? <InspectionEvidence supabase={supabase} proposalId={selected.id} userId={authUser.key} /> : null}
       <section className="panel proposalIntakeAttachments">
         <h3>Photos & supporting files</h3>
         <p>Attach roof photos, measurements, roof reports, drawings, RFPs, customer documents, Word files, spreadsheets, or PDFs. Each file may be up to 25 MB.</p>
@@ -601,6 +603,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
         <label className="proposalCommentComposer"><span>Add a comment</span><textarea rows="3" maxLength="4000" value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="Question, clarification, update, or response for this proposal…" /></label>
         <div className="proposalRequestActions"><small>{commentDraft.length}/4000</small><button type="button" className="primaryButton" disabled={busy || !commentDraft.trim()} onClick={() => void addComment()}>{busy ? "Sending…" : "Add Comment & Notify"}</button></div>
       </section>
+      {selected ? <InspectionEvidence supabase={supabase} proposalId={selected.id} userId={authUser.key} /> : null}
       <section className="panel proposalIntakeAttachments"><h3>Documentation / attachments</h3><FileDropZone accept={PROPOSAL_REQUEST_FILE_ACCEPT} label="Add Photos & Files" help="Drop or paste multiple photos and documents here." onFiles={uploadAttachments} disabled={busy} /> <small>{selectedAttachments.length} file(s) attached</small>{uploadProgress ? <p className="proposalUploadProgress" role="status">{uploadProgress}</p> : null}{selectedAttachments.length ? <div className="proposalDocumentLinks">{selectedAttachments.map((item) => <button type="button" className="secondaryButton" key={item.id} onClick={() => void openDocument(item.storage_path)}>Open {item.file_name}</button>)}</div> : <p className="emptyState">No supporting files were attached.</p>}</section>
       {isEstimator ? <section className="panel"><h3>Proposal documents</h3><p>Prepare the proposal in Microsoft Word. Upload the working Word file as the editable source, then upload the finalized PDF for Sales Review. The app tracks the workflow and documents; it does not build the proposal.</p><label className="proposalWide"><span>Proposal sections / alternates (one per line)</span><textarea rows="5" value={sectionDraft} onChange={(e) => setSectionDraft(e.target.value)} /></label><div className="proposalFieldGrid proposalDocumentInputs"><label><span>Working Word proposal (.docx) *</span><input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(e) => setWordFile(e.target.files?.[0] || null)} /></label><label><span>Final customer PDF (required for Sales Review)</span><input type="file" accept=".pdf,application/pdf" onChange={(e) => setFinalPdfFile(e.target.files?.[0] || null)} /></label></div><div className="proposalRequestActions"><button className="secondaryButton" disabled={busy || !wordFile} onClick={() => void saveExternalVersion(false)}>Save Word version</button><button className="primaryButton" disabled={busy || !wordFile || !finalPdfFile} onClick={() => void saveExternalVersion(true)}>Finalize PDF for Sales Review</button></div></section> : null}
       {latestVersion ? <section className="panel"><h3>Proposal document version {latestVersion.version_number}</h3><div className="proposalDocumentLinks">{latestVersion.source_document_storage_path ? <button className="secondaryButton" onClick={() => void openDocument(latestVersion.source_document_storage_path)}>Open Word: {latestVersion.source_document_file_name}</button> : null}{latestVersion.final_pdf_storage_path ? <button className="secondaryButton" onClick={() => void openDocument(latestVersion.final_pdf_storage_path)}>Open final PDF: {latestVersion.final_pdf_file_name}</button> : null}{latestVersion.signed_pdf_storage_path ? <button className="secondaryButton" onClick={() => void openDocument(latestVersion.signed_pdf_storage_path)}>Open signed PDF: {latestVersion.signed_pdf_file_name}</button> : null}</div><div className="proposalSections">{(latestVersion.sections || []).map((section) => <div key={section.id} className={section.customer_approved ? "authorized" : ""}><strong>{section.title}</strong><p>{section.scope}</p><span>{section.customer_approved ? "APPROVED" : latestVersion.customer_decision === "signed" ? "NOT APPROVED" : "Pending customer selection"}</span></div>)}</div>

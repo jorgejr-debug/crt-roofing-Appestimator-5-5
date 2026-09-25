@@ -97,6 +97,9 @@ export function getEmployeeNavigationKeys({ email = "", role = "", capabilities 
     keys = ["dashboard", "workHub", "crm", "fieldNotes", "estimateTemplates", "proposalRequests", "subcontractors", "approvedJobs", "activeJobs", "invoices", "archive", "cfoDashboard"];
   }
 
+  if (["admin", "cfo", "salesperson", "estimator"].includes(normalizedRole)) {
+    keys.splice(keys.indexOf("workHub") + 1, 0, "inspectionRequests");
+  }
   return keys.filter((key) => {
     if (key === "invoices") return Boolean(capabilities.canAccessInvoices);
     if (key === "cfoDashboard") return Boolean(capabilities.canAccessFinance);

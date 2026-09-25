@@ -19,7 +19,7 @@ test("overdue receivables open their linked Natalia discussion", () => {
 
 test("Tasks & Messages opens the requested task discussion", () => {
   assert.match(workHubSource, /initialTaskId = ""/);
-  assert.match(workHubSource, /useState\(initialTaskId \? "tasks" : initialTab\)/);
+  assert.match(workHubSource, /useState\(initialTaskId \? "tasks" : initialTab === "inspectionNew" \? "inspections" : initialTab\)/);
   assert.match(workHubSource, /useState\(initialTaskId\)/);
 });
 

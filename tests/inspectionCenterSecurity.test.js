@@ -1,0 +1,75 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {PGlite} from '@electric-sql/pglite';
+const creator='10000000-0000-0000-0000-000000000001',ivan='10000000-0000-0000-0000-000000000002',office='10000000-0000-0000-0000-000000000003',daniela='10000000-0000-0000-0000-000000000004',outsider='10000000-0000-0000-0000-000000000005',request='10000000-0000-0000-0000-000000000006',file='10000000-0000-0000-0000-000000000007';
+test('inspection lifecycle preserves draft privacy, files, history, retry safety and the proposal review gate',async()=>{
+ const db=new PGlite();
+ try{
+ await db.exec(`CREATE ROLE anon;CREATE ROLE authenticated;CREATE ROLE service_role BYPASSRLS;
+ CREATE SCHEMA auth;CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$SELECT nullif(current_setting('test.uid',true),'')::uuid$$;
+ CREATE SCHEMA storage;CREATE TABLE storage.buckets(id text PRIMARY KEY,name text,public boolean,file_size_limit bigint);
+ CREATE TABLE storage.objects(id uuid DEFAULT gen_random_uuid(),bucket_id text,name text,metadata jsonb);ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+ CREATE FUNCTION storage.foldername(text) RETURNS text[] LANGUAGE sql AS $$SELECT string_to_array($1,'/')$$;
+ GRANT USAGE ON SCHEMA auth,storage TO authenticated,anon;GRANT SELECT,INSERT,DELETE ON storage.objects TO authenticated;
+ CREATE TABLE user_profiles(id uuid PRIMARY KEY,full_name text,email text,role text,is_active boolean DEFAULT true);
+ INSERT INTO user_profiles VALUES('${creator}','Caller','caller@example.invalid','salesperson',true),('${ivan}','Ivan','ivan@crtroofing.com','salesperson',true),('${office}','Office','office@example.invalid','cfo',true),('${daniela}','Daniela','daniela@crtroofing.com','estimator',true),('${outsider}','Other','other@example.invalid','salesperson',true);
+ CREATE TABLE company_tasks(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),created_by uuid,title text,description text,priority text,due_date date,created_at timestamptz DEFAULT now());
+ GRANT SELECT ON company_tasks TO authenticated;
+ CREATE TABLE company_task_assignees(task_id uuid,user_id uuid,assigned_at timestamptz DEFAULT now());
+ CREATE TABLE crm_leads(id uuid PRIMARY KEY,created_by uuid,originator_id uuid,originator_name text,originator_email text,relationship_owner_id uuid,assigned_staff_id text,contact_name text,company_name text DEFAULT '',first_name text DEFAULT '',last_name text DEFAULT '',phone text,email text,property_address text,lead_source text,service_needed text,quick_note text,status text,qualification_status text,qualified_at timestamptz,qualified_by uuid,accepted_for_inspection_at timestamptz,accepted_for_inspection_by uuid,updated_by uuid);
+ CREATE FUNCTION can_access_company_task(uuid) RETURNS boolean LANGUAGE sql SECURITY DEFINER AS $$SELECT EXISTS(SELECT 1 FROM company_tasks WHERE id=$1 AND (created_by=auth.uid() OR EXISTS(SELECT 1 FROM company_task_assignees WHERE task_id=$1 AND user_id=auth.uid())))$$;
+ CREATE FUNCTION can_use_crm() RETURNS boolean LANGUAGE sql SECURITY DEFINER AS $$SELECT EXISTS(SELECT 1 FROM user_profiles WHERE id=auth.uid())$$;
+ CREATE FUNCTION is_proposal_manager() RETURNS boolean LANGUAGE sql SECURITY DEFINER AS $$SELECT auth.uid()='${office}'::uuid$$;
+ CREATE FUNCTION create_private_company_task(text,text,date,text,uuid[]) RETURNS company_tasks LANGUAGE plpgsql SECURITY DEFINER AS $$DECLARE t company_tasks;BEGIN
+ INSERT INTO company_tasks(created_by,title,description,due_date,priority) VALUES(auth.uid(),$1,$2,$3,$4) RETURNING * INTO t;
+ INSERT INTO company_task_assignees SELECT t.id,unnest($5);RETURN t;END$$;
+ CREATE TABLE proposal_requests(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),created_by uuid,salesperson_id uuid,customer_name text,property_name text,service_address text,project_contact_phone text,project_contact_email text,existing_lead_job_id text,scope_of_work text,measurements text,salesperson_notes text,priority text,status text DEFAULT 'draft',draft_handoff_status text DEFAULT 'none');
+ CREATE FUNCTION can_access_proposal_request(uuid) RETURNS boolean LANGUAGE sql SECURITY DEFINER AS $$SELECT EXISTS(SELECT 1 FROM proposal_requests WHERE id=$1 AND (created_by=auth.uid() OR salesperson_id=auth.uid() OR auth.uid() IN ('${office}'::uuid,'${daniela}'::uuid)))$$;
+ CREATE FUNCTION write_proposal_audit(uuid,text,text DEFAULT '') RETURNS void LANGUAGE sql AS $$SELECT NULL::void$$;
+ CREATE FUNCTION submit_draft_proposal_handoff(uuid,boolean) RETURNS proposal_requests LANGUAGE plpgsql AS $$DECLARE r proposal_requests;BEGIN UPDATE proposal_requests SET draft_handoff_status='awaiting_review' WHERE id=$1 RETURNING * INTO r;RETURN r;END$$;
+ CREATE TABLE workflow_notifications(event_key text,user_id uuid,source_record_uid text,kind text,message text,UNIQUE(event_key,user_id));`);
+ await db.exec(`ALTER TABLE proposal_requests ADD COLUMN task_id uuid, ADD COLUMN request_number bigint GENERATED BY DEFAULT AS IDENTITY,
+ ADD COLUMN work_type text,ADD COLUMN customer_deadline date,ADD COLUMN assigned_estimator_id uuid,ADD COLUMN intake_mode text,
+ ADD COLUMN draft_handoff_submitted_at timestamptz,ADD COLUMN missing_information_notes text,ADD COLUMN target_completion_at timestamptz,ADD COLUMN accepted_at timestamptz,ADD COLUMN updated_at timestamptz;
+ ALTER TABLE company_tasks ADD COLUMN status text,ADD COLUMN related_type text,ADD COLUMN related_id text,ADD COLUMN related_label text,ADD COLUMN task_type text;
+ ALTER TABLE company_task_assignees ADD COLUMN assigned_by uuid,ADD CONSTRAINT assignees_unique UNIQUE(task_id,user_id);
+ CREATE TABLE proposal_test_notifications(request_id uuid,user_id uuid,kind text,message text);
+ CREATE FUNCTION queue_proposal_notification(uuid,uuid,text,text) RETURNS void LANGUAGE sql AS $$INSERT INTO proposal_test_notifications VALUES($1,$2,$3,$4)$$;`);
+ const actualHandoff=readFileSync(new URL('../supabase/migrations/20260922100000_draft_proposal_handoff.sql',import.meta.url),'utf8');
+ await db.exec(actualHandoff.slice(actualHandoff.indexOf('CREATE OR REPLACE FUNCTION public.submit_draft_proposal_handoff'),actualHandoff.indexOf('CREATE OR REPLACE FUNCTION public.review_draft_proposal_handoff')));
+ await db.exec(readFileSync(new URL('../supabase/migrations/20260925150000_mobile_task_requests_and_attachments.sql',import.meta.url),'utf8'));
+ await db.exec(readFileSync(new URL('../supabase/migrations/20260925160000_inspection_request_center.sql',import.meta.url),'utf8'));
+ const as=async id=>db.exec(`RESET ROLE;SET ROLE authenticated;SELECT set_config('test.uid','${id}',false)`);
+ const rpc=async(fn,args)=> (await db.query(`SELECT * FROM ${fn}(${args.map((_,i)=>`$${i+1}`).join(',')})`,args)).rows[0];
+ await as(creator);let row=await rpc('save_inspection_request',[request,{contact_name:'Local test only',phone:'555',property_address:'Local fixture address'},0]);
+ assert.equal(row.assigned_to,ivan);assert.equal(row.status,'draft');
+ await assert.rejects(rpc('save_inspection_request',[request,{notes:'stale'},0]),/changed/);
+ const path=`${request}/${creator}/${file}.jpg`;
+ await db.query('INSERT INTO storage.objects(bucket_id,name,metadata) VALUES($1,$2,$3)',['inspection-attachments',path,{size:123}]);
+ await rpc('register_inspection_attachment',[request,file,path,'photo.jpg',123]);await rpc('register_inspection_attachment',[request,file,path,'photo.jpg',123]);
+ for(const person of [ivan,office,daniela,outsider]){await as(person);assert.equal((await db.query('SELECT * FROM inspection_requests')).rows.length,0);assert.equal((await db.query('SELECT * FROM storage.objects')).rows.length,0);await assert.rejects(rpc('submit_inspection_request',[request,row.version]),/creator/);}
+ await as(creator);row=await rpc('submit_inspection_request',[request,row.version]);const taskId=row.task_id;
+ assert.equal((await rpc('submit_inspection_request',[request,1])).task_id,taskId);
+ assert.equal((await db.query('SELECT * FROM inspection_requests')).rows.length,1,'CRM trigger does not duplicate the request');
+ for(const person of [ivan,office]){await as(person);assert.equal((await db.query('SELECT * FROM inspection_requests')).rows.length,1);assert.equal((await db.query('SELECT * FROM storage.objects')).rows.length,1);}
+ await as(outsider);assert.equal((await db.query('SELECT * FROM inspection_requests')).rows.length,0);await assert.rejects(rpc('transition_inspection_request',[request,'inspected',row.version]),/access/);
+ await as(ivan);await assert.rejects(rpc('transition_inspection_request',[request,'scheduled',row.version]),/appointment/);
+ await assert.rejects(rpc('transition_inspection_request',[request,'inspected',row.version]),/findings/);
+ row=await rpc('save_inspection_request',[request,{appointment_at:'2026-10-01T16:00:00Z',findings:'Measured roof coating scope',measurements:'100 sq ft'},row.version]);
+ row=await rpc('transition_inspection_request',[request,'scheduled',row.version]);row=await rpc('transition_inspection_request',[request,'inspected',row.version]);
+ row=await rpc('create_inspection_proposal_request',[request,row.version]);assert.equal(row.status,'proposal_requested');
+ assert.equal((await rpc('create_inspection_proposal_request',[request,1])).proposal_request_id,row.proposal_request_id,'handoff retry does not create duplicate proposals');
+ await as(daniela);assert.equal((await db.query('SELECT * FROM inspection_requests')).rows.length,1,'proposal reviewer receives linked inspection evidence');assert.equal((await db.query('SELECT * FROM storage.objects')).rows.length,1);
+ await assert.rejects(rpc('save_inspection_request',[request,{findings:'forged'},row.version]),/access/);
+ await assert.rejects(db.exec("UPDATE inspection_requests SET status='new'"),/permission denied/);
+ await assert.rejects(db.exec('DELETE FROM inspection_request_audit'),/permission denied/);
+ await as(office);await assert.rejects(rpc('save_inspection_request',[request,{notes:'change closed'},row.version]),/closed/);
+ const history=(await db.query('SELECT * FROM inspection_request_audit ORDER BY created_at')).rows;
+ assert.equal(history.filter(x=>x.action==='attachment_added').length,1);assert.ok(history.some(x=>x.details.after?.status==='inspected'));
+ await db.exec('RESET ROLE');const proposal=(await db.query('SELECT * FROM proposal_requests')).rows[0];assert.equal(proposal.draft_handoff_status,'awaiting_review');assert.equal(proposal.scope_of_work,'Measured roof coating scope');assert.equal(proposal.measurements,'100 sq ft');assert.equal(proposal.salesperson_id,ivan);
+ assert.equal((await db.query('SELECT * FROM company_tasks')).rows.length,2);
+ assert.equal((await db.query('SELECT * FROM proposal_test_notifications')).rows[0].user_id,daniela);
+ await db.exec('SET ROLE anon');await assert.rejects(db.query('SELECT * FROM inspection_requests'),/permission denied/);
+ }finally{await db.close();}
+});

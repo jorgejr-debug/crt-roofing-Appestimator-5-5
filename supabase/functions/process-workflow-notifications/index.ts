@@ -49,16 +49,16 @@ Deno.serve(async request => {
       readAll('estimates','id,local_estimate_id,estimate_code,estimate_data'),
       readAll('proposal_requests'),readAll('invoice_requests'),
       readAll('company_financial_records','id,source_record_uid,customer_name,record_name,amount,status,period_to_date,is_archived',q=>q.eq('record_type','receivable').eq('is_archived',false)),
-      readAll('employees','id,email'),
+      readAll('employees','id,email'),readAll('inspection_requests'),
     ]);
-    const sources=['active_jobs','field_daily_logs','estimates','proposal_requests','invoice_requests','company_financial_records','employees'];
-    const [jobs,logs,estimates,proposals,invoices,receivables,employees]=scanResults.map((result,index)=>{
+    const sources=['active_jobs','field_daily_logs','estimates','proposal_requests','invoice_requests','company_financial_records','employees','inspection_requests'];
+    const [jobs,logs,estimates,proposals,invoices,receivables,employees,inspections]=scanResults.map((result,index)=>{
       if(result.status==='fulfilled') return result.value;
       scanFailed=true;
       console.error(`Workflow source unavailable: ${sources[index]}`,String(result.reason));
       return [];
     });
-    const alerts=collectWorkflowAlerts({jobs,logs,estimates,proposals,invoices,receivables},new Date(),{dailyLogsAvailable:scanResults[1].status==='fulfilled'});
+    const alerts=collectWorkflowAlerts({jobs,logs,estimates,proposals,invoices,receivables,inspections},new Date(),{dailyLogsAvailable:scanResults[1].status==='fulfilled'});
     for(const alert of alerts) alertsByKind[alert.kind]=(alertsByKind[alert.kind] || 0)+1;
     const rows=alerts.flatMap(alert=>notificationRecipients(alert,profiles,employees).map(user_id=>({event_key:alert.event_key,user_id,source_record_uid:alert.source_record_uid,kind:alert.kind,message:alert.message})));
     for(let offset=0;!dryRun && offset<rows.length;offset+=200){const {error}=await admin.from('workflow_notifications').upsert(rows.slice(offset,offset+200),{onConflict:'event_key,user_id',ignoreDuplicates:true});if(error)throw error;}

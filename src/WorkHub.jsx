@@ -4,7 +4,7 @@ import { TASK_DELETE_CONFIRMATION, canDeleteTask } from "./taskDeletion.js";
 import { isTaskClosed, taskMatchesView, taskStatusLabel, taskType, taskTypeLabel } from "./taskStatus.js";
 import ProposalRequests from "./ProposalRequests.jsx";
 import TaskAttachments from "./TaskAttachments.jsx";
-import InspectionRequestForm from "./InspectionRequestForm.jsx";
+import InspectionRequests from "./InspectionRequests.jsx";
 import ActionFeedback from "./ActionFeedback.jsx";
 
 const PROFILE_BUCKET = "profile-photos";
@@ -54,7 +54,9 @@ function PersonAvatar({ profile, size = "normal" }) {
 
 export default function WorkHub({ supabase, authUser, initialTab = "tasks", initialTaskId = "", initialCreateTask = false, onSubmitInspection }) {
   const authUserKey = authUser?.key;
-  const [activeTab, setActiveTab] = useState(initialTaskId ? "tasks" : initialTab);
+  const [activeTab, setActiveTab] = useState(initialTaskId ? "tasks" : initialTab === "inspectionNew" ? "inspections" : initialTab);
+  const [inspectionCreateKey, setInspectionCreateKey] = useState(initialTab === "inspectionNew" ? 1 : 0);
+  const [proposalInitialId, setProposalInitialId] = useState("");
   const [profiles, setProfiles] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [assignees, setAssignees] = useState([]);
@@ -87,7 +89,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
     if (!quiet) setLoading(true);
     setError("");
     const [profileResult, taskResult, assigneeResult, commentResult, notificationResult, messageResult] = await Promise.all([
-      supabase.from("user_profiles").select("id, full_name, email, role, avatar_path").order("full_name"),
+      supabase.from("user_profiles").select("id, full_name, email, role, avatar_path, is_active").order("full_name"),
       supabase.from("company_tasks").select("*").order("updated_at", { ascending: false }),
       supabase.from("company_task_assignees").select("*").order("assigned_at", { ascending: true }),
       supabase.from("company_task_comments").select("*").order("created_at", { ascending: true }),
@@ -282,11 +284,12 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
       </header>
 
       <div className="workHubRequestActions">
-        {onSubmitInspection ? <button type="button" className="primaryButton" onClick={() => setActiveTab("inspections")}>Submit Inspection Request</button> : null}
+        {onSubmitInspection ? <button type="button" className="primaryButton" onClick={() => { setInspectionCreateKey(value => value + 1); setActiveTab("inspections"); }}>Submit Inspection Request</button> : null}
         <button type="button" className="secondaryButton" onClick={() => setActiveTab("proposals")}>Submit Proposal Request</button>
       </div>
       <div className="workHubTabs" role="tablist">
         <button type="button" className={activeTab === "tasks" ? "active" : ""} onClick={() => setActiveTab("tasks")}>Tasks</button>
+        {onSubmitInspection ? <button type="button" className={activeTab === "inspections" ? "active" : ""} onClick={() => { setInspectionCreateKey(0); setActiveTab("inspections"); }}>Inspection Requests</button> : null}
         <button type="button" className={activeTab === "proposals" ? "active" : ""} onClick={() => setActiveTab("proposals")}>Proposal Requests</button>
         <button type="button" className={activeTab === "messages" ? "active" : ""} onClick={() => setActiveTab("messages")}>Messages {unreadMessages ? `(${unreadMessages})` : ""}</button>
         <button type="button" className={activeTab === "people" ? "active" : ""} onClick={() => setActiveTab("people")}>People</button>
@@ -396,8 +399,9 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
         </>
       ) : null}
 
-      {activeTab === "inspections" && onSubmitInspection ? <InspectionRequestForm userId={authUserKey} onSubmit={onSubmitInspection} onCreated={async (task) => { setSelectedTaskId(task.id); setActiveTab("tasks"); setTaskNotice("Inspection request sent to Ivan. Open the task below to add photos or files."); await loadData({ quiet: true }); }} /> : null}
-      {!loading && activeTab === "proposals" ? <ProposalRequests supabase={supabase} authUser={authUser} profiles={profiles} /> : null}
+      {activeTab === "inspections" && onSubmitInspection ? <InspectionRequests key={inspectionCreateKey ? "create" : "queue"} supabase={supabase} authUser={authUser} profiles={profiles} createKey={inspectionCreateKey} tasks={tasks} onOpenTask={taskId => { setSelectedTaskId(taskId); setActiveTab("tasks"); }} onOpenProposal={id => { setProposalInitialId(id); setActiveTab("proposals"); }} /> : null}
+
+      {!loading && activeTab === "proposals" ? <ProposalRequests key={proposalInitialId || "queue"} initialRequestId={proposalInitialId} supabase={supabase} authUser={authUser} profiles={profiles} /> : null}
 
       {!loading && activeTab === "messages" ? (
         <div className="workHubMessaging">
