@@ -1,3 +1,4 @@
+import { normalizeCompanyVehicle, isMissingVehicleTable } from "./companyVehicles.js";
 import { fetchAccessibleFieldLogRows, ownFieldLogsForCache } from "./fieldLogAccess.js";
 import ConnectionStatus from "./ConnectionStatus.jsx";
 import { toPlainObject } from "./settingsObject.js";
@@ -4456,15 +4457,8 @@ function mapFieldOperationEmployeeRow(row = {}) {
 }
 
 function mapCompanyVehicleRow(row = {}) {
-  return {
-    id: String(row.id || createFieldDailyLogId()),
-    vehicleName: String(row.vehicle_name || row.name || ""),
-    unitNumber: String(row.unit_number || row.unit || ""),
-    licensePlate: String(row.license_plate || row.plate || ""),
-    mpg: Math.max(0, toNumber(row.mpg, 0)),
-    active: row.active !== false && row.active !== "false",
-    vehicleType: String(row.vehicle_type || ""),
-  };
+  const fallback = TRAVEL_VEHICLE_OPTIONS.find(vehicle => vehicle.value === row.id) || {};
+  return normalizeCompanyVehicle({ ...row, id: row.id || createFieldDailyLogId() }, fallback);
 }
 
 function buildEmployeeDisplayName(employee = {}) {
@@ -5272,6 +5266,8 @@ async function fetchFieldOperationEmployeesFromSupabase(userKey, companyWide = f
 async function fetchCompanyVehiclesFromSupabase(userKey) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
   const { data, error } = await supabase.from("company_vehicles").select("*").eq("user_key", userKey).order("display_order", { ascending: true });
+  // This optional directory is absent in older projects; keep their configured list.
+  if (isMissingVehicleTable(error)) return { data: [], error: null };
   return {
     data: Array.isArray(data) ? data.map(mapCompanyVehicleRow).filter((row) => row.active) : [],
     error,
@@ -12360,11 +12356,13 @@ function App() {
 
     setQuickMeasureIsProcessing(true);
     setQuickMeasureStatus("Reading QuickMeasure PDF...");
+    let pdfLoadingTask;
 
     try {
       const arrayBuffer = await file.arrayBuffer();
       const { getDocument } = await loadPdfReader();
-      const pdf = await getDocument({ data: arrayBuffer }).promise;
+      pdfLoadingTask = getDocument({ data: arrayBuffer, isEvalSupported: false });
+      const pdf = await pdfLoadingTask.promise;
       let extractedText = "";
 
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
@@ -12393,6 +12391,7 @@ function App() {
       setSessionMessageType("error");
       setSessionMessage(`QuickMeasure upload failed: ${error?.message || String(error)}`);
     } finally {
+      await pdfLoadingTask?.destroy().catch(() => {});
       setQuickMeasureIsProcessing(false);
     }
   };

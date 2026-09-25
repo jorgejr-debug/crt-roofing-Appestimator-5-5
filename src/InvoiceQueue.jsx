@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import jsPDF from "jspdf";
+import { jsPDF } from "jspdf";
 import FileDropZone from "./FileDropZone.jsx";
 import { INVOICE_REQUEST_STATUSES } from "./invoiceWorkflow.js";
 import ActionFeedback from "./ActionFeedback.jsx";
