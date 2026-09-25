@@ -147,6 +147,8 @@ const CFO_SHARED_LIQUID_CASH_CARD_KEY = CFO_LIQUID_CASH_CARD_KEY;
 const CRM_LEADS_KEY = (userKey) => `crt_roofing_crm_leads_v1:${userKey}`;
 const CRM_CUSTOMERS_KEY = (userKey) => `crt_roofing_crm_customers_v1:${userKey}`;
 const CRM_FOLLOWUPS_KEY = (userKey) => `crt_roofing_crm_followups_v1:${userKey}`;
+const CRM_CUSTOMERS_MIGRATED_KEY = (userKey) => `crt_roofing_crm_customers_shared_v1:${userKey}`;
+const CRM_FOLLOWUPS_MIGRATED_KEY = (userKey) => `crt_roofing_crm_followups_shared_v1:${userKey}`;
 const APPEARANCE_PREFERENCE_KEY = "crt_roofing_appearance_preference_v1";
 const SIDEBAR_COLLAPSED_KEY = "crt_roofing_sidebar_collapsed_v1";
 const COMPANY_ESTIMATOR_SETTINGS_TABLE = "company_estimator_settings";
@@ -4007,6 +4009,116 @@ async function deleteCrmLeadFromSupabase(leadId) {
   return supabase.from("crm_leads").delete().eq("id", leadId);
 }
 
+function mapCrmCustomerRow(row = {}) {
+  return normalizeCrmCustomer({
+    ...(row.customer_payload && typeof row.customer_payload === "object" ? row.customer_payload : {}),
+    ...row,
+    id: row.id,
+    customerName: row.customer_name,
+    sourceLeadId: row.source_lead_id,
+    assignedStaffId: row.assigned_staff_id,
+    billingAddress: row.billing_address,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+}
+
+async function fetchCrmCustomersFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const { data, error } = await supabase.from("crm_customers").select("*").order("updated_at", { ascending: false });
+  return { data: Array.isArray(data) ? data.map(mapCrmCustomerRow) : [], error };
+}
+
+async function upsertCrmCustomerToSupabase(customer, actor) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !actor?.key) return { data: null, error: null };
+  const normalized = normalizeCrmCustomer(customer);
+  const sourceLeadId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized.sourceLeadId)
+    ? normalized.sourceLeadId
+    : null;
+  const sharedPayload = {
+    ...normalized,
+    files: [],
+    proposalArchive: [],
+  };
+  const row = {
+    id: normalized.id,
+    source_lead_id: sourceLeadId,
+    assigned_staff_id: normalized.assignedStaffId,
+    customer_name: normalized.customerName,
+    phone: normalized.phone,
+    email: normalized.email,
+    billing_address: normalized.billingAddress,
+    customer_payload: sharedPayload,
+    created_at: normalized.createdAt,
+    updated_at: normalized.updatedAt,
+    updated_by: actor.key,
+  };
+  const updated = await supabase.from("crm_customers").update(row).eq("id", normalized.id).select("*").maybeSingle();
+  if (updated.error) return { data: null, error: updated.error };
+  if (updated.data) return { data: mapCrmCustomerRow(updated.data), error: null };
+  const inserted = await supabase.from("crm_customers").insert({ ...row, created_by: actor.key }).select("*").maybeSingle();
+  return { data: inserted.data ? mapCrmCustomerRow(inserted.data) : null, error: inserted.error };
+}
+
+async function deleteCrmCustomerFromSupabase(customerId) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !customerId) return { error: null };
+  return supabase.from("crm_customers").delete().eq("id", customerId);
+}
+
+function mapCrmFollowupRow(row = {}) {
+  return normalizeCrmFollowup({
+    ...(row.followup_payload && typeof row.followup_payload === "object" ? row.followup_payload : {}),
+    ...row,
+    id: row.id,
+    relatedType: row.related_type,
+    relatedId: row.related_id,
+    dueDate: row.due_date,
+    assignedStaffId: row.assigned_staff_id,
+    followUpType: row.follow_up_type,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  });
+}
+
+async function fetchCrmFollowupsFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
+  const { data, error } = await supabase.from("crm_followups").select("*").order("due_date", { ascending: true });
+  return { data: Array.isArray(data) ? data.map(mapCrmFollowupRow) : [], error };
+}
+
+async function upsertCrmFollowupToSupabase(followup, actor) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !actor?.key) return { data: null, error: null };
+  const normalized = normalizeCrmFollowup(followup);
+  const row = {
+    id: normalized.id,
+    related_type: normalized.relatedType === "customer" ? "customer" : "lead",
+    related_id: normalized.relatedId,
+    title: normalized.title,
+    due_date: normalized.dueDate || null,
+    assigned_staff_id: normalized.assignedStaffId,
+    follow_up_type: normalized.followUpType,
+    status: normalized.status,
+    notes: normalized.notes,
+    followup_payload: normalized,
+    created_at: normalized.createdAt,
+    completed_at: normalized.completedAt || null,
+    updated_at: normalized.updatedAt,
+    updated_by: actor.key,
+  };
+  const updated = await supabase.from("crm_followups").update(row).eq("id", normalized.id).select("*").maybeSingle();
+  if (updated.error) return { data: null, error: updated.error };
+  if (updated.data) return { data: mapCrmFollowupRow(updated.data), error: null };
+  const inserted = await supabase.from("crm_followups").insert({ ...row, created_by: actor.key }).select("*").maybeSingle();
+  return { data: inserted.data ? mapCrmFollowupRow(inserted.data) : null, error: inserted.error };
+}
+
+async function deleteCrmFollowupFromSupabase(followupId) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !followupId) return { error: null };
+  return supabase.from("crm_followups").delete().eq("id", followupId);
+}
+
 async function fetchCrmKpiTargetFromSupabase() {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: null };
   return supabase.from("crm_kpi_targets").select("*").eq("key", "ivan_weekly_inspection_capacity").maybeSingle();
@@ -5100,6 +5212,7 @@ function mergeProposalArchiveEntries(existingEntries = [], nextEntry = {}) {
 }
 
 function createBlankCrmFollowup() {
+  const now = new Date().toISOString();
   return {
     id: createFieldDailyLogId(),
     relatedType: "lead",
@@ -5110,7 +5223,9 @@ function createBlankCrmFollowup() {
     followUpType: "Call",
     status: "Open",
     notes: "",
-    createdAt: new Date().toISOString(),
+    createdBy: "",
+    createdAt: now,
+    updatedAt: now,
     completedAt: "",
   };
 }
@@ -5127,7 +5242,9 @@ function normalizeCrmFollowup(followup = {}) {
     followUpType: String(followup.followUpType || followup.follow_up_type || "Call"),
     status: String(followup.status || "Open"),
     notes: String(followup.notes || ""),
+    createdBy: String(followup.createdBy || followup.created_by || ""),
     createdAt: String(followup.createdAt || followup.created_at || new Date().toISOString()),
+    updatedAt: String(followup.updatedAt || followup.updated_at || followup.createdAt || followup.created_at || new Date().toISOString()),
     completedAt: String(followup.completedAt || followup.completed_at || ""),
   };
 }
@@ -10373,11 +10490,16 @@ function App() {
   const [crmLeadSortDirection, setCrmLeadSortDirection] = useState("desc");
   const [crmPipelineView, setCrmPipelineView] = useState("table");
   const [crmCustomers, setCrmCustomers] = useState([]);
+  const [crmCustomerSaving, setCrmCustomerSaving] = useState(false);
+  const [crmCustomerDeletingId, setCrmCustomerDeletingId] = useState("");
+  const [crmRecordSyncError, setCrmRecordSyncError] = useState("");
   const [crmCustomerDraft, setCrmCustomerDraft] = useState(() => createBlankCrmCustomer());
   const [crmCustomerEditingId, setCrmCustomerEditingId] = useState("");
   const [crmCustomerSearch, setCrmCustomerSearch] = useState("");
   const [crmSelectedCustomerId, setCrmSelectedCustomerId] = useState("");
   const [crmFollowups, setCrmFollowups] = useState([]);
+  const [crmFollowupSaving, setCrmFollowupSaving] = useState(false);
+  const [crmFollowupDeletingId, setCrmFollowupDeletingId] = useState("");
   const [crmFollowupDraft, setCrmFollowupDraft] = useState(() => createBlankCrmFollowup());
   const [crmFollowupEditingId, setCrmFollowupEditingId] = useState("");
   const [crmFollowupSearch, setCrmFollowupSearch] = useState("");
@@ -10773,6 +10895,7 @@ function App() {
       setCrmFollowups([]);
       setCrmFollowupDraft(createBlankCrmFollowup());
       setCrmFollowupEditingId("");
+      setCrmRecordSyncError("");
       setCrmLeadSyncStatus("idle");
       setCrmLeadSyncError("");
       return;
@@ -10788,8 +10911,11 @@ function App() {
     setCrmLeads(localLeads);
     setCrmLeadSyncStatus("loading");
     setCrmLeadSyncError("");
-    setCrmCustomers(readJson(CRM_CUSTOMERS_KEY(authUser.key), []).map(normalizeCrmCustomer));
-    setCrmFollowups(readJson(CRM_FOLLOWUPS_KEY(authUser.key), []).map(normalizeCrmFollowup));
+    const localCustomers = readJson(CRM_CUSTOMERS_KEY(authUser.key), []).map(normalizeCrmCustomer);
+    const localFollowups = readJson(CRM_FOLLOWUPS_KEY(authUser.key), []).map(normalizeCrmFollowup);
+    setCrmCustomers(localCustomers);
+    setCrmFollowups(localFollowups);
+    setCrmRecordSyncError("");
     setCrmLeadDraft(createBlankCrmLead());
     setCrmLeadEditingId("");
     setCrmCustomerDraft(createBlankCrmCustomer());
@@ -10822,6 +10948,44 @@ function App() {
         setCrmLeads(remote.data);
         setCrmLeadSyncStatus("saved");
         setCrmLeadSyncError("");
+      }
+      let [customerResult, followupResult] = await Promise.all([
+        fetchCrmCustomersFromSupabase(),
+        fetchCrmFollowupsFromSupabase(),
+      ]);
+      if (!active) return;
+      const recordErrors = [customerResult.error, followupResult.error].filter(Boolean);
+      if (recordErrors.length) {
+        setCrmRecordSyncError(recordErrors[0].message || "Shared customer records are unavailable.");
+      } else {
+        const customersMigrated = Boolean(readJson(CRM_CUSTOMERS_MIGRATED_KEY(authUser.key), false));
+        if (!customersMigrated) {
+          const remoteIds = new Set((customerResult.data || []).map((customer) => customer.id));
+          const missingCustomers = localCustomers.filter((customer) => !remoteIds.has(customer.id));
+          const results = await Promise.all(missingCustomers.map((customer) => upsertCrmCustomerToSupabase(customer, authUser)));
+          const failed = results.find((result) => result?.error);
+          if (!failed?.error) {
+            writeJson(CRM_CUSTOMERS_MIGRATED_KEY(authUser.key), true);
+            customerResult = await fetchCrmCustomersFromSupabase();
+          } else {
+            setCrmRecordSyncError(failed.error.message || "Existing customer notes could not be moved to the shared CRM.");
+          }
+        }
+        const followupsMigrated = Boolean(readJson(CRM_FOLLOWUPS_MIGRATED_KEY(authUser.key), false));
+        if (!followupsMigrated) {
+          const remoteIds = new Set((followupResult.data || []).map((followup) => followup.id));
+          const missingFollowups = localFollowups.filter((followup) => !remoteIds.has(followup.id));
+          const results = await Promise.all(missingFollowups.map((followup) => upsertCrmFollowupToSupabase(followup, authUser)));
+          const failed = results.find((result) => result?.error);
+          if (!failed?.error) {
+            writeJson(CRM_FOLLOWUPS_MIGRATED_KEY(authUser.key), true);
+            followupResult = await fetchCrmFollowupsFromSupabase();
+          } else {
+            setCrmRecordSyncError(failed.error.message || "Existing reminders could not be moved to the shared CRM.");
+          }
+        }
+        if (!customerResult.error) setCrmCustomers(customerResult.data || []);
+        if (!followupResult.error) setCrmFollowups(followupResult.data || []);
       }
       const [targetResult, documentResult] = await Promise.all([
         fetchCrmKpiTargetFromSupabase(),
@@ -10882,6 +11046,14 @@ function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "crm_lead_documents" }, async () => {
         const result = await fetchCrmLeadDocumentsFromSupabase();
         if (!result.error) setCrmLeadDocuments(result.data || []);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "crm_customers" }, async () => {
+        const result = await fetchCrmCustomersFromSupabase();
+        if (!result.error) setCrmCustomers(result.data || []);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "crm_followups" }, async () => {
+        const result = await fetchCrmFollowupsFromSupabase();
+        if (!result.error) setCrmFollowups(result.data || []);
       })
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
@@ -13901,12 +14073,21 @@ function App() {
       notes: savedLead.internalNotes || savedLead.description || "",
     });
 
+    const customerResult = await upsertCrmCustomerToSupabase(nextCustomer, authUser);
+    if (customerResult?.error) {
+      setCrmLeadSyncStatus("saved");
+      setSessionMessageType("error");
+      setSessionMessage(`The lead was converted, but its shared customer record could not be created: ${customerResult.error.message || customerResult.error}`);
+      return;
+    }
+    const sharedCustomer = normalizeCrmCustomer(customerResult?.data || nextCustomer);
+
     setCrmCustomers((current) => {
-      const next = [...current.filter((customer) => customer.id !== nextCustomer.id), nextCustomer];
+      const next = [...current.filter((customer) => customer.id !== sharedCustomer.id), sharedCustomer];
       return next.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
     });
-    setCrmSelectedCustomerId(nextCustomer.id);
-    setCrmCustomerDraft(nextCustomer);
+    setCrmSelectedCustomerId(sharedCustomer.id);
+    setCrmCustomerDraft(sharedCustomer);
     setCrmLeadDraft(sharedConvertedLead);
     setCrmLeads((current) =>
       [sharedConvertedLead, ...current.filter((lead) => lead.id !== savedLead.id)]
@@ -13916,7 +14097,7 @@ function App() {
     setCrmLeadSyncError("");
     setCrmTab("customers");
     setSessionMessageType("success");
-    setSessionMessage("Lead conversion saved to the shared CRM. Detailed customer notes on this tab remain on this browser.");
+    setSessionMessage("Lead and customer record saved to the shared CRM.");
   };
 
   const startNewCrmCustomerDraft = () => {
@@ -13940,7 +14121,8 @@ function App() {
     }));
   };
 
-  const saveCrmCustomerDraft = (statusMessage = "Saved customer.") => {
+  const saveCrmCustomerDraft = async (statusMessage = "Customer saved to the shared CRM.") => {
+    if (crmCustomerSaving) return null;
     const normalized = normalizeCrmCustomer({
       ...crmCustomerDraft,
       customerName:
@@ -13958,16 +14140,47 @@ function App() {
       ...normalized,
       updatedAt: new Date().toISOString(),
     };
+    setCrmCustomerSaving(true);
+    setSessionMessageType("info");
+    setSessionMessage("Saving customer to the shared CRM…");
+    const result = await upsertCrmCustomerToSupabase(nextCustomer, authUser);
+    setCrmCustomerSaving(false);
+    if (result?.error) {
+      setSessionMessageType("error");
+      setSessionMessage(`Customer was not saved: ${result.error.message || result.error}`);
+      return null;
+    }
+    const sharedCustomer = normalizeCrmCustomer(result?.data || nextCustomer);
     setCrmCustomers((current) => {
-      const next = [...current.filter((customer) => customer.id !== nextCustomer.id), nextCustomer];
+      const next = [...current.filter((customer) => customer.id !== sharedCustomer.id), sharedCustomer];
       return next.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
     });
-    setCrmCustomerDraft(nextCustomer);
-    setCrmCustomerEditingId(nextCustomer.id);
-    setCrmSelectedCustomerId(nextCustomer.id);
+    setCrmCustomerDraft(sharedCustomer);
+    setCrmCustomerEditingId(sharedCustomer.id);
+    setCrmSelectedCustomerId(sharedCustomer.id);
     setSessionMessageType("success");
     setSessionMessage(statusMessage);
-    return nextCustomer;
+    return sharedCustomer;
+  };
+
+  const deleteCrmCustomer = async (customer) => {
+    if (!customer?.id || crmCustomerDeletingId || !isFinanceUser) return;
+    const customerName = crmCustomerDisplayName(customer);
+    if (!window.confirm(`Delete ${customerName} from the shared CRM? This cannot be undone.`)) return;
+    setCrmCustomerDeletingId(customer.id);
+    setSessionMessageType("info");
+    setSessionMessage(`Deleting ${customerName}…`);
+    const result = await deleteCrmCustomerFromSupabase(customer.id);
+    setCrmCustomerDeletingId("");
+    if (result?.error) {
+      setSessionMessageType("error");
+      setSessionMessage(`Customer was not deleted: ${result.error.message || result.error}`);
+      return;
+    }
+    setCrmCustomers((current) => current.filter((item) => item.id !== customer.id));
+    if (crmCustomerEditingId === customer.id) startNewCrmCustomerDraft();
+    setSessionMessageType("success");
+    setSessionMessage(`${customerName} was deleted from the shared CRM.`);
   };
 
   const updateCrmCustomerArrayField = (field, updater) => {
@@ -14053,7 +14266,8 @@ function App() {
     setCrmFollowupEditingId(normalized.id);
   };
 
-  const saveCrmFollowupDraft = () => {
+  const saveCrmFollowupDraft = async () => {
+    if (crmFollowupSaving) return null;
     const normalized = normalizeCrmFollowup(crmFollowupDraft);
     if (!normalized.title.trim() || !normalized.dueDate) {
       setSessionMessageType("error");
@@ -14062,22 +14276,49 @@ function App() {
     }
     const nextFollowup = {
       ...normalized,
+      createdBy: normalized.createdBy || authUser?.key || "",
+      completedAt: normalized.status === "Completed" ? normalized.completedAt || new Date().toISOString() : "",
       updatedAt: new Date().toISOString(),
     };
+    setCrmFollowupSaving(true);
+    setSessionMessageType("info");
+    setSessionMessage("Saving reminder to the shared CRM…");
+    const result = await upsertCrmFollowupToSupabase(nextFollowup, authUser);
+    setCrmFollowupSaving(false);
+    if (result?.error) {
+      setSessionMessageType("error");
+      setSessionMessage(`Reminder was not saved: ${result.error.message || result.error}`);
+      return null;
+    }
+    const sharedFollowup = normalizeCrmFollowup(result?.data || nextFollowup);
     setCrmFollowups((current) => {
-      const next = [...current.filter((followup) => followup.id !== nextFollowup.id), nextFollowup];
+      const next = [...current.filter((followup) => followup.id !== sharedFollowup.id), sharedFollowup];
       return next.sort((a, b) => String(a.dueDate || a.createdAt || "").localeCompare(String(b.dueDate || b.createdAt || "")));
     });
-    setCrmFollowupDraft(nextFollowup);
-    setCrmFollowupEditingId(nextFollowup.id);
+    setCrmFollowupDraft(sharedFollowup);
+    setCrmFollowupEditingId(sharedFollowup.id);
     setSessionMessageType("success");
-    setSessionMessage("Saved follow-up task.");
-    return nextFollowup;
+    setSessionMessage("Reminder saved to the shared CRM.");
+    return sharedFollowup;
   };
 
-  const deleteCrmFollowup = (followupId) => {
-    setCrmFollowups((current) => current.filter((followup) => followup.id !== followupId));
-    if (crmFollowupEditingId === followupId) startNewCrmFollowupDraft();
+  const deleteCrmFollowup = async (followup) => {
+    if (!followup?.id || crmFollowupDeletingId) return;
+    if (!window.confirm(`Delete ${followup.title || "this reminder"} from the shared CRM? This cannot be undone.`)) return;
+    setCrmFollowupDeletingId(followup.id);
+    setSessionMessageType("info");
+    setSessionMessage("Deleting reminder…");
+    const result = await deleteCrmFollowupFromSupabase(followup.id);
+    setCrmFollowupDeletingId("");
+    if (result?.error) {
+      setSessionMessageType("error");
+      setSessionMessage(`Reminder was not deleted: ${result.error.message || result.error}`);
+      return;
+    }
+    setCrmFollowups((current) => current.filter((item) => item.id !== followup.id));
+    if (crmFollowupEditingId === followup.id) startNewCrmFollowupDraft();
+    setSessionMessageType("success");
+    setSessionMessage("Reminder deleted from the shared CRM.");
   };
 
   const handleAddFieldDailyLogMaterialRow = () => {
@@ -15593,25 +15834,19 @@ function App() {
       updatedAt: proposalRecord.updatedAt || archivedAt,
     });
 
-    let syncedCustomer = null;
-    setCrmCustomers((current) => {
-      const sourceCustomer = findCrmCustomerForProposal(current, proposalRecord, estimate);
-      const nextCustomer = sourceCustomer
-        ? normalizeCrmCustomer({
-            ...sourceCustomer,
-            proposalArchive: mergeProposalArchiveEntries(sourceCustomer.proposalArchive, archiveEntry),
-            updatedAt: archivedAt,
-          })
-        : createCustomerFromProposal(proposalRecord, estimate, archiveEntry);
-      syncedCustomer = nextCustomer;
+    const sourceCustomer = findCrmCustomerForProposal(crmCustomers, proposalRecord, estimate);
+    const syncedCustomer = sourceCustomer
+      ? normalizeCrmCustomer({
+          ...sourceCustomer,
+          proposalArchive: mergeProposalArchiveEntries(sourceCustomer.proposalArchive, archiveEntry),
+          updatedAt: archivedAt,
+        })
+      : createCustomerFromProposal(proposalRecord, estimate, archiveEntry);
+    setCrmCustomers((current) => sourceCustomer
+      ? current.map((customer) => (customer.id === sourceCustomer.id ? syncedCustomer : customer))
+      : [syncedCustomer, ...current]);
 
-      if (sourceCustomer) {
-        return current.map((customer) => (customer.id === sourceCustomer.id ? nextCustomer : customer));
-      }
-      return [nextCustomer, ...current];
-    });
-
-    if (syncedCustomer && (crmSelectedCustomerId === syncedCustomer.id || !crmSelectedCustomerId)) {
+    if (crmSelectedCustomerId === syncedCustomer.id || !crmSelectedCustomerId) {
       setCrmCustomerDraft(syncedCustomer);
       setCrmSelectedCustomerId(syncedCustomer.id);
     }
@@ -19733,10 +19968,10 @@ function App() {
             + New lead
           </button>
           <button type="button" className="secondaryButton" onClick={startNewCrmCustomerDraft}>
-            + Local customer note
+            + Shared customer
           </button>
           <button type="button" className="secondaryButton" onClick={startNewCrmFollowupDraft}>
-            + Local reminder
+            + Shared reminder
           </button>
         </div>
 
@@ -19746,8 +19981,8 @@ function App() {
               ["quickCapture", "Quick Capture"],
               ["newLead", "Qualify / Edit"],
               ["pipeline", "Lead Pipeline"],
-              ["customers", "Local Customer Notes"],
-              ["followUps", "Local Reminders"],
+              ["customers", "Customers"],
+              ["followUps", "Reminders"],
               ["reports", "KPI Scorecards"],
             ].map(([key, label]) => (
               <button
@@ -19762,7 +19997,7 @@ function App() {
           </div>
           <p className="smallNote" style={{ margin: 0 }}>
             Shared CRM: {crmLeadSyncStatus === "saving" ? "saving..." : crmLeadSyncStatus === "saved" ? "synced" : crmLeadSyncStatus === "loading" ? "loading..." : "local fallback"}
-            {crmLeadSyncError ? ` · ${crmLeadSyncError}` : ""}
+            {crmLeadSyncError ? ` · ${crmLeadSyncError}` : ""}{crmRecordSyncError ? ` · ${crmRecordSyncError}` : ""}
           </p>
         </Section>
 
@@ -20178,22 +20413,19 @@ function App() {
 
         {crmTab === "customers" ? (
           <Section
-            title="Local Customer Notes"
-            subtitle="Converted lead status is shared; the detailed notes in this legacy section remain on this browser."
+            title="Shared Customers"
+            subtitle="Customer details, properties, contacts, history, and notes are synchronized for the authorized CRM team."
             right={
               <div className="actionRow" style={{ margin: 0 }}>
                 <button type="button" className="secondaryButton" onClick={startNewCrmCustomerDraft}>
                   New customer
                 </button>
-                <button type="button" className="secondaryButton" onClick={() => saveCrmCustomerDraft("Customer saved.")}>
-                  Save customer
+                <button type="button" className="secondaryButton" disabled={crmCustomerSaving} onClick={() => void saveCrmCustomerDraft()}>
+                  {crmCustomerSaving ? "Saving…" : "Save customer"}
                 </button>
               </div>
             }
           >
-            <div className="statusMessage warningMessage" role="note" style={{ marginBottom: 14 }}>
-              Do not rely on this section for team handoff. Use the shared Lead Pipeline, Proposal Requests, Active Jobs, and Tasks & Messages as the company record.
-            </div>
             <div className="detailList" style={{ marginBottom: 14 }}>
               <DetailRow label="Customer records" value={num(crmCustomers.length, 0)} />
               <DetailRow label="Selected customer" value={crmSelectedCustomer ? crmCustomerDisplayName(crmSelectedCustomer) : "None"} />
@@ -20221,9 +20453,9 @@ function App() {
                       <button type="button" className="secondaryButton" onClick={() => editCrmCustomer(customer)}>
                         Open file
                       </button>
-                      <button type="button" className="dangerButton" onClick={() => setCrmCustomers((current) => current.filter((item) => item.id !== customer.id))}>
-                        Delete
-                      </button>
+                      {isFinanceUser ? <button type="button" className="dangerButton" disabled={crmCustomerDeletingId === customer.id} onClick={() => void deleteCrmCustomer(customer)}>
+                        {crmCustomerDeletingId === customer.id ? "Deleting…" : "Delete"}
+                      </button> : null}
                     </div>
                   </div>
                 ))
@@ -20238,21 +20470,21 @@ function App() {
 
         {crmTab === "followUps" ? (
           <Section
-            title="Local Reminders"
-            subtitle="Legacy reminders here remain on this browser; assign shared follow-up in Tasks & Messages."
+            title="Shared Reminders"
+            subtitle="CRM reminders synchronize across authorized employees; assign formal work in Tasks & Messages."
             right={
               <div className="actionRow" style={{ margin: 0 }}>
                 <button type="button" className="secondaryButton" onClick={startNewCrmFollowupDraft}>
                   New follow-up
                 </button>
-                <button type="button" className="secondaryButton" onClick={saveCrmFollowupDraft}>
-                  Save follow-up
+                <button type="button" className="secondaryButton" disabled={crmFollowupSaving} onClick={() => void saveCrmFollowupDraft()}>
+                  {crmFollowupSaving ? "Saving…" : "Save reminder"}
                 </button>
               </div>
             }
           >
-            <div className="statusMessage warningMessage" role="note" style={{ marginBottom: 14 }}>
-              For anything another employee must see or complete, create a task in Tasks & Messages.
+            <div className="statusMessage infoMessage" role="note" style={{ marginBottom: 14 }}>
+              Reminders track CRM follow-up. For accountable assigned work and discussion, create a task in Tasks & Messages.
               <div className="actionRow" style={{ marginTop: 10 }}>
                 <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("workHub")}>Open Tasks & Messages</button>
               </div>
@@ -20336,9 +20568,9 @@ function App() {
                       <button type="button" className="secondaryButton" onClick={() => editCrmFollowup(followup)}>
                         Edit
                       </button>
-                      <button type="button" className="dangerButton" onClick={() => deleteCrmFollowup(followup.id)}>
-                        Delete
-                      </button>
+                      {(isFinanceUser || followup.createdBy === authUser?.key) ? <button type="button" className="dangerButton" disabled={crmFollowupDeletingId === followup.id} onClick={() => void deleteCrmFollowup(followup)}>
+                        {crmFollowupDeletingId === followup.id ? "Deleting…" : "Delete"}
+                      </button> : null}
                     </div>
                   </div>
                 ))
