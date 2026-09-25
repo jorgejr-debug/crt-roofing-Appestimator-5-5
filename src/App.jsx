@@ -13485,7 +13485,7 @@ function App() {
     window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   };
 
-  const saveCrmLeadDraft = (statusMessage = "Saved lead.", leadOverride = crmLeadDraft, skipRemoteSync = false) => {
+  const saveCrmLeadDraft = async (statusMessage = "Saved lead.", leadOverride = crmLeadDraft, skipRemoteSync = false) => {
     const normalized = normalizeCrmLead({
       ...leadOverride,
       originatorId: leadOverride.originatorId || authUser?.key || "",
@@ -13519,21 +13519,28 @@ function App() {
     });
     setCrmLeadDraft(nextLead);
     setCrmLeadEditingId(nextLead.id);
+    setSessionMessageType("info");
+    setSessionMessage("Saving lead to the shared CRM…");
+    setCrmLeadSyncStatus("saving");
+    if (skipRemoteSync) return nextLead;
+
+    const result = await upsertCrmLeadToSupabase(nextLead, authUser);
+    if (result?.error) {
+      setCrmLeadSyncStatus("local");
+      setCrmLeadSyncError(result.error.message || "Lead saved locally but not to the shared CRM.");
+      setSessionMessageType("error");
+      setSessionMessage(`Lead saved on this device, but shared sync failed: ${result.error.message || result.error}`);
+      return null;
+    }
+    const sharedLead = normalizeCrmLead(result?.data || nextLead);
+    setCrmLeads((current) => [sharedLead, ...current.filter((lead) => lead.id !== sharedLead.id)]
+      .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""))));
+    setCrmLeadDraft(sharedLead);
+    setCrmLeadSyncStatus("saved");
+    setCrmLeadSyncError("");
     setSessionMessageType("success");
     setSessionMessage(statusMessage);
-    setCrmLeadSyncStatus("saving");
-    if (!skipRemoteSync) void upsertCrmLeadToSupabase(nextLead, authUser).then((result) => {
-      if (result?.error) {
-        setCrmLeadSyncStatus("local");
-        setCrmLeadSyncError(result.error.message || "Lead saved locally but not to the shared CRM.");
-        setSessionMessageType("error");
-        setSessionMessage(`Lead saved on this device, but shared sync failed: ${result.error.message || result.error}`);
-        return;
-      }
-      setCrmLeadSyncStatus("saved");
-      setCrmLeadSyncError("");
-    });
-    return nextLead;
+    return sharedLead;
   };
 
   const saveQuickLeadAndAddNext = async () => {
@@ -13562,7 +13569,7 @@ function App() {
     const leadToSave = { ...crmLeadDraft, ...outcomeUpdates };
     const duplicate = findPotentialDuplicateLead(crmLeads, leadToSave);
     const hasWorkOrder = Boolean(crmLeadWorkOrderFile);
-    const saved = saveCrmLeadDraft(
+    const saved = await saveCrmLeadDraft(
       duplicate ? `Visit saved. Possible duplicate: ${crmLeadDisplayName(duplicate)}.` : "Customer visit saved. Ready for the next one.",
       leadToSave,
       hasWorkOrder,
@@ -13733,7 +13740,7 @@ function App() {
     setCrmInspectionSending(false);
   };
 
-  const handleCrmLeadAction = (action) => {
+  const handleCrmLeadAction = async (action) => {
     const now = new Date().toISOString();
     if (action === "scheduleAppointment") {
       const updated = {
@@ -13748,11 +13755,11 @@ function App() {
         appointmentDate: crmLeadDraft.appointmentDate || now.slice(0, 10),
       };
       setCrmLeadDraft(updated);
-      saveCrmLeadDraft("Lead qualified and accepted for inspection.", updated);
+      await saveCrmLeadDraft("Lead qualified and accepted for inspection.", updated);
     } else if (action === "createEstimate") {
       const updated = { ...crmLeadDraft, leadStatus: "Estimate in Progress" };
       setCrmLeadDraft(updated);
-      saveCrmLeadDraft("Lead marked as Estimate in Progress.", updated);
+      await saveCrmLeadDraft("Lead marked as Estimate in Progress.", updated);
     }
   };
 
@@ -13781,7 +13788,7 @@ function App() {
   };
 
   const convertCrmLeadToCustomer = async () => {
-    const savedLead = saveCrmLeadDraft("Saving customer conversion…", crmLeadDraft, true);
+    const savedLead = await saveCrmLeadDraft("Saving customer conversion…", crmLeadDraft, true);
     if (!savedLead) return;
     const customerName = [savedLead.firstName, savedLead.lastName].filter(Boolean).join(" ").trim() || savedLead.companyName || savedLead.propertyAddress || "New customer";
     const convertedAt = new Date().toISOString();
@@ -19952,8 +19959,8 @@ function App() {
             </div>
 
             <div className="actionRow" style={{ marginTop: 16 }}>
-              <button type="button" className="primaryButton" onClick={() => saveCrmLeadDraft("Lead saved.")}>
-                Save Lead
+              <button type="button" className="primaryButton" disabled={crmLeadSyncStatus === "saving"} onClick={() => void saveCrmLeadDraft("Lead saved to the shared CRM.")}>
+                {crmLeadSyncStatus === "saving" ? "Saving…" : "Save Lead"}
               </button>
               <button
                 type="button"
