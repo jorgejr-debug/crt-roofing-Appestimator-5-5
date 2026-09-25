@@ -9894,6 +9894,7 @@ function App() {
   const [estimateOwnerAssignments, setEstimateOwnerAssignments] = useState({});
   const [sessionMessage, setSessionMessage] = useState("");
   const [sessionMessageType, setSessionMessageType] = useState("");
+  const [workHubInitialTab, setWorkHubInitialTab] = useState("tasks");
   const [workHubInitialTaskId, setWorkHubInitialTaskId] = useState("");
   const [workHubInitialCreateTask, setWorkHubInitialCreateTask] = useState(false);
   const [cfoPaymentDiscussionOpeningId, setCfoPaymentDiscussionOpeningId] = useState("");
@@ -13443,14 +13444,11 @@ function App() {
   };
 
   const openDashboardInspectionRequest = () => {
-    startNewCrmLeadDraft({
-      leadSource: "Phone Call / Office",
-      roofingServiceNeeded: "Roof inspection",
-    });
-    setActiveTemplate("crm");
-    if (typeof window !== "undefined") {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
+    setWorkHubInitialTaskId("");
+    setWorkHubInitialCreateTask(false);
+    setWorkHubInitialTab("inspections");
+    setActiveTemplate("workHub");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const editCrmLead = (lead) => {
@@ -13650,6 +13648,7 @@ function App() {
     if (!confirmSeparateCrmLead(leadOverride)) return;
 
     setCrmInspectionSending(true);
+    try {
     setSessionMessageType("");
     setSessionMessage("Sending inspection request to Ivan...");
 
@@ -13694,9 +13693,10 @@ function App() {
 
     const savedLeadBeforeHandoff = normalizeCrmLead(leadResult?.data || normalized);
     let uploadedWorkOrder = null;
-    if (crmLeadWorkOrderFile) {
+    const requestWorkOrderFile = leadOverride.id === crmLeadDraft.id ? crmLeadWorkOrderFile : null;
+    if (requestWorkOrderFile) {
       setCrmLeadWorkOrderUploading(true);
-      const upload = await uploadCrmLeadWorkOrder(savedLeadBeforeHandoff.id, crmLeadWorkOrderFile);
+      const upload = await uploadCrmLeadWorkOrder(savedLeadBeforeHandoff.id, requestWorkOrderFile);
       setCrmLeadWorkOrderUploading(false);
       if (upload.error) {
         setCrmInspectionSending(false);
@@ -13710,12 +13710,12 @@ function App() {
     }
     const inspectionWorkOrder = uploadedWorkOrder || crmLeadDocuments.find((document) => document.lead_id === savedLeadBeforeHandoff.id) || null;
     const inspectionTask = buildInspectionTask(savedLeadBeforeHandoff);
-    const { data: task, error: taskError } = await supabase.rpc("create_private_company_task", {
+    const { data: task, error: taskError } = await supabase.rpc("create_inspection_request_task", {
+      p_lead_id: savedLeadBeforeHandoff.id,
       p_title: inspectionTask.title,
       p_description: `${inspectionTask.description}\nCRM lead ID: ${savedLeadBeforeHandoff.id}${inspectionWorkOrder ? `\nPDF work order attached in CRM: ${inspectionWorkOrder.file_name}` : ""}`,
-      p_due_date: null,
       p_priority: inspectionTask.priority,
-      p_assignee_ids: [ivan.id],
+      p_assignee_id: ivan.id,
     }).single();
 
     if (taskError || !task?.id) {
@@ -13767,7 +13767,15 @@ function App() {
       setCrmLeadDraft(savedLead);
       setCrmLeadEditingId(savedLead.id);
     }
-    setCrmInspectionSending(false);
+    return task;
+    } catch (error) {
+      setSessionMessageType("error");
+      setSessionMessage(`Inspection request could not be confirmed. Your details are preserved; check your connection and retry. ${error.message || ""}`);
+      return null;
+    } finally {
+      setCrmInspectionSending(false);
+      setCrmLeadWorkOrderUploading(false);
+    }
   };
 
   const handleCrmLeadAction = async (action) => {
@@ -16955,6 +16963,7 @@ function App() {
         </button>
       </div>
 
+      <div className="actionRow" style={{ marginBottom: 16 }}><button type="button" className="primaryButton" onClick={openDashboardInspectionRequest}>Submit Inspection Request</button></div>
       <Section title="Inspection details" subtitle="Use this to capture the roof walk and field notes.">
         <div className="formGrid">
           <Field label="Job name">
@@ -18208,6 +18217,7 @@ function App() {
     const dashboardSections = getEmployeeDashboardSections({ email: authUser?.email, role: authRole });
     const openTaskCreator = () => {
       setWorkHubInitialTaskId("");
+      setWorkHubInitialTab("tasks");
       setWorkHubInitialCreateTask(true);
       setActiveTemplate("workHub");
     };
@@ -18265,6 +18275,7 @@ function App() {
         canManageCompliance={canManageSubcontractorCompliance}
         onOpenTasks={(taskId = "") => {
           setWorkHubInitialCreateTask(false);
+          setWorkHubInitialTab("tasks");
           setWorkHubInitialTaskId(taskId);
           setActiveTemplate("workHub");
         }}
@@ -19664,6 +19675,7 @@ function App() {
 
   const navigateFromSidebar = (destination) => {
     if (destination === "workHub") {
+      setWorkHubInitialTab("tasks");
       setWorkHubInitialTaskId("");
       setWorkHubInitialCreateTask(false);
     }
@@ -20156,15 +20168,15 @@ function App() {
   if (activeTemplate === "estimateTemplates") return renderAuthenticatedLayout(renderEstimateTemplatesScreen());
   if (activeTemplate === "approvedJobs") return renderAuthenticatedLayout(renderApprovedJobsScreen());
   if (activeTemplate === "approvedJob") return renderAuthenticatedLayout(renderApprovedJobScreen());
-  if (activeTemplate === "proposalBuilder") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTab="proposals" />);
+  if (activeTemplate === "proposalBuilder") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab="proposals" />);
   if (activeTemplate === "jobMetrics") return renderAuthenticatedLayout(renderJobMetricsScreen());
   if (activeTemplate === "pastJobInsights") return renderAuthenticatedLayout(renderPastJobInsightsScreen());
   if (activeTemplate === "crm") return renderAuthenticatedLayout(renderCrmLeadsScreen());
   if (activeTemplate === "archive") return renderAuthenticatedLayout(renderArchiveScreen());
   if (activeTemplate === "profile") return renderAuthenticatedLayout(renderProfileScreen());
   if (activeTemplate === "settings") return renderAuthenticatedLayout(renderSettingsScreen());
-  if (activeTemplate === "workHub") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTaskId={workHubInitialTaskId} initialCreateTask={workHubInitialCreateTask} />);
-  if (activeTemplate === "proposalRequests") return renderAuthenticatedLayout(<WorkHub supabase={supabase} authUser={authUser} initialTab="proposals" />);
+  if (activeTemplate === "workHub") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab={workHubInitialTab} initialTaskId={workHubInitialTaskId} initialCreateTask={workHubInitialCreateTask} />);
+  if (activeTemplate === "proposalRequests") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab="proposals" />);
   if (activeTemplate === "subcontractors") return renderAuthenticatedLayout(renderSubcontractorDirectoryScreen());
   if (activeTemplate === "sprayFoam") return renderAuthenticatedLayout(renderSprayFoamScreen());
   if (activeTemplate === "shingle") return renderAuthenticatedLayout(renderShingleScreen());

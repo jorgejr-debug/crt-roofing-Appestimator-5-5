@@ -3,6 +3,8 @@ import "./WorkHub.css";
 import { TASK_DELETE_CONFIRMATION, canDeleteTask } from "./taskDeletion.js";
 import { isTaskClosed, taskMatchesView, taskStatusLabel, taskType, taskTypeLabel } from "./taskStatus.js";
 import ProposalRequests from "./ProposalRequests.jsx";
+import TaskAttachments from "./TaskAttachments.jsx";
+import InspectionRequestForm from "./InspectionRequestForm.jsx";
 import ActionFeedback from "./ActionFeedback.jsx";
 
 const PROFILE_BUCKET = "profile-photos";
@@ -50,7 +52,7 @@ function PersonAvatar({ profile, size = "normal" }) {
   );
 }
 
-export default function WorkHub({ supabase, authUser, initialTab = "tasks", initialTaskId = "", initialCreateTask = false }) {
+export default function WorkHub({ supabase, authUser, initialTab = "tasks", initialTaskId = "", initialCreateTask = false, onSubmitInspection }) {
   const authUserKey = authUser?.key;
   const [activeTab, setActiveTab] = useState(initialTaskId ? "tasks" : initialTab);
   const [profiles, setProfiles] = useState([]);
@@ -261,6 +263,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
 
   const assignPerson = (personId) => {
     setTaskDraft((current) => ({ ...current, assigneeIds: [personId] }));
+    setSelectedTaskId("");
     setShowCreateTask(true);
     setActiveTab("tasks");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -278,6 +281,10 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
         </div>
       </header>
 
+      <div className="workHubRequestActions">
+        {onSubmitInspection ? <button type="button" className="primaryButton" onClick={() => setActiveTab("inspections")}>Submit Inspection Request</button> : null}
+        <button type="button" className="secondaryButton" onClick={() => setActiveTab("proposals")}>Submit Proposal Request</button>
+      </div>
       <div className="workHubTabs" role="tablist">
         <button type="button" className={activeTab === "tasks" ? "active" : ""} onClick={() => setActiveTab("tasks")}>Tasks</button>
         <button type="button" className={activeTab === "proposals" ? "active" : ""} onClick={() => setActiveTab("proposals")}>Proposal Requests</button>
@@ -294,7 +301,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
               <strong>{filteredTasks.length} task{filteredTasks.length === 1 ? "" : "s"} in this view</strong>
               <span>Past-due tasks are identified automatically from their due date.</span>
             </div>
-            <button type="button" className={showCreateTask ? "secondaryButton" : "primaryButton"} onClick={() => setShowCreateTask((current) => !current)}>
+            <button type="button" className={showCreateTask ? "secondaryButton" : "primaryButton"} onClick={() => { setSelectedTaskId(""); setShowCreateTask((current) => !current); }}>
               {showCreateTask ? "Cancel New Task" : "New Task"}
             </button>
           </div>
@@ -311,6 +318,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
               <fieldset className="workHubPeoplePicker"><legend>Assign to</legend>{profiles.map((profile) => (
                 <label key={profile.id} className={taskDraft.assigneeIds.includes(profile.id) ? "selected" : ""}><input type="checkbox" checked={taskDraft.assigneeIds.includes(profile.id)} onChange={() => toggleAssignee(profile.id)} /><PersonAvatar profile={profile} size="small" /><span>{displayName(profile)}</span></label>
               ))}</fieldset>
+              <p className="smallNote">Create the task, then add photos and files in its discussion.</p>
               <button type="submit" className="primaryButton" disabled={saving}>{saving ? "Creating…" : "Create Task"}</button>
             </form>
           </section> : null}
@@ -379,6 +387,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
                 <button type="button" className="secondaryButton voidAction" disabled={selectedTaskUpdating} onClick={() => updateTaskStatus(selectedTask, "voided")}>Voided</button>
               </div>
               <label className="workHubStatusField"><span>{selectedTaskUpdating ? "Updating status…" : "Status"}</span><select className="workHubStatusSelect" disabled={selectedTaskUpdating} value={selectedTask.status} onChange={(event) => updateTaskStatus(selectedTask, event.target.value)}><option value="open">Open</option><option value="in_progress">Working on It</option><option value="blocked">Blocked</option><option value="completed">Completed</option><option value="voided">Voided</option></select></label>
+              <TaskAttachments key={selectedTask.id} supabase={supabase} taskId={selectedTask.id} userId={authUserKey} />
               <div className="workHubComments">{taskComments.map((comment) => <div key={comment.id} className="workHubComment"><PersonAvatar profile={profileById[comment.author_id]} size="small" /><div><strong>{displayName(profileById[comment.author_id])}</strong><p>{comment.body}</p><small>{new Date(comment.created_at).toLocaleString()}</small></div></div>)}{!taskComments.length ? <p className="emptyState">No comments yet.</p> : null}</div>
               <form className="workHubComposer" onSubmit={addComment}><textarea rows="3" value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="Add a comment or update" /><button type="submit" className="primaryButton" disabled={saving || !commentDraft.trim()}>Comment</button></form>
             </> : <p className="emptyState">Select a task to open its discussion.</p>}
@@ -387,6 +396,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
         </>
       ) : null}
 
+      {activeTab === "inspections" && onSubmitInspection ? <InspectionRequestForm userId={authUserKey} onSubmit={onSubmitInspection} onCreated={async (task) => { setSelectedTaskId(task.id); setActiveTab("tasks"); setTaskNotice("Inspection request sent to Ivan. Open the task below to add photos or files."); await loadData({ quiet: true }); }} /> : null}
       {!loading && activeTab === "proposals" ? <ProposalRequests supabase={supabase} authUser={authUser} profiles={profiles} /> : null}
 
       {!loading && activeTab === "messages" ? (

@@ -9,7 +9,9 @@ const emailFunction = fs.readFileSync(
 );
 
 test("sending a lead for inspection queues Ivan's task and email notification", () => {
-  assert.match(app, /create_private_company_task/);
+  assert.match(app, /create_inspection_request_task/);
+  const migration = fs.readFileSync(new URL("../supabase/migrations/20260925150000_mobile_task_requests_and_attachments.sql", import.meta.url), "utf8");
+  assert.match(migration, /public\.create_private_company_task/);
   assert.match(app, /His task and email notification were queued/);
 });
 

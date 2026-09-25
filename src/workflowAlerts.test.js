@@ -43,3 +43,16 @@ test('existing saved job progress satisfies the daily-log check after rollout',(
  const active={...base,status:'Active',start_date:'2026-09-25',daily_progress_log:[{date:'2026-09-25'}]};
  assert.equal(collectWorkflowAlerts({jobs:[active]},now).length,0);
 });
+
+test('sales follow-up starts exactly 72 hours after sending and routes only to the assigned salesperson',()=>{
+ const proposal={id:'p1',request_number:42,status:'sent',sent_at:'2026-09-23T02:00:00Z',salesperson_id:'ivan',customer_name:'Test customer',target_completion_at:'2026-09-01'};
+ assert.equal(collectWorkflowAlerts({proposals:[proposal]},new Date('2026-09-26T01:59:59Z')).length,0);
+ const alerts=collectWorkflowAlerts({proposals:[proposal]},now);
+ assert.equal(alerts.length,1);assert.equal(alerts[0].kind,'sales_follow_up');
+ assert.deepEqual(notificationRecipients(alerts[0],[{id:'ivan',role:'estimator'},{id:'j',email:'jorgejr@crtroofing.com',role:'cfo'},{id:'n',email:'natalia@crtroofing.com'}]),['ivan']);
+ assert.equal(collectWorkflowAlerts({proposals:[proposal]},new Date(now.getTime()+60000))[0].event_key,alerts[0].event_key);
+ assert.notEqual(collectWorkflowAlerts({proposals:[proposal]},new Date(now.getTime()+86400000))[0].event_key,alerts[0].event_key);
+ for(const status of ['signed','declined','closed','draft']) assert.equal(collectWorkflowAlerts({proposals:[{...proposal,status}]},now).length,0);
+ for(const sent_at of [null,'','invalid']) assert.equal(collectWorkflowAlerts({proposals:[{...proposal,sent_at}]},now).length,0);
+ assert.equal(collectWorkflowAlerts({proposals:[{...proposal,salesperson_id:null}]},now).length,0);
+});

@@ -13,6 +13,6 @@ test("dashboard Collect Lead card opens a fresh CRM lead form", () => {
 test("office staff can route an inspection caller to Ivan from quick capture", () => {
   assert.match(source, /sendInspection: \{[\s\S]*?title: "Send for Inspection"[\s\S]*?open: openDashboardInspectionRequest/);
   assert.match(source, /leadStatus: "Inspection Requested"/);
-  assert.match(source, /p_assignee_ids: \[ivan\.id\]/);
-  assert.match(source, /create_private_company_task/);
+  assert.match(source, /p_assignee_id: ivan\.id/);
+  assert.match(source, /create_inspection_request_task/);
 });

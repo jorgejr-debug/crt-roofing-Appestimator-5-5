@@ -45,6 +45,13 @@ export function collectWorkflowAlerts({ jobs = [], logs = [], estimates = [], pr
     if (estimatedCost && actualCost>estimatedCost) add(source,'cost_exceeded',`${name} is above its estimated cost. Review the job cost report.`,'finance');
   }
   for (const proposal of proposals) {
+    if (lower(proposal.status) === 'sent') {
+      const sentAt = dateTime(proposal.sent_at);
+      if (sentAt !== null && now.getTime() >= sentAt + 3 * 86400000 && proposal.salesperson_id) {
+        add(proposal.id,'sales_follow_up',`Follow up with ${proposal.customer_name || proposal.property_name || 'the customer'} about proposal ${proposal.request_number || proposal.id}. It was sent at ${proposal.sent_at} and is awaiting a decision.`,'sales',[{userId:proposal.salesperson_id}]);
+      }
+      continue;
+    }
     if (['draft','signed','declined','closed'].includes(lower(proposal.status))) continue;
     const due = dateTime(proposal.manual_target_at || proposal.target_completion_at);
     const since = dateTime(proposal.updated_at || proposal.submitted_at);
@@ -61,6 +68,7 @@ export function notificationRecipients(alert, profiles, employees=[]) {
   const explicit = new Set((alert.recipients || []).flatMap(recipient => recipient.userId ? [recipient.userId] : profiles.filter(profile => lower(profile.email) === lower(employees.find(employee => employee.id === recipient.employeeId)?.email) && profile.email).map(profile => profile.id)));
   return profiles.filter(profile => {
     const role = lower(profile.role);
+    if(alert.audience === 'sales') return explicit.has(profile.id);
     const office = ['jorgejr@crtroofing.com','natalia@crtroofing.com'].includes(lower(profile.email));
     if(alert.audience === 'finance') return office || ['admin','cfo'].includes(role);
     return office || explicit.has(profile.id) || (alert.audience === 'operations' && ['admin','cfo','project_manager'].includes(role)) || (alert.audience === 'proposal' && ['admin','cfo'].includes(role));

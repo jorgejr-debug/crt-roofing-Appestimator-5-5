@@ -1,0 +1,55 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {PGlite} from '@electric-sql/pglite';
+const owner='00000000-0000-0000-0000-000000000001',tech='00000000-0000-0000-0000-000000000002',outsider='00000000-0000-0000-0000-000000000003',task='00000000-0000-0000-0000-000000000004',file='00000000-0000-0000-0000-000000000005',lead='00000000-0000-0000-0000-000000000006';
+test('private task files and inspection retries enforce participant permissions',async()=>{
+ const db=new PGlite();
+ try{
+ await db.exec(`CREATE ROLE anon;CREATE ROLE authenticated;CREATE ROLE service_role BYPASSRLS;
+ CREATE SCHEMA auth;CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$SELECT nullif(current_setting('test.uid',true),'')::uuid$$;
+ CREATE SCHEMA storage;CREATE TABLE storage.buckets(id text PRIMARY KEY,name text,public boolean,file_size_limit bigint);
+ CREATE TABLE storage.objects(id uuid DEFAULT gen_random_uuid(),bucket_id text,name text,metadata jsonb);ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+ CREATE FUNCTION storage.foldername(text) RETURNS text[] LANGUAGE sql AS $$SELECT string_to_array($1,'/')$$;
+ GRANT USAGE ON SCHEMA auth,storage TO authenticated,anon;GRANT SELECT,INSERT,DELETE ON storage.objects TO authenticated;
+ CREATE TABLE user_profiles(id uuid PRIMARY KEY);INSERT INTO user_profiles VALUES('${owner}'),('${tech}'),('${outsider}');
+ CREATE TABLE company_tasks(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),created_by uuid,title text,description text,priority text,due_date date);
+ CREATE TABLE company_task_assignees(task_id uuid,user_id uuid);
+ CREATE TABLE crm_leads(id uuid PRIMARY KEY);INSERT INTO crm_leads VALUES('${lead}');
+ INSERT INTO company_tasks(id,created_by) VALUES('${task}','${owner}');INSERT INTO company_task_assignees VALUES('${task}','${tech}');
+ CREATE FUNCTION can_access_company_task(uuid) RETURNS boolean LANGUAGE sql SECURITY DEFINER AS $$SELECT EXISTS(SELECT 1 FROM company_tasks WHERE id=$1 AND (created_by=auth.uid() OR EXISTS(SELECT 1 FROM company_task_assignees WHERE task_id=$1 AND user_id=auth.uid())))$$;
+ CREATE FUNCTION can_use_crm() RETURNS boolean LANGUAGE sql AS $$SELECT auth.uid() IN ('${owner}'::uuid,'${tech}'::uuid)$$;
+ ALTER TABLE company_tasks ENABLE ROW LEVEL SECURITY;GRANT SELECT ON company_tasks TO authenticated;
+ CREATE POLICY tasks_read ON company_tasks FOR SELECT TO authenticated USING(can_access_company_task(id));
+ CREATE FUNCTION create_private_company_task(text,text,date,text,uuid[]) RETURNS company_tasks LANGUAGE plpgsql SECURITY DEFINER AS $$DECLARE t company_tasks;BEGIN
+ INSERT INTO company_tasks(created_by,title,description,due_date,priority) VALUES(auth.uid(),$1,$2,$3,$4) RETURNING * INTO t;
+ INSERT INTO company_task_assignees SELECT t.id,unnest($5);RETURN t;END$$;`);
+ await db.exec(readFileSync(new URL('../supabase/migrations/20260925150000_mobile_task_requests_and_attachments.sql',import.meta.url),'utf8'));
+ const path=`${task}/${owner}/${file}.jpg`;
+ const register=()=>db.query('SELECT * FROM register_task_attachment($1,$2,$3,$4,$5)',[task,file,path,'photo.jpg',123]);
+ await db.exec(`SET ROLE authenticated;SELECT set_config('test.uid','${owner}',false)`);
+ await assert.rejects(register(),/Upload not confirmed/);
+ await db.query('INSERT INTO storage.objects(bucket_id,name,metadata) VALUES($1,$2,$3)',['task-attachments',path,{size:123}]);
+ assert.equal((await db.query('SELECT * FROM storage.objects')).rows.length,0,'unregistered objects are not readable');
+ assert.equal((await register()).rows[0].id,file);assert.equal((await register()).rows.length,1,'registration is idempotent');
+ assert.equal((await db.query('SELECT * FROM company_task_attachments')).rows.length,1);
+ assert.equal((await db.query('SELECT * FROM storage.objects')).rows.length,1);
+ await assert.rejects(db.query('SELECT * FROM register_task_attachment($1,$2,$3,$4,$5)',[task,file,path,'different.jpg',123]),/already used/);
+ await db.exec(`SELECT set_config('test.uid','${tech}',false)`);
+ assert.equal((await db.query('SELECT * FROM storage.objects')).rows.length,1,'assignee sees attachments');
+ await assert.rejects(register(),/Invalid attachment/,'assignee cannot impersonate uploader');
+ await db.exec(`SELECT set_config('test.uid','${outsider}',false)`);
+ assert.equal((await db.query('SELECT * FROM company_task_attachments')).rows.length,0);
+ assert.equal((await db.query('SELECT * FROM storage.objects')).rows.length,0);
+ await assert.rejects(register(),/Task access required/);
+ await assert.rejects(db.query('INSERT INTO storage.objects(bucket_id,name,metadata) VALUES($1,$2,$3)',['task-attachments',`${task}/${outsider}/${file}.jpg`,{size:123}]),/row-level security/);
+ await db.exec(`SELECT set_config('test.uid','${owner}',false)`);
+ const create=()=>db.query('SELECT * FROM create_inspection_request_task($1,$2,$3,$4,$5)',[lead,'Inspection Request: Test','Local test only','normal',tech]);
+ const first=(await create()).rows[0];assert.equal((await create()).rows[0].id,first.id);
+ await db.exec(`RESET ROLE;DELETE FROM company_task_assignees WHERE task_id='${task}';SET ROLE authenticated;SELECT set_config('test.uid','${tech}',false)`);
+ assert.equal((await db.query('SELECT * FROM storage.objects')).rows.length,0,'revoked assignee loses file access');
+ await db.exec(`SELECT set_config('test.uid','${outsider}',false)`);
+ await assert.rejects(create(),/Inspection request access required/);
+ await db.exec('RESET ROLE;SET ROLE anon');await assert.rejects(register(),/permission denied/);
+ }finally{await db.close();}
+});
