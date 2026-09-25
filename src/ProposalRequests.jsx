@@ -99,6 +99,13 @@ const submittedValue = (value) => {
   const text = String(value ?? "").trim();
   return text || "Not provided";
 };
+const proposalMatchesStatusFilter = (request, filter) => {
+  const status = String(request?.status || "").toLowerCase();
+  if (filter === "all") return true;
+  if (filter === "active") return !["closed", "declined"].includes(status);
+  if (filter === "history") return ["closed", "declined"].includes(status);
+  return status === filter;
+};
 
 export default function ProposalRequests({ supabase, authUser, profiles = [] }) {
   const [requests, setRequests] = useState([]);
@@ -118,7 +125,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
   const [busy, setBusy] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const [exportBusy, setExportBusy] = useState("");
-  const [filters, setFilters] = useState({ status: "all", priority: "all", salesperson: "all", jobType: "all", search: "", sort: "due" });
+  const [filters, setFilters] = useState({ status: "active", priority: "all", salesperson: "all", jobType: "all", search: "", sort: "due" });
   const [missingNotes, setMissingNotes] = useState("");
   const [sectionDraft, setSectionDraft] = useState("Main roofing scope\nOptional section");
   const [wordFile, setWordFile] = useState(null);
@@ -355,7 +362,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
 
   const queue = useMemo(() => requests.filter((request) => {
     const search = filters.search.toLowerCase();
-    return (filters.status === "all" || request.status === filters.status)
+    return proposalMatchesStatusFilter(request, filters.status)
       && (filters.priority === "all" || request.priority === filters.priority)
       && (filters.salesperson === "all" || request.salesperson_id === filters.salesperson)
       && (filters.jobType === "all" || request.job_type === filters.jobType)
@@ -509,7 +516,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [] }) 
       </div> : null}
       <div className="proposalFilters">
         <input type="search" value={filters.search} onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))} placeholder="Search customer, job, or address" />
-        <select value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}><option value="all">All statuses</option>{["draft","submitted","under_review","missing_information","drafting_proposal","sales_review","ready_to_send","sent","signed","declined","closed"].map((value) => <option key={value} value={value}>{labelize(value)}</option>)}</select>
+        <select value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}><option value="active">Active queue</option><option value="history">Completed / declined history</option><option value="all">All statuses</option>{["draft","submitted","under_review","missing_information","drafting_proposal","sales_review","ready_to_send","sent","signed","declined","closed"].map((value) => <option key={value} value={value}>{labelize(value)}</option>)}</select>
         <select value={filters.priority} onChange={(e) => setFilters((f) => ({ ...f, priority: e.target.value }))}><option value="all">All priorities</option>{PROPOSAL_REQUEST_PRIORITIES.map((value) => <option key={value}>{value}</option>)}</select>
         <select value={filters.salesperson} onChange={(e) => setFilters((f) => ({ ...f, salesperson: e.target.value }))}><option value="all">All salespeople</option>{profiles.filter((p) => ["salesperson","admin","cfo"].includes(String(p.role).toLowerCase())).map((p) => <option key={p.id} value={p.id}>{p.full_name || p.email}</option>)}</select>
         <select value={filters.jobType} onChange={(e) => setFilters((f) => ({ ...f, jobType: e.target.value }))}><option value="all">All job types</option>{PROPOSAL_JOB_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select>
