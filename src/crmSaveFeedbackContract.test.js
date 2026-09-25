@@ -30,3 +30,11 @@ test("lead qualification actions lock while the shared save is pending", () => {
   assert.match(appSource, /className="secondaryButton" disabled=\{crmLeadSyncStatus === "saving"\} onClick=\{convertCrmLeadToCustomer\}/);
   assert.match(appSource, /className="dangerButton" disabled=\{crmLeadSyncStatus === "saving"\} onClick=\{\(\) => startNewCrmLeadDraft\(\)\}/);
 });
+
+test("quick capture reviews possible duplicates before saving or routing", () => {
+  assert.match(appSource, /const confirmSeparateCrmLead = \(candidate\) => \{/);
+  assert.match(appSource, /Select OK only if this is a separate opportunity\. Select Cancel to review the existing lead instead\./);
+  assert.match(appSource, /Opened the existing lead for \$\{duplicateName\}\. No duplicate was created\./);
+  assert.match(appSource, /if \(!confirmSeparateCrmLead\(leadToSave\)\) return;/);
+  assert.match(appSource, /if \(!confirmSeparateCrmLead\(leadOverride\)\) return;/);
+});

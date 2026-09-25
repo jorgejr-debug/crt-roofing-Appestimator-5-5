@@ -13448,6 +13448,21 @@ function App() {
     setCrmTab("newLead");
   };
 
+  const confirmSeparateCrmLead = (candidate) => {
+    const duplicate = findPotentialDuplicateLead(crmLeads, candidate);
+    if (!duplicate) return true;
+    const duplicateName = crmLeadDisplayName(duplicate);
+    const createSeparate = window.confirm(
+      `A shared lead may already exist for ${duplicateName}.\n\nSelect OK only if this is a separate opportunity. Select Cancel to review the existing lead instead.`,
+    );
+    if (createSeparate) return true;
+    editCrmLead(duplicate);
+    setSessionMessageType("info");
+    setSessionMessage(`Opened the existing lead for ${duplicateName}. No duplicate was created.`);
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+    return false;
+  };
+
   const updateCrmLeadDraftField = (key, value) => {
     setCrmLeadDraft((current) => ({
       ...current,
@@ -13568,10 +13583,10 @@ function App() {
           ? { leadStatus: "Contacted", qualificationStatus: "qualified" }
           : { leadStatus: "New", qualificationStatus: "captured" };
     const leadToSave = { ...crmLeadDraft, ...outcomeUpdates };
-    const duplicate = findPotentialDuplicateLead(crmLeads, leadToSave);
+    if (!confirmSeparateCrmLead(leadToSave)) return;
     const hasWorkOrder = Boolean(crmLeadWorkOrderFile);
     const saved = await saveCrmLeadDraft(
-      duplicate ? `Visit saved. Possible duplicate: ${crmLeadDisplayName(duplicate)}.` : "Customer visit saved. Ready for the next one.",
+      "Customer visit saved. Ready for the next one.",
       leadToSave,
       hasWorkOrder,
     );
@@ -13619,6 +13634,7 @@ function App() {
       setSessionMessage(validation.errors.join(" "));
       return;
     }
+    if (!confirmSeparateCrmLead(leadOverride)) return;
 
     setCrmInspectionSending(true);
     setSessionMessageType("");
