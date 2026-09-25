@@ -1,8 +1,9 @@
+import { readAppSource } from "../tests/appSource.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const appSource = fs.readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+const appSource = readAppSource();
 const migration = fs.readFileSync(new URL("../supabase/migrations/20260915100000_project_manager_role.sql", import.meta.url), "utf8");
 
 test("Miguel receives the dedicated Project Manager role and a production-only navigation", () => {

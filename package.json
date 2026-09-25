@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/inline-dist.mjs",
+    "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/*.test.js tests/*.test.js",
+    "preview:mobile": "node scripts/create-mobile-preview.mjs && vite --host 127.0.0.1"
   },
   "dependencies": {
     "@react-google-maps/api": "^2.20.8",
@@ -20,6 +22,7 @@
     "react-dom": "^19.2.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@eslint/js": "^10.0.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

@@ -1,8 +1,9 @@
+import { readAppSource } from "../tests/appSource.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const app = fs.readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+const app = readAppSource();
 const migration = fs.readFileSync(new URL("../supabase/migrations/20260918100000_shared_crm_leads_and_kpi_targets.sql", import.meta.url), "utf8");
 
 test("CRM includes a mobile-first quick capture and a separate qualification workspace", () => {

@@ -1,0 +1,20 @@
+.workflowAlerts {margin:12px 16px;padding:14px;border:1px solid #547482;border-radius:12px;overflow-wrap:anywhere}
+.workflowAlerts summary {min-height:44px;cursor:pointer;display:flex;align-items:center;font-weight:700}
+.workflowAlerts article {padding:12px 0;border-top:1px solid #547482;display:grid;gap:8px}
+.connectionStatus {position:sticky;top:0;z-index:100;background:#fff2c7;color:#352900;padding:12px 16px;border-bottom:2px solid #b07d00}
+.serviceMaterial {padding:12px 0;border-bottom:1px solid #547482}
+@media(max-width:700px){
+  .portalMain button,.activeJobPanel button,.fileDropZone button{min-height:44px;min-width:44px;touch-action:manipulation}
+  .portalMain input,.portalMain select,.portalMain textarea,.activeJobPanel input,.activeJobPanel select,.activeJobPanel textarea{font-size:16px;max-width:100%;box-sizing:border-box}
+  .portalMain textarea,.activeJobPanel textarea{min-height:120px}
+  .serviceEstimate .formGrid,.activeJobPanel .formGrid,.activeJobPanel .activeJobModalGrid{grid-template-columns:minmax(0,1fr)}
+  .activeJobPanel{max-height:calc(100dvh - 16px);overflow-y:auto;overscroll-behavior:contain;padding-bottom:calc(20px + env(safe-area-inset-bottom))}
+  .activeJobPanel .cfoDetailHeader{position:sticky;top:0;z-index:2;background:var(--panel,#102532);padding:12px;display:grid;gap:10px}
+  .activeJobPanel .actionRow,.serviceEstimate .actionRow{display:flex;flex-wrap:wrap;gap:10px}
+  .activeJobPanel .actionRow button,.serviceEstimate .actionRow button{flex:1 1 130px}
+  .activeJobsTableWrap{max-width:100%;overflow-x:auto}
+}
+@media(max-width:700px){
+  .activeJobPanel .cfoDetailHeader .cfoDetailMeta{display:none}
+  .activeJobPanel .cfoDetailHeader .actionRow button{flex:1 1 0;min-width:0}
+}

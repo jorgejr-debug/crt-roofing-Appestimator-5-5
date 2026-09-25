@@ -25,3 +25,7 @@ dist-ssr
 .vercel
 .env*
 supabase/.temp/
+
+# Generated, local-only visual test helpers
+src/.mobilePreviewSupport.jsx
+src/.mobileIssuePreview.jsx

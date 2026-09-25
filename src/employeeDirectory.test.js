@@ -1,3 +1,4 @@
+import { readAppSource } from "../tests/appSource.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
@@ -15,7 +16,7 @@ test("legacy display name remains available when separate names are missing", ()
 });
 
 test("employee editor scrolls into view and clearly changes Save to Update", () => {
-  const source = fs.readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+  const source = readAppSource();
   assert.match(source, /employeeManagementEditorRef\.current\?\.scrollIntoView/);
   assert.match(source, /isEditingEmployee \? "Update employee" : "Save employee"/);
 });

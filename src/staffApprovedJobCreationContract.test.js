@@ -1,9 +1,10 @@
+import { readAppSource } from "../tests/appSource.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
 const migration = fs.readFileSync(new URL("../supabase/migrations/20260827120000_ivan_create_approved_jobs.sql", import.meta.url), "utf8");
-const app = fs.readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+const app = readAppSource();
 
 test("Ivan creates approved jobs through an email-scoped server function", () => {
   assert.match(migration, /SECURITY DEFINER/);

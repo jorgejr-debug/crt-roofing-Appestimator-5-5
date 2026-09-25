@@ -1,8 +1,9 @@
+import { readAppSource } from "../tests/appSource.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const appSource = readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+const appSource = readAppSource();
 const workHubSource = readFileSync(new URL("./WorkHub.jsx", import.meta.url), "utf8");
 const migrationSource = readFileSync(
   new URL("../supabase/migrations/20260904120000_receivable_payment_followup_threads.sql", import.meta.url),

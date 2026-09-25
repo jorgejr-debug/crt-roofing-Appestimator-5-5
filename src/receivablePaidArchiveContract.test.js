@@ -1,8 +1,9 @@
+import { readAppSource } from "../tests/appSource.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const source = readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+const source = readAppSource();
 
 test("CFO receivable rows provide a confirmed green paid action", () => {
   assert.match(source, /className="successButton"[\s\S]*Saving payment…[\s\S]*Mark Paid/);

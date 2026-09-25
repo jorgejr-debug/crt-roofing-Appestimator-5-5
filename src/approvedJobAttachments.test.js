@@ -1,3 +1,4 @@
+import { readAppSource } from "../tests/appSource.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -10,7 +11,7 @@ import {
   validateApprovedJobAttachment,
 } from "./approvedJobAttachments.js";
 
-const appSource = fs.readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+const appSource = readAppSource();
 const migrationSource = fs.readFileSync(
   new URL("../supabase/migrations/20260827224000_approved_job_attachments.sql", import.meta.url),
   "utf8",

@@ -1,8 +1,9 @@
+import { readAppSource } from "../tests/appSource.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const appSource = fs.readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+const appSource = readAppSource();
 const migration = fs.readFileSync(new URL("../supabase/migrations/20260828153000_daniela_daily_job_cost_access.sql", import.meta.url), "utf8");
 
 test("Daniela sees the daily job cost action without seeing full job-management actions", () => {

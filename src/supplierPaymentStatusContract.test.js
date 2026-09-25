@@ -1,8 +1,9 @@
+import { readAppSource } from "../tests/appSource.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const source = fs.readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+const source = readAppSource();
 
 test("supplier payables combine legacy current and overdue records in one view", () => {
   assert.match(source, /getManualCardEntries\("supplierTotalsPayable"\)[\s\S]*?getManualCardEntries\("supplierOverdue"\)/);

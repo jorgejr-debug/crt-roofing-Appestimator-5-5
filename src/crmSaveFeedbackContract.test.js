@@ -1,8 +1,9 @@
+import { readAppSource } from "../tests/appSource.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const appSource = fs.readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+const appSource = readAppSource();
 
 test("lead saves wait for shared CRM confirmation before showing success", () => {
   assert.match(appSource, /const saveCrmLeadDraft = async/);

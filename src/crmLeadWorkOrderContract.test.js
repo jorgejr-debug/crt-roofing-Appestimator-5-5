@@ -1,8 +1,9 @@
+import { readAppSource } from "../tests/appSource.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const app = readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+const app = readAppSource();
 const migration = readFileSync(new URL("../supabase/migrations/20260922113000_crm_lead_work_orders.sql", import.meta.url), "utf8");
 
 test("Quick Lead Capture accepts an optional PDF work order", () => {

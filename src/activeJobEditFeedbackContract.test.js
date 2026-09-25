@@ -1,8 +1,9 @@
+import { readAppSource } from "../tests/appSource.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const source = readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+const source = readAppSource();
 
 test("active job detail saves lock duplicate activity updates", () => {
   assert.match(source, /if \(!job \|\| !activeJobEditDraft \|\| !authUser\?\.key \|\| activeJobMutationKey\) return;/);
