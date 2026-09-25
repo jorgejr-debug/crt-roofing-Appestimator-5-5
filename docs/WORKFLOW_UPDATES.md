@@ -14,6 +14,8 @@ The notification function is deployed through the dashboard, using an exact conc
 
 Scheduling and delivery verification are recorded in the deployment results below. Authenticated user acceptance remains pending sign-in.
 
+Source implementation commit: `6be51d0`, pushed to `feat/production-workflow-updates`. Updating the default `main` branch was rejected by automatic approval review because that repository mutation requires specific authorization. `main` remains at the prior baseline. Obtain approval and merge the feature branch before any future deployment from `main`; redeploying the old branch could restore the legacy issue-saving UI while the new backend protection remains active.
+
 ## Implemented changes
 
 ### Active Job Issue & Escalation
