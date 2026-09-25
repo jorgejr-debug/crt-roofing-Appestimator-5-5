@@ -106,6 +106,36 @@ const SubcontractorCompliance = React.lazy(() => import("./SubcontractorComplian
 const InvoiceQueue = React.lazy(() => import("./InvoiceQueue.jsx"));
 const AccountAccessVault = React.lazy(() => import("./AccountAccessVault.jsx"));
 
+class WorkspaceErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    console.error("Workspace failed to open:", error);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <section className="panel" role="alert">
+        <p className="eyebrow">Connection recovery</p>
+        <h2>This workspace could not open</h2>
+        <p className="intro">Check your internet connection, then try again. Your saved company records were not changed.</p>
+        <div className="actionRow">
+          <button type="button" className="primaryButton" onClick={() => window.location.reload()}>Try Again</button>
+          <button type="button" className="secondaryButton" onClick={this.props.onReturnDashboard}>Return to Dashboard</button>
+        </div>
+      </section>
+    );
+  }
+}
+
 let pdfReaderPromise = null;
 let jsPdfPromise = null;
 
@@ -28093,13 +28123,15 @@ function App() {
           onDismiss={() => { setSessionMessage(""); setSessionMessageType(""); }}
         />
         <main className="portalMain">
-          <React.Suspense fallback={(
-            <section className="panel" aria-live="polite" aria-busy="true">
-              <p className="intro" style={{ margin: 0 }}>Opening workspace…</p>
-            </section>
-          )}>
-            {screen}
-          </React.Suspense>
+          <WorkspaceErrorBoundary key={activeTemplate} onReturnDashboard={() => setActiveTemplate("dashboard")}>
+            <React.Suspense fallback={(
+              <section className="panel" aria-live="polite" aria-busy="true">
+                <p className="intro" style={{ margin: 0 }}>Opening workspace…</p>
+              </section>
+            )}>
+              {screen}
+            </React.Suspense>
+          </WorkspaceErrorBoundary>
         </main>
       </div>
     );

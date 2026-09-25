@@ -20,3 +20,13 @@ test("lazy workspaces retain the portal and show an accessible loading state", (
   assert.match(source, /aria-live="polite" aria-busy="true"/);
   assert.match(source, /Opening workspace…/);
 });
+
+test("failed workspace downloads provide recovery instead of a blank screen", () => {
+  assert.match(source, /class WorkspaceErrorBoundary extends React\.Component/);
+  assert.match(source, /static getDerivedStateFromError/);
+  assert.match(source, /<WorkspaceErrorBoundary key=\{activeTemplate\}/);
+  assert.match(source, /This workspace could not open/);
+  assert.match(source, /window\.location\.reload\(\)/);
+  assert.match(source, /Return to Dashboard/);
+  assert.match(source, /Your saved company records were not changed/);
+});
