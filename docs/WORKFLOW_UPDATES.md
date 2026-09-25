@@ -149,10 +149,10 @@ References: [Supabase Cron](https://supabase.com/docs/guides/cron), [Resend idem
 - End-to-end production issue saves/resolution, estimate saves/proposals/PDF downloads, uploads, and actual-phone/weak-network acceptance remain unverified. This pass used read-only navigation and rejected invalid input to preserve real records; local transaction and PDF tests remain the write-path evidence.
 
 
-## Prepared Office Review access update — pending production activation
+## Office Review access update — September 25, 2026
 
 The user requested proceeding with cross-employee Office Review. The prepared migration `20260925130000_field_log_office_review.sql` allows existing Admin/CFO accounts (including Natalia/Jorge) to read submitted crew logs and their referenced photos/receipts. Other employees retain access only to their own logs. Drafts, unreferenced photos, unrelated buckets, and all write permissions remain unchanged. No historical records are modified.
 
 The matching frontend uses the RLS-visible record set instead of forcing an owner-only query, paginates results, refreshes on review entry/manual refresh, displays loading failures, and excludes shared crew records from offline local storage. Regression tests cover both office roles, employee isolation, private drafts, photo/receipt references, unrelated files, role revocation, denied writes, pagination, and failed loads. All 313 tests and the production build passed during preparation.
 
-This change is prepared locally, not yet applied to Supabase or deployed. Browser security rules require action-time confirmation before expanding access to employee logs/photos. Existing production release remains `e94de83` until activation.
+The user explicitly approved Admin/CFO read access to all submitted crew logs and attached photos/receipts. Migration `20260925130000` was validated in production with ROLLBACK, then applied and recorded in one committed transaction through the Supabase dashboard. Both operations succeeded. Before activation, the field-log table contained zero rows; no synthetic records were inserted. The frontend is being released with this migration. No Edge Function change is required. The 313 passing tests include cross-account access and photo isolation; actual submitted crew records still need live acceptance when available.
