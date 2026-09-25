@@ -27,9 +27,13 @@ function displayName(profile = {}) {
 }
 
 function displayRole(role) {
-  const value = String(role || "Employee").trim();
-  if (value.toLowerCase() === "cfo") return "CFO";
-  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+  const value = String(role || "employee").trim().toLowerCase();
+  if (value === "cfo") return "CFO";
+  if (value === "admin") return "Administration";
+  if (value === "estimator") return "Estimator / Technician / Sales";
+  if (value === "project_manager") return "Project Manager / Production";
+  if (value === "salesperson") return "Salesperson";
+  return "Employee";
 }
 
 function formatDate(value) {
