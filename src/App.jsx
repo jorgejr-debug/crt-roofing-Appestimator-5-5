@@ -13742,6 +13742,7 @@ function App() {
   };
 
   const handleCrmLeadAction = async (action) => {
+    if (crmLeadSyncStatus === "saving") return;
     const now = new Date().toISOString();
     if (action === "scheduleAppointment") {
       const updated = {
@@ -13801,6 +13802,7 @@ function App() {
   };
 
   const convertCrmLeadToCustomer = async () => {
+    if (crmLeadSyncStatus === "saving") return;
     const savedLead = await saveCrmLeadDraft("Saving customer conversion…", crmLeadDraft, true);
     if (!savedLead) return;
     const customerName = [savedLead.firstName, savedLead.lastName].filter(Boolean).join(" ").trim() || savedLead.companyName || savedLead.propertyAddress || "New customer";
@@ -19984,21 +19986,21 @@ function App() {
               <button
                 type="button"
                 className="secondaryButton"
-                disabled={crmInspectionSending}
+                disabled={crmInspectionSending || crmLeadSyncStatus === "saving"}
                 onClick={() => sendCrmLeadForInspection(crmLeadDraft)}
               >
                 {crmInspectionSending ? "Sending to Ivan…" : "Send for Inspection"}
               </button>
-              <button type="button" className="secondaryButton" onClick={() => handleCrmLeadAction("scheduleAppointment")}>
+              <button type="button" className="secondaryButton" disabled={crmLeadSyncStatus === "saving"} onClick={() => handleCrmLeadAction("scheduleAppointment")}>
                 Schedule Appointment
               </button>
-              <button type="button" className="secondaryButton" onClick={() => handleCrmLeadAction("createEstimate")}>
+              <button type="button" className="secondaryButton" disabled={crmLeadSyncStatus === "saving"} onClick={() => handleCrmLeadAction("createEstimate")}>
                 Create Estimate
               </button>
-              <button type="button" className="secondaryButton" onClick={convertCrmLeadToCustomer}>
-                Convert to Customer
+              <button type="button" className="secondaryButton" disabled={crmLeadSyncStatus === "saving"} onClick={convertCrmLeadToCustomer}>
+                {crmLeadSyncStatus === "saving" ? "Saving…" : "Convert to Customer"}
               </button>
-              <button type="button" className="dangerButton" onClick={() => startNewCrmLeadDraft()}>
+              <button type="button" className="dangerButton" disabled={crmLeadSyncStatus === "saving"} onClick={() => startNewCrmLeadDraft()}>
                 Clear Lead
               </button>
             </div>

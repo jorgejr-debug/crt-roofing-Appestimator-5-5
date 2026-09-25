@@ -22,3 +22,11 @@ test("quick lead actions lock while the shared save is pending", () => {
   assert.match(appSource, /crmLeadSyncStatus === "saving"[\s\S]*\? "Saving…"/);
   assert.match(appSource, /className="dangerButton" disabled=\{crmLeadSyncStatus === "saving"\}/);
 });
+
+test("lead qualification actions lock while the shared save is pending", () => {
+  assert.match(appSource, /const handleCrmLeadAction = async \(action\) => \{\s*if \(crmLeadSyncStatus === "saving"\) return;/);
+  assert.match(appSource, /const convertCrmLeadToCustomer = async \(\) => \{\s*if \(crmLeadSyncStatus === "saving"\) return;/);
+  assert.match(appSource, /disabled=\{crmInspectionSending \|\| crmLeadSyncStatus === "saving"\}/);
+  assert.match(appSource, /className="secondaryButton" disabled=\{crmLeadSyncStatus === "saving"\} onClick=\{convertCrmLeadToCustomer\}/);
+  assert.match(appSource, /className="dangerButton" disabled=\{crmLeadSyncStatus === "saving"\} onClick=\{\(\) => startNewCrmLeadDraft\(\)\}/);
+});
