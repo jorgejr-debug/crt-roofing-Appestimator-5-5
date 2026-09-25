@@ -15759,7 +15759,7 @@ function App() {
   };
 
   const handleMoveApprovedJobToActive = async (job) => {
-    if (!job || !authUser?.key) return;
+    if (!job || !authUser?.key || activeJobMutationKey) return;
     if (!canManageSharedJobData) {
       setSessionMessageType("error");
       setSessionMessage("You do not have permission to move shared jobs.");
@@ -15773,30 +15773,34 @@ function App() {
       activityId: `activity-move-active-${Date.now()}`,
     });
 
+    setActiveJobMutationKey(`activate:${job.id}`);
     setJobsSyncStatus("saving");
-    const { error } = await upsertSharedJobToSupabase(
-      activeJob,
-      authUser.key,
-      authUser.id || authUser.key,
-    );
-    if (error) {
-      setJobsSyncStatus("error");
-      setJobsSyncError(error.message || String(error));
-      setSessionMessageType("error");
-      setSessionMessage(`Could not move job: ${error.message || error}`);
-      return;
-    }
+    try {
+      const { error } = await upsertSharedJobToSupabase(
+        activeJob,
+        authUser.key,
+        authUser.id || authUser.key,
+      );
+      if (error) throw error;
 
-    const refreshed = await fetchSharedJobsFromSupabase();
-    if (!refreshed.error) applySharedJobRows(refreshed.data);
-    setJobsSyncStatus(refreshed.error ? "error" : "saved");
-    setJobsSyncError(refreshed.error?.message || "");
-    setSessionMessageType(refreshed.error ? "error" : "success");
-    setSessionMessage(
-      refreshed.error
-        ? `Job moved, but the lists could not refresh: ${refreshed.error.message || refreshed.error}`
-        : `${job.projectName || "Job"} moved to Active Jobs.`,
-    );
+      const refreshed = await fetchSharedJobsFromSupabase();
+      if (refreshed.error) throw new Error(
+        `The job was moved, but the job lists could not refresh: ${refreshed.error.message || refreshed.error}`,
+      );
+      applySharedJobRows(refreshed.data);
+      setJobsSyncStatus("saved");
+      setJobsSyncError("");
+      setSessionMessageType("success");
+      setSessionMessage(`${job.projectName || "Job"} moved to Active Jobs.`);
+    } catch (moveError) {
+      const moveMessage = moveError.message || String(moveError);
+      setJobsSyncStatus("error");
+      setJobsSyncError(moveMessage);
+      setSessionMessageType("error");
+      setSessionMessage(`Could not move job: ${moveMessage}`);
+    } finally {
+      setActiveJobMutationKey("");
+    }
   };
 
   const handleRestoreArchivedJob = async (job) => {
@@ -27267,12 +27271,13 @@ function App() {
                               <button
                                 type="button"
                                 className="primaryButton"
+                                disabled={Boolean(activeJobMutationKey)}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleMoveApprovedJobToActive(job);
                                 }}
                               >
-                                Move to Active Jobs
+                                {activeJobMutationKey === `activate:${job.id}` ? "Moving…" : "Move to Active Jobs"}
                               </button>
                               <button
                                 type="button"
