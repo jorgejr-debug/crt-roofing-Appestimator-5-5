@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import React from "react";
 import { useLoadScript } from "@react-google-maps/api";
 import { createClient } from "@supabase/supabase-js";
-import jsPDF from "jspdf";
 import DashboardTasks from "./DashboardTasks.jsx";
 import ActionFeedback from "./ActionFeedback.jsx";
 import { getEmployeeAllowedTemplates, getEmployeeDashboardSections, getEmployeeNavigationKeys, getEmployeeWorkspace } from "./employeeWorkspace.js";
@@ -108,6 +107,14 @@ const InvoiceQueue = React.lazy(() => import("./InvoiceQueue.jsx"));
 const AccountAccessVault = React.lazy(() => import("./AccountAccessVault.jsx"));
 
 let pdfReaderPromise = null;
+let jsPdfPromise = null;
+
+async function loadJsPdf() {
+  if (!jsPdfPromise) {
+    jsPdfPromise = import("jspdf").then((module) => module.jsPDF || module.default);
+  }
+  return jsPdfPromise;
+}
 
 async function loadPdfReader() {
   if (!pdfReaderPromise) {
@@ -4964,11 +4971,12 @@ function renderPdfKeyValueLines(doc, rows = [], x = 10, y = 10, labelWidth = 48,
   return y;
 }
 
-function generateProposalPDF(proposal = {}, estimate = null, template = DEFAULT_PROPOSAL_TEMPLATE) {
+async function generateProposalPDF(proposal = {}, estimate = null, template = DEFAULT_PROPOSAL_TEMPLATE) {
   const normalizedProposal = normalizeProposalRecord(proposal);
   const activeTemplate = normalizeProposalTemplate(template || normalizedProposal.templateSnapshot || DEFAULT_PROPOSAL_TEMPLATE);
   const sections = buildProposalSections(normalizedProposal, estimate, activeTemplate);
-  const doc = new jsPDF({
+  const JsPDF = await loadJsPdf();
+  const doc = new JsPDF({
     orientation: "portrait",
     unit: "mm",
     format: "a4",
@@ -7321,7 +7329,8 @@ function calculateBidOptions(totalCostBeforeProfit, totalSquares, selectedMarkup
 
 async function generateEstimatePDF(inputs, calculation, fieldNotes, estimateName, estimateType = "TPO", previewWindow = null) {
   try {
-    const doc = new jsPDF({
+    const JsPDF = await loadJsPdf();
+    const doc = new JsPDF({
       orientation: "portrait",
       unit: "mm",
       format: "a4",
@@ -15930,7 +15939,7 @@ function App() {
     setActiveTemplate("proposalBuilder");
   };
 
-  const handleConvertEstimateToProposal = (estimate) => {
+  const handleConvertEstimateToProposal = async (estimate) => {
     if (!estimate) return;
     const proposal = createProposalFromEstimate(estimate, proposalTemplate);
     const syncedProposal = syncProposalWithEstimate(proposal, estimate, proposalTemplate);
@@ -15938,7 +15947,7 @@ function App() {
       const next = [syncedProposal, ...current.filter((item) => item.sourceEstimateId !== syncedProposal.sourceEstimateId || item.version !== syncedProposal.version)];
       return next;
     });
-    generateProposalPdfArchive(syncedProposal, { saveToCustomer: true });
+    await generateProposalPdfArchive(syncedProposal, { saveToCustomer: true });
     setProposalDraft(syncedProposal);
     setProposalSelectedId(syncedProposal.id);
     setSessionMessageType("success");
@@ -16001,13 +16010,13 @@ function App() {
     return nextTemplate;
   };
 
-  const generateProposalPdfArchive = (proposalRecord = proposalDraft, { saveToCustomer = true } = {}) => {
+  const generateProposalPdfArchive = async (proposalRecord = proposalDraft, { saveToCustomer = true } = {}) => {
     if (!proposalRecord) return null;
     const sourceEstimate = getProposalSourceEstimate(proposalRecord);
     const syncedProposal = proposalIsFinalized(proposalRecord)
       ? normalizeProposalRecord(proposalRecord)
       : syncProposalWithEstimate(proposalRecord, sourceEstimate, proposalTemplate);
-    const { pdfFileName, pdfDataUrl } = generateProposalPDF(syncedProposal, sourceEstimate, proposalTemplate);
+    const { pdfFileName, pdfDataUrl } = await generateProposalPDF(syncedProposal, sourceEstimate, proposalTemplate);
     const archivedAt = new Date().toISOString();
     const nextProposal = {
       ...syncedProposal,
@@ -16037,7 +16046,7 @@ function App() {
     return nextProposal;
   };
 
-  const saveProposalDraft = (nextStatus = null) => {
+  const saveProposalDraft = async (nextStatus = null) => {
     if (!proposalDraft) return;
     const now = new Date().toISOString();
     const status = nextStatus || proposalDraft.status || "Draft";
@@ -16052,7 +16061,7 @@ function App() {
     let pdfArchiveDataUrl = syncedProposal.pdfArchiveDataUrl || "";
     let pdfArchiveUpdatedAt = syncedProposal.pdfArchiveUpdatedAt || "";
     try {
-      const pdfArchive = generateProposalPDF(syncedProposal, sourceEstimate, proposalTemplate);
+      const pdfArchive = await generateProposalPDF(syncedProposal, sourceEstimate, proposalTemplate);
       pdfArchiveName = pdfArchive.pdfFileName;
       pdfArchiveDataUrl = pdfArchive.pdfDataUrl;
       pdfArchiveUpdatedAt = now;
@@ -16114,14 +16123,14 @@ function App() {
     setSessionMessage("Proposal saved and archived.");
   };
 
-  const handleSendProposal = () => {
+  const handleSendProposal = async () => {
     if (!proposalDraft) return;
     if (!proposalDraft.customerName || !proposalDraft.projectAddress || !proposalDraft.totalPrice) {
       setSessionMessageType("error");
       setSessionMessage("Fill in the proposal basics before sending.");
       return;
     }
-    saveProposalDraft("Sent");
+    await saveProposalDraft("Sent");
     setSessionMessageType("success");
     setSessionMessage("Proposal marked as sent. Email delivery is coming in the next phase.");
   };

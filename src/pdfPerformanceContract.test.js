@@ -10,3 +10,12 @@ test("the QuickMeasure PDF reader loads only when a PDF is selected", () => {
   assert.match(appSource, /import\("pdfjs-dist\/build\/pdf\.mjs"\)/);
   assert.match(appSource, /const \{ getDocument \} = await loadPdfReader\(\)/);
 });
+
+test("the PDF generator loads only when a proposal or estimate export is requested", () => {
+  assert.doesNotMatch(appSource, /^import jsPDF from "jspdf"/m);
+  assert.match(appSource, /async function loadJsPdf\(\)/);
+  assert.match(appSource, /import\("jspdf"\)/);
+  assert.match(appSource, /async function generateProposalPDF/);
+  assert.match(appSource, /const JsPDF = await loadJsPdf\(\)/);
+  assert.match(appSource, /const pdfArchive = await generateProposalPDF/);
+});
