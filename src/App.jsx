@@ -10348,6 +10348,7 @@ function App() {
   const [activeJobIssueModalOpen, setActiveJobIssueModalOpen] = useState(false);
   const [activeJobIssueDraft, setActiveJobIssueDraft] = useState(() => createBlankActiveJobIssue());
   const [activeJobIssueResponse, setActiveJobIssueResponse] = useState("");
+  const [activeJobIssueSaving, setActiveJobIssueSaving] = useState(false);
   const [invoiceHandoffJob, setInvoiceHandoffJob] = useState(null);
   const [invoiceHandoffDraft, setInvoiceHandoffDraft] = useState(null);
   const [invoiceHandoffSaving, setInvoiceHandoffSaving] = useState(false);
@@ -16075,12 +16076,14 @@ function App() {
   };
 
   const closeActiveJobIssueModal = () => {
+    if (activeJobIssueSaving) return;
     setActiveJobIssueModalOpen(false);
     setActiveJobIssueDraft(createBlankActiveJobIssue(selectedActiveJob));
     setActiveJobIssueResponse("");
   };
 
   const saveActiveJobIssue = async () => {
+    if (activeJobIssueSaving) return;
     if (!canManageActiveJobData) {
       setSessionMessageType("error");
       setSessionMessage("You do not have permission to update shared jobs.");
@@ -16149,29 +16152,45 @@ function App() {
     };
     nextProject.openIssuesCount = getActiveJobOpenIssuesCount(nextProject);
 
-    setActiveJobs((current) =>
-      current.map((job) => (job.id !== project.id ? job : nextProject)),
-    );
+    setActiveJobIssueSaving(true);
+    setJobsSyncStatus("saving");
+    setSessionMessage("");
+    try {
+      const upsertRes = isProjectManager
+        ? await supabase.rpc("save_project_manager_active_job", {
+            p_source_record_uid: buildSharedJobSourceId(nextProject),
+            p_updates: {
+              issues: nextProject.issues,
+              activityLog: nextProject.activityLog,
+              riskLevel: nextProject.riskLevel,
+            },
+          })
+        : await upsertSharedJobToSupabase(nextProject, authUser?.key || "", authUser?.id || authUser?.key || "");
+      if (upsertRes.error) throw upsertRes.error;
 
-    const upsertRes = isProjectManager
-      ? await supabase.rpc("save_project_manager_active_job", {
-          p_source_record_uid: buildSharedJobSourceId(nextProject),
-          p_updates: {
-            issues: nextProject.issues,
-            activityLog: nextProject.activityLog,
-            riskLevel: nextProject.riskLevel,
-          },
-        })
-      : await upsertSharedJobToSupabase(nextProject, authUser?.key || "", authUser?.id || authUser?.key || "");
-    if (upsertRes.error) {
+      setActiveJobs((current) =>
+        current.map((job) => (job.id !== project.id ? job : nextProject)),
+      );
+      const refreshed = await fetchSharedJobsFromSupabase();
+      if (!refreshed.error) applySharedJobRows(refreshed.data);
+      setJobsSyncStatus(refreshed.error ? "error" : "saved");
+      setJobsSyncError(refreshed.error?.message || "");
+      setSessionMessageType(refreshed.error ? "error" : "success");
+      setSessionMessage(refreshed.error
+        ? `Issue ${issue.issueNumber} was saved, but the job list could not refresh: ${refreshed.error.message || refreshed.error}`
+        : `Issue ${issue.issueNumber} saved to ${project.projectName || "the project"}.`);
+      setActiveJobIssueModalOpen(false);
+      setActiveJobIssueDraft(createBlankActiveJobIssue(selectedActiveJob));
+      setActiveJobIssueResponse("");
+    } catch (issueError) {
+      const issueMessage = issueError.message || String(issueError);
+      setJobsSyncStatus("error");
+      setJobsSyncError(issueMessage);
       setSessionMessageType("error");
-      setSessionMessage(`Issue saved locally but sync failed: ${upsertRes.error.message || upsertRes.error}`);
-      return;
+      setSessionMessage(`Issue was not saved: ${issueMessage}`);
+    } finally {
+      setActiveJobIssueSaving(false);
     }
-
-    setSessionMessageType("success");
-    setSessionMessage(`Issue ${issue.issueNumber} saved to ${project.projectName || "the project"}.`);
-    closeActiveJobIssueModal();
   };
 
   const handleSaveApprovedJob = async () => {
@@ -23736,11 +23755,11 @@ function App() {
               </div>
             </div>
             <div className="actionRow">
-              <button type="button" className="secondaryButton" onClick={closeActiveJobIssueModal}>
+              <button type="button" className="secondaryButton" disabled={activeJobIssueSaving} onClick={closeActiveJobIssueModal}>
                 Cancel
               </button>
-              <button type="button" className="primaryButton" onClick={saveActiveJobIssue}>
-                Save issue
+              <button type="button" className="primaryButton" disabled={activeJobIssueSaving} onClick={() => void saveActiveJobIssue()}>
+                {activeJobIssueSaving ? "Saving issue…" : "Save issue"}
               </button>
             </div>
           </div>
