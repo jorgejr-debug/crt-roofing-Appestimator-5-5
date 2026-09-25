@@ -22,6 +22,18 @@
   color: #8b1e2d;
 }
 
+.actionFeedbackToast.warning {
+  border-color: #e4bd67;
+  background: #fff8e8;
+  color: #75510d;
+}
+
+.actionFeedbackToast.info {
+  border-color: #83bce8;
+  background: #eef8ff;
+  color: #154e78;
+}
+
 .actionFeedbackIcon {
   display: grid;
   place-items: center;
@@ -36,6 +48,8 @@
 }
 
 .actionFeedbackToast.error .actionFeedbackIcon { background: #b62d40; }
+.actionFeedbackToast.warning .actionFeedbackIcon { background: #b87908; }
+.actionFeedbackToast.info .actionFeedbackIcon { background: #287bb7; }
 .actionFeedbackCopy { display: grid; gap: 3px; min-width: 0; }
 .actionFeedbackCopy strong { font-size: 15px; line-height: 1.25; }
 .actionFeedbackCopy p { margin: 0; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }

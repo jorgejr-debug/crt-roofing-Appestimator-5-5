@@ -27653,7 +27653,7 @@ function App() {
         <button type="button" className="portalMobileMenu" onClick={() => setSidebarMobileOpen(true)} aria-label="Open navigation">Menu</button>
         <ActionFeedback
           message={sessionMessage}
-          tone={sessionMessageType === "error" ? "error" : "success"}
+          tone={sessionMessageType || "info"}
           onDismiss={() => { setSessionMessage(""); setSessionMessageType(""); }}
         />
         <main className="portalMain">{screen}</main>
