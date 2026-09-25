@@ -147,3 +147,12 @@ References: [Supabase Cron](https://supabase.com/docs/guides/cron), [Resend idem
 - Missing `company_vehicles` table still causes a warning; the field form displays its existing fallback vehicles. Google Maps has no configured API key; manual travel input remains available.
 - Source inspection identified an additional limitation: field-log reads and photo access are owner-restricted, so Office Review currently cannot retrieve other employees' submissions. Company-wide office review still needs a narrowly scoped role-based read policy, matching query changes, and cross-account validation. Existing ownership protections were not widened during this pass.
 - End-to-end production issue saves/resolution, estimate saves/proposals/PDF downloads, uploads, and actual-phone/weak-network acceptance remain unverified. This pass used read-only navigation and rejected invalid input to preserve real records; local transaction and PDF tests remain the write-path evidence.
+
+
+## Prepared Office Review access update — pending production activation
+
+The user requested proceeding with cross-employee Office Review. The prepared migration `20260925130000_field_log_office_review.sql` allows existing Admin/CFO accounts (including Natalia/Jorge) to read submitted crew logs and their referenced photos/receipts. Other employees retain access only to their own logs. Drafts, unreferenced photos, unrelated buckets, and all write permissions remain unchanged. No historical records are modified.
+
+The matching frontend uses the RLS-visible record set instead of forcing an owner-only query, paginates results, refreshes on review entry/manual refresh, displays loading failures, and excludes shared crew records from offline local storage. Regression tests cover both office roles, employee isolation, private drafts, photo/receipt references, unrelated files, role revocation, denied writes, pagination, and failed loads. All 313 tests and the production build passed during preparation.
+
+This change is prepared locally, not yet applied to Supabase or deployed. Browser security rules require action-time confirmation before expanding access to employee logs/photos. Existing production release remains `e94de83` until activation.

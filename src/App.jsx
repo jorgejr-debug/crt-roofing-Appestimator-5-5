@@ -1,3 +1,4 @@
+import { fetchAccessibleFieldLogRows, ownFieldLogsForCache } from "./fieldLogAccess.js";
 import ConnectionStatus from "./ConnectionStatus.jsx";
 import { toPlainObject } from "./settingsObject.js";
 import "./WorkflowMobile.css";
@@ -4421,11 +4422,11 @@ async function refreshFieldLogPhotoUrls(log) {
   return {...log, photos: (log.photos || []).map(photo => ({...photo, photoUrl:urls.get(photo.storagePath) || photo.photoUrl})), fuelReceipts:(log.fuelReceipts || []).map(receipt => ({...receipt, receiptPhotoUrl:urls.get(receipt.receiptPhotoPath) || receipt.receiptPhotoUrl}))};
 }
 
-async function fetchFieldDailyLogsFromSupabase(userKey) {
+async function fetchFieldDailyLogsFromSupabase() {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return {data:[], error:new Error("Supabase not configured")};
-  const {data, error} = await supabase.from("field_daily_logs").select("*").eq("user_key",userKey).order("work_date",{ascending:false});
+  const {data, error} = await fetchAccessibleFieldLogRows(supabase);
   if (error) return {data:[],error};
-  const logs = await Promise.all((data || []).map(row => refreshFieldLogPhotoUrls({...row.log_payload, id:row.id, status:row.status, serverUpdatedAt:row.updated_at})));
+  const logs = await Promise.all((data || []).map(row => refreshFieldLogPhotoUrls({...row.log_payload, id:row.id, ownerUserKey:row.user_key, status:row.status, serverUpdatedAt:row.updated_at})));
   return {data:logs,error:null};
 }
 
@@ -10172,6 +10173,9 @@ function App() {
   const [fieldUploadBusy, setFieldUploadBusy] = useState(false);
   const [pendingFieldUploads, setPendingFieldUploads] = useState([]);
   const [fieldDailyLogSaving, setFieldDailyLogSaving] = useState(false);
+  const [fieldLogsLoading, setFieldLogsLoading] = useState(false);
+  const [fieldLogsError, setFieldLogsError] = useState("");
+  const [fieldLogsRefresh, setFieldLogsRefresh] = useState(0);
   const fieldUploadLock = useRef(false);
   const fieldDailyLogSaveLock = useRef(false);
   useEffect(() => {
@@ -11348,22 +11352,30 @@ function App() {
     setFieldDailyLogSelectedId((current) => current || (Array.isArray(localLogs) && localLogs[0]?.id ? localLogs[0].id : ""));
     setFieldOperationsTab("dailyLog");
 
+  }, [authUser?.key, authUser?.displayName]);
+
+  useEffect(() => {
+    if (!authUser?.key) return undefined;
     let active = true;
+    setFieldLogsLoading(true);
+    setFieldLogsError("");
     (async () => {
-      const { data, error } = await fetchFieldDailyLogsFromSupabase(authUser.key);
-      if (!active) return;
-      if (!error && Array.isArray(data)) {
+      try {
+        const { data, error } = await fetchFieldDailyLogsFromSupabase();
+        if (!active) return;
+        if (error) throw error;
         setFieldDailyLogs(data);
-        setFieldDailyLogSelectedId((current) => current || data[0]?.id || "");
-      } else if (error) {
-        console.warn("Field operations load failed:", error.message || error);
+        setFieldDailyLogSelectedId(current => data.some(log => log.id === current) ? current : data[0]?.id || "");
+      } catch (error) {
+        if (!active) return;
+        setFieldDailyLogs(current => ownFieldLogsForCache(current, authUser.key));
+        setFieldLogsError(error.message || "Unable to refresh daily logs. Try again when connected.");
+      } finally {
+        if (active) setFieldLogsLoading(false);
       }
     })();
-
-    return () => {
-      active = false;
-    };
-  }, [authUser?.key, authUser?.displayName]);
+    return () => { active = false; };
+  }, [authUser?.key, authRole, fieldOperationsTab, fieldLogsRefresh]);
 
   useEffect(() => {
     if (!authUser?.key) return;
@@ -11372,7 +11384,7 @@ function App() {
 
   useEffect(() => {
     if (!authUser?.key) return;
-    writeJson(FIELD_DAILY_LOGS_KEY(authUser.key), fieldDailyLogs);
+    writeJson(FIELD_DAILY_LOGS_KEY(authUser.key), ownFieldLogsForCache(fieldDailyLogs, authUser.key));
   }, [authUser, fieldDailyLogs]);
 
   useEffect(() => {
@@ -18952,7 +18964,7 @@ function App() {
 
   const renderActiveJobScreen = () => <ActiveJobWorkspace workspace={{ ACTIVE_JOB_RISK_LEVELS, ACTIVE_JOB_STATUS_OPTIONS, DetailRow, Field, LOGO_SRC, Section, activeJobEditDraft, activeJobEditMode, activeJobMutationKey, activeJobs, authUser, canManageActiveJobData, canSubmitInvoiceHandoff, canUpdateDailyJobCostData, css, filteredActiveJobs, getAccountTitle, getActiveJobOpenIssuesCount, handleActiveJobEditFieldChange, handleCancelActiveJobEdit, handleNumberInputWheel, handleSaveActiveJobEdit, handleStartActiveJobEdit, isProjectManager, money2, num, openActiveJobIssueModal, openApprovedJobDetail, openInvoiceHandoff, renderActiveJobIssueModal, renderInvoiceHandoffModal, selectedActiveJob, setActiveTemplate, toNumber }} />;
 
-  const renderFieldOperationsScreen = () => <FieldOperationsWorkspace workspace={{ discardPendingFieldUpload, fieldUploadBusy, pendingFieldUploads, retryFieldUploads, fieldDailyLogSaving, DetailRow, FIELD_DAILY_LOG_HIGH_MILEAGE_THRESHOLD, FIELD_DAILY_LOG_PHOTO_CATEGORIES, Field, LOGO_SRC, Section, activeEmployeeDrivers, activeFieldOperationEmployees, activeFieldOperationForemen, authUser, calculateFieldDailyLogTotals, calculateHoursBetweenTimes, css, fieldDailyLogDraft, fieldDailyLogFilters, fieldDailyLogHasProgressOrCompletedPhoto, fieldDailyLogReviewSearch, fieldDailyLogSelectedId, fieldDailyLogSelectedLog, fieldOperationCompanyVehicles, fieldOperationsTab, filteredFieldDailyLogs, getAccountTitle, handleAddFieldDailyLogCrewRow, handleAddFieldDailyLogFuelReceiptRow, handleAddFieldDailyLogVehicleRow, handleExportPayrollCsv, handleFieldDailyLogCrewRowChange, handleFieldDailyLogFieldChange, handleFieldDailyLogFilterChange, handleFieldDailyLogFuelReceiptPhotoUpload, handleFieldDailyLogFuelReceiptRowChange, handleFieldDailyLogPhotoUpload, handleFieldDailyLogVehicleRowChange, handleNumberInputWheel, handleRemoveFieldDailyLogCrewRow, handleRemoveFieldDailyLogFuelReceiptRow, handleRemoveFieldDailyLogPhoto, handleRemoveFieldDailyLogVehicleRow, handleRemoveFuelReceiptPhoto, handleSaveFieldDailyLogDraft, handleSubmitDailyLog, money2, num, requestPhotoAccessAndOpenPicker, round, setActiveTemplate, setFieldDailyLogReviewSearch, setFieldDailyLogSelectedId, setFieldOperationsTab, toNumber, totalFuelPurchasedAmount }} />;
+  const renderFieldOperationsScreen = () => <FieldOperationsWorkspace workspace={{ fieldLogsLoading, fieldLogsError, refreshFieldLogs: () => setFieldLogsRefresh(value => value + 1), isFinanceUser, discardPendingFieldUpload, fieldUploadBusy, pendingFieldUploads, retryFieldUploads, fieldDailyLogSaving, DetailRow, FIELD_DAILY_LOG_HIGH_MILEAGE_THRESHOLD, FIELD_DAILY_LOG_PHOTO_CATEGORIES, Field, LOGO_SRC, Section, activeEmployeeDrivers, activeFieldOperationEmployees, activeFieldOperationForemen, authUser, calculateFieldDailyLogTotals, calculateHoursBetweenTimes, css, fieldDailyLogDraft, fieldDailyLogFilters, fieldDailyLogHasProgressOrCompletedPhoto, fieldDailyLogReviewSearch, fieldDailyLogSelectedId, fieldDailyLogSelectedLog, fieldOperationCompanyVehicles, fieldOperationsTab, filteredFieldDailyLogs, getAccountTitle, handleAddFieldDailyLogCrewRow, handleAddFieldDailyLogFuelReceiptRow, handleAddFieldDailyLogVehicleRow, handleExportPayrollCsv, handleFieldDailyLogCrewRowChange, handleFieldDailyLogFieldChange, handleFieldDailyLogFilterChange, handleFieldDailyLogFuelReceiptPhotoUpload, handleFieldDailyLogFuelReceiptRowChange, handleFieldDailyLogPhotoUpload, handleFieldDailyLogVehicleRowChange, handleNumberInputWheel, handleRemoveFieldDailyLogCrewRow, handleRemoveFieldDailyLogFuelReceiptRow, handleRemoveFieldDailyLogPhoto, handleRemoveFieldDailyLogVehicleRow, handleRemoveFuelReceiptPhoto, handleSaveFieldDailyLogDraft, handleSubmitDailyLog, money2, num, requestPhotoAccessAndOpenPicker, round, setActiveTemplate, setFieldDailyLogReviewSearch, setFieldDailyLogSelectedId, setFieldOperationsTab, toNumber, totalFuelPurchasedAmount }} />;
 
   const renderCfoDashboardScreen = () => <CfoDashboardWorkspace workspace={{ DetailRow, Field, LOGO_SRC, Section, authUser, buildCfoApprovedJobSharedJob, buildCfoSourceRecordUid, calculateReceivablePaymentTotals, calculateSupplierPaymentTotals, cfoApprovedJobsLedger, cfoDashboardFilters, cfoLastSyncedRef, cfoLiquidCashDraft, cfoLiquidCashEditingId, cfoLiquidCashEntries, cfoManualDraftsByCard, cfoManualEditingByCard, cfoManualEntriesByCard, cfoPaymentDiscussionError, cfoPaymentDiscussionOpeningId, cfoReceivableDraft, cfoReceivableEditingId, cfoReceivableEntries, cfoReceivablePaymentMessage, cfoReceivablePaymentMessageType, cfoReceivablePaymentSavingId, cfoSupplierPaymentDraft, cfoSupplierPaymentEntry, cfoSupplierPaymentMessage, cfoSupplierPaymentSavingId, cfoSyncError, cfoSyncStatus, createBlankCfoLiquidCashEntry, createBlankCfoManualEntry, createBlankCfoReceivableEntry, createBlankSupplierPaymentDraft, createFieldDailyLogId, css, estimatorSettingsSyncStatus, filterReceivablesByPaymentView, filterSupplierPayablesByPaymentView, flattenCfoNonLiquidCashRecords, formatCfoRecordUpdatedAt, getAccountTitle, getReceivablePaymentStatus, getRevealSecondsRemaining, getSupplierPaymentStatus, handleNumberInputWheel, invokeLiquidCashFunction, liquidCashAccess, liquidCashCode, liquidCashSaving, money, money2, normalizeCfoLiquidCashEntry, normalizeCfoManualEntry, normalizeCfoReceivableEntry, num, openApprovedJobDetail, selectedCfoCard, setActiveTemplate, setCfoDashboardFilters, setCfoDeletedSourceRecordUids, setCfoLiquidCashDraft, setCfoLiquidCashEditingId, setCfoLiquidCashEntries, setCfoManualDraftsByCard, setCfoManualEditingByCard, setCfoManualEntriesByCard, setCfoPaymentDiscussionError, setCfoPaymentDiscussionOpeningId, setCfoReceivableDraft, setCfoReceivableEditingId, setCfoReceivableEntries, setCfoReceivablePaymentMessage, setCfoReceivablePaymentMessageType, setCfoReceivablePaymentSavingId, setCfoSupplierPaymentDraft, setCfoSupplierPaymentEntry, setCfoSupplierPaymentMessage, setCfoSupplierPaymentSavingId, setCfoSyncError, setCfoSyncStatus, setCompletedJobs, setLiquidCashAccess, setLiquidCashCode, setLiquidCashSaving, setSelectedCfoCard, setSessionMessage, setSessionMessageType, setSupplierPaymentHistory, setWorkHubInitialCreateTask, setWorkHubInitialTaskId, splitSharedJobsByWorkflow, supabase, supplierPaymentHistory, toNumber, upsertCompanyFinancialRecordsToSupabase, upsertSharedJobToSupabase }} />;
 
