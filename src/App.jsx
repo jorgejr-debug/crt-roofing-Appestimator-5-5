@@ -18316,7 +18316,7 @@ function App() {
         <div className="heroCard">
           <span>Signed in</span>
           <strong>{authUser.displayName}</strong>
-          <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
+          <p>{getAccountTitle()}</p>
         </div>
       </header>
 
@@ -18572,7 +18572,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{isProjectManager ? "Project Manager / Production" : isAdminUser ? "Admin" : "Salesperson"}</p>
+            <p>{getAccountTitle()}</p>
           </div>
         </header>
 
@@ -19682,7 +19682,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{isProjectManager ? "Project Manager / Production" : isAdminUser ? "Admin" : "Salesperson"}</p>
+            <p>{getAccountTitle()}</p>
           </div>
         </header>
 
@@ -20570,7 +20570,7 @@ function App() {
         <div className="heroCard">
           <span>Signed in</span>
           <strong>{authUser.displayName}</strong>
-          <p>{authRole === "admin" ? "Admin" : authRole === "cfo" ? "CFO" : "Salesperson"}</p>
+          <p>{getAccountTitle()}</p>
           <p className="smallNote" style={{ marginTop: 8 }}>
             {estimatorSettingsSyncStatus === "saving"
               ? "Saving company defaults..."
@@ -20717,7 +20717,7 @@ function App() {
         <div className="heroCard">
           <span>Signed in</span>
           <strong>{authUser.displayName}</strong>
-          <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
+          <p>{getAccountTitle()}</p>
         </div>
       </header>
 
@@ -23686,7 +23686,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{isProjectManager ? "Project Manager / Production" : isAdminUser ? "Admin" : "Salesperson"}</p>
+            <p>{getAccountTitle()}</p>
           </div>
         </header>
 
@@ -24005,7 +24005,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{isProjectManager ? "Project Manager / Production" : isAdminUser ? "Admin" : "Salesperson"}</p>
+            <p>{getAccountTitle()}</p>
           </div>
         </header>
 
@@ -24400,7 +24400,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
+            <p>{getAccountTitle()}</p>
           </div>
         </header>
 
@@ -26503,7 +26503,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{authRole === "admin" ? "Admin" : authRole === "cfo" ? "CFO" : "Salesperson"}</p>
+            <p>{getAccountTitle()}</p>
             <p className="smallNote" style={{ marginTop: 8 }}>CFO sync: {cfoSyncStatusLabel}</p>
             <p className="smallNote" style={{ marginTop: 4 }}>Estimator settings sync: {estimatorSettingsStatusLabel}</p>
           </div>
@@ -26937,7 +26937,7 @@ function App() {
           <div className="heroCard">
             <span>Signed in</span>
             <strong>{authUser.displayName}</strong>
-            <p>{isAdminUser ? "Admin" : "Salesperson"}</p>
+            <p>{getAccountTitle()}</p>
           </div>
         </header>
 
@@ -27339,6 +27339,16 @@ function App() {
     return displayName && !displayName.includes("@") ? displayName : String(authUser?.email || "Employee").split("@")[0];
   };
 
+  const getAccountTitle = () => {
+    const title = String(authUser?.title || "").trim();
+    if (title && title !== "Sales") return title;
+    if (authRole === "admin") return "Administration";
+    if (authRole === "cfo") return "CFO";
+    if (authRole === "estimator") return "Estimator / Technician / Sales";
+    if (authRole === "project_manager") return "Project Manager / Production";
+    return "Salesperson";
+  };
+
   const getAccountInitials = () => {
     const words = getAccountDisplayName().split(/\s+/).filter(Boolean);
     if (!words.length) return "CR";
@@ -27483,7 +27493,7 @@ function App() {
         <div className="summaryGrid">
           <div className="summaryCard"><span>Name</span><strong>{getAccountDisplayName()}</strong></div>
           <div className="summaryCard"><span>Email</span><strong>{authUser?.email || "Not available"}</strong></div>
-          <div className="summaryCard"><span>Role</span><strong>{normalizeAppRole(authRole)}</strong></div>
+          <div className="summaryCard"><span>Title</span><strong>{getAccountTitle()}</strong></div>
           <div className="summaryCard"><span>Title</span><strong>{authUser?.title || "Employee"}</strong></div>
         </div>
         <div className="actionRow" style={{ marginTop: 16 }}>
@@ -27641,7 +27651,7 @@ function App() {
               <span className="portalSidebarAvatar" aria-hidden="true">
                 {authUser?.avatarUrl ? <img src={authUser.avatarUrl} alt="" /> : getAccountInitials()}
               </span>
-              <div className="portalSidebarAccountText"><strong>{getAccountDisplayName()}</strong><span>{normalizeAppRole(authRole)}</span></div>
+              <div className="portalSidebarAccountText"><strong>{getAccountDisplayName()}</strong><span>{getAccountTitle()}</span></div>
             </div>
             {accountNavigation.map(renderSidebarButton)}
             <button type="button" className="portalSidebarButton" onClick={handleLogout} title={sidebarCollapsed ? "Sign Out" : undefined}>
