@@ -67,6 +67,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
   const [commentDraft, setCommentDraft] = useState("");
   const [messageDraft, setMessageDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  const [updatingTaskId, setUpdatingTaskId] = useState("");
   const [deletingTaskId, setDeletingTaskId] = useState("");
   const [search, setSearch] = useState("");
   const [taskView, setTaskView] = useState("active");
@@ -76,6 +77,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
 
   const profileById = useMemo(() => Object.fromEntries(profiles.map((profile) => [profile.id, profile])), [profiles]);
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) || null;
+  const selectedTaskUpdating = Boolean(selectedTask && updatingTaskId === selectedTask.id);
   const selectedPerson = profileById[selectedPersonId] || null;
 
   const loadData = useCallback(async ({ quiet = false } = {}) => {
@@ -173,7 +175,9 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
   };
 
   const updateTaskStatus = async (task, status) => {
+    if (updatingTaskId || task.status === status) return;
     if (status === "voided" && !window.confirm("Mark this task as voided? It will leave the active list but remain available in task history.")) return;
+    setUpdatingTaskId(task.id);
     setError("");
     setTaskNotice("");
     const { error: updateError } = await supabase.from("company_tasks").update({ status }).eq("id", task.id);
@@ -184,6 +188,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
       if (taskView === "active" && isTaskClosed({ status })) setSelectedTaskId("");
       await loadData({ quiet: true });
     }
+    setUpdatingTaskId("");
   };
 
   const openTask = async (taskId) => {
@@ -280,8 +285,6 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
         <button type="button" className={activeTab === "people" ? "active" : ""} onClick={() => setActiveTab("people")}>People</button>
       </div>
 
-      {error ? <p className="statusMessage dangerMessage">{error}</p> : null}
-      {taskNotice ? <p className="statusMessage successMessage">{taskNotice}</p> : null}
       {loading ? <section className="panel"><p className="emptyState">Loading collaboration workspace…</p></section> : null}
 
       {!loading && activeTab === "tasks" ? (
@@ -371,11 +374,11 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
               <div className="workHubDiscussionTitle"><span className={`workHubTypeBadge ${taskType(selectedTask)}`}>{taskTypeLabel(selectedTask)}</span><h3>{selectedTask.title}</h3></div>
               {selectedTask.description ? <p className="workHubTaskDescription">{selectedTask.description}</p> : null}
               <div className="workHubQuickStatuses" aria-label="Quick task actions">
-                <button type="button" className="secondaryButton" onClick={() => updateTaskStatus(selectedTask, "in_progress")}>Working on It</button>
-                <button type="button" className="secondaryButton successAction" onClick={() => updateTaskStatus(selectedTask, "completed")}>Completed</button>
-                <button type="button" className="secondaryButton voidAction" onClick={() => updateTaskStatus(selectedTask, "voided")}>Voided</button>
+                <button type="button" className="secondaryButton" disabled={selectedTaskUpdating} onClick={() => updateTaskStatus(selectedTask, "in_progress")}>Working on It</button>
+                <button type="button" className="secondaryButton successAction" disabled={selectedTaskUpdating} onClick={() => updateTaskStatus(selectedTask, "completed")}>Completed</button>
+                <button type="button" className="secondaryButton voidAction" disabled={selectedTaskUpdating} onClick={() => updateTaskStatus(selectedTask, "voided")}>Voided</button>
               </div>
-              <label className="workHubStatusField"><span>Status</span><select className="workHubStatusSelect" value={selectedTask.status} onChange={(event) => updateTaskStatus(selectedTask, event.target.value)}><option value="open">Open</option><option value="in_progress">Working on It</option><option value="blocked">Blocked</option><option value="completed">Completed</option><option value="voided">Voided</option></select></label>
+              <label className="workHubStatusField"><span>{selectedTaskUpdating ? "Updating status…" : "Status"}</span><select className="workHubStatusSelect" disabled={selectedTaskUpdating} value={selectedTask.status} onChange={(event) => updateTaskStatus(selectedTask, event.target.value)}><option value="open">Open</option><option value="in_progress">Working on It</option><option value="blocked">Blocked</option><option value="completed">Completed</option><option value="voided">Voided</option></select></label>
               <div className="workHubComments">{taskComments.map((comment) => <div key={comment.id} className="workHubComment"><PersonAvatar profile={profileById[comment.author_id]} size="small" /><div><strong>{displayName(profileById[comment.author_id])}</strong><p>{comment.body}</p><small>{new Date(comment.created_at).toLocaleString()}</small></div></div>)}{!taskComments.length ? <p className="emptyState">No comments yet.</p> : null}</div>
               <form className="workHubComposer" onSubmit={addComment}><textarea rows="3" value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="Add a comment or update" /><button type="submit" className="primaryButton" disabled={saving || !commentDraft.trim()}>Comment</button></form>
             </> : <p className="emptyState">Select a task to open its discussion.</p>}

@@ -26,3 +26,11 @@ test("voided tasks are stored as history without weakening RLS", () => {
   assert.doesNotMatch(migrationSource, /DISABLE ROW LEVEL SECURITY/i);
   assert.doesNotMatch(migrationSource, /CREATE POLICY/i);
 });
+
+test("task status updates lock their controls and use one feedback surface", () => {
+  assert.match(workHubSource, /if \(updatingTaskId \|\| task\.status === status\) return;/);
+  assert.match(workHubSource, /disabled=\{selectedTaskUpdating\}/);
+  assert.match(workHubSource, /selectedTaskUpdating \? "Updating status…" : "Status"/);
+  assert.match(workHubSource, /<ActionFeedback message=\{error \|\| taskNotice\}/);
+  assert.doesNotMatch(workHubSource, /statusMessage successMessage/);
+});
