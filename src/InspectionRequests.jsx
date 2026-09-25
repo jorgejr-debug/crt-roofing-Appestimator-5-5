@@ -19,7 +19,7 @@ function InspectionDetail({row,profiles,supabase,userId,isOffice,busy,onAction,o
  <p>Assigned to {person(row.assigned_to)} · Requested by {person(row.created_by)}</p><p>Best time to call: {row.best_time_to_call||'Not specified'} · {row.urgency} priority</p>
  <p role="status">{inspectionTiming(row)}</p>
  <div className="workHubForm">
- <label><span>Assigned technician</span><select disabled={!isOffice||!canEdit||busy||pending} value={draft.assigned_to} onChange={e=>change('assigned_to',e.target.value)}>{profiles.filter(p=>p.id===row.assigned_to||(p.is_active!==false&&['salesperson','estimator','admin','cfo'].includes(p.role))).map(p=><option key={p.id} value={p.id}>{p.full_name||p.email}</option>)}</select></label>
+ <label><span>Assigned technician</span><select disabled={!isOffice||!canEdit||busy||pending} value={draft.assigned_to} onChange={e=>change('assigned_to',e.target.value)}>{profiles.filter(p=>p.id===row.assigned_to||(['salesperson','estimator','admin','cfo'].includes(p.role))).map(p=><option key={p.id} value={p.id}>{p.full_name||p.email}</option>)}</select></label>
  <label><span>Appointment (your device’s local time)</span><input type="datetime-local" value={draft.appointment_at} disabled={!canEdit||busy||pending} onChange={e=>change('appointment_at',e.target.value)}/></label>
  <label><span>Request / scheduling notes</span><textarea rows="4" value={draft.notes} disabled={!canEdit||busy||pending} onChange={e=>change('notes',e.target.value)}/></label>
  <label><span>Inspection findings / observed scope</span><textarea rows="6" value={draft.findings} disabled={!canEdit||busy||pending} onChange={e=>change('findings',e.target.value)}/></label>

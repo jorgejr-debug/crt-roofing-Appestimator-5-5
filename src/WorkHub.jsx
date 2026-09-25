@@ -89,7 +89,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
     if (!quiet) setLoading(true);
     setError("");
     const [profileResult, taskResult, assigneeResult, commentResult, notificationResult, messageResult] = await Promise.all([
-      supabase.from("user_profiles").select("id, full_name, email, role, avatar_path, is_active").order("full_name"),
+      supabase.from("user_profiles").select("id, full_name, email, role, avatar_path").order("full_name"),
       supabase.from("company_tasks").select("*").order("updated_at", { ascending: false }),
       supabase.from("company_task_assignees").select("*").order("assigned_at", { ascending: true }),
       supabase.from("company_task_comments").select("*").order("created_at", { ascending: true }),

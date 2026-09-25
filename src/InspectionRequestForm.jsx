@@ -37,7 +37,7 @@ export default function InspectionRequestForm({ supabase, userId, initialRequest
  <div className="workHubFormRow"><label><span>Phone</span><input type="tel" value={draft.phone} onChange={e=>change('phone',e.target.value)} /></label><label><span>Email</span><input type="email" value={draft.email} onChange={e=>change('email',e.target.value)} /></label></div>
  <label><span>Property address</span><input autoComplete="street-address" value={draft.property_address} onChange={e=>change('property_address',e.target.value)} /></label>
  <small>Provide at least a phone number, email, or address.</small>
- <label><span>Assigned technician</span><select value={draft.assigned_to} onChange={e=>change('assigned_to',e.target.value)}><option value="">Ivan (default)</option>{profiles.filter(p=>p.is_active!==false&&['salesperson','estimator','admin','cfo'].includes(p.role)).map(p=><option key={p.id} value={p.id}>{p.full_name||p.email}</option>)}</select></label>
+ <label><span>Assigned technician</span><select value={draft.assigned_to} onChange={e=>change('assigned_to',e.target.value)}><option value="">Ivan (default)</option>{profiles.filter(p=>['salesperson','estimator','admin','cfo'].includes(p.role)).map(p=><option key={p.id} value={p.id}>{p.full_name||p.email}</option>)}</select></label>
  <label><span>Best time to call</span><input value={draft.best_time_to_call} onChange={e=>change('best_time_to_call',e.target.value)} /></label>
  <label><span>Urgency</span><select value={draft.urgency} onChange={e=>change('urgency',e.target.value)}><option>Normal</option><option>High</option><option>Urgent</option></select></label>
  <label><span>Inspection notes</span><textarea rows="4" value={draft.notes} onChange={e=>change('notes',e.target.value)} /></label>

@@ -12,8 +12,8 @@ test('inspection lifecycle preserves draft privacy, files, history, retry safety
  CREATE TABLE storage.objects(id uuid DEFAULT gen_random_uuid(),bucket_id text,name text,metadata jsonb);ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
  CREATE FUNCTION storage.foldername(text) RETURNS text[] LANGUAGE sql AS $$SELECT string_to_array($1,'/')$$;
  GRANT USAGE ON SCHEMA auth,storage TO authenticated,anon;GRANT SELECT,INSERT,DELETE ON storage.objects TO authenticated;
- CREATE TABLE user_profiles(id uuid PRIMARY KEY,full_name text,email text,role text,is_active boolean DEFAULT true);
- INSERT INTO user_profiles VALUES('${creator}','Caller','caller@example.invalid','salesperson',true),('${ivan}','Ivan','ivan@crtroofing.com','salesperson',true),('${office}','Office','office@example.invalid','cfo',true),('${daniela}','Daniela','daniela@crtroofing.com','estimator',true),('${outsider}','Other','other@example.invalid','salesperson',true);
+ CREATE TABLE user_profiles(id uuid PRIMARY KEY,full_name text,email text,role text);
+ INSERT INTO user_profiles VALUES('${creator}','Caller','caller@example.invalid','salesperson'),('${ivan}','Ivan','ivan@crtroofing.com','salesperson'),('${office}','Office','office@example.invalid','cfo'),('${daniela}','Daniela','daniela@crtroofing.com','estimator'),('${outsider}','Other','other@example.invalid','salesperson');
  CREATE TABLE company_tasks(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),created_by uuid,title text,description text,priority text,due_date date,created_at timestamptz DEFAULT now());
  GRANT SELECT ON company_tasks TO authenticated;
  CREATE TABLE company_task_assignees(task_id uuid,user_id uuid,assigned_at timestamptz DEFAULT now());
@@ -40,6 +40,7 @@ test('inspection lifecycle preserves draft privacy, files, history, retry safety
  await db.exec(actualHandoff.slice(actualHandoff.indexOf('CREATE OR REPLACE FUNCTION public.submit_draft_proposal_handoff'),actualHandoff.indexOf('CREATE OR REPLACE FUNCTION public.review_draft_proposal_handoff')));
  await db.exec(readFileSync(new URL('../supabase/migrations/20260925150000_mobile_task_requests_and_attachments.sql',import.meta.url),'utf8'));
  await db.exec(readFileSync(new URL('../supabase/migrations/20260925160000_inspection_request_center.sql',import.meta.url),'utf8'));
+ await db.exec(readFileSync(new URL('../supabase/migrations/20260925161000_inspection_profile_compatibility.sql',import.meta.url),'utf8'));
  const as=async id=>db.exec(`RESET ROLE;SET ROLE authenticated;SELECT set_config('test.uid','${id}',false)`);
  const rpc=async(fn,args)=> (await db.query(`SELECT * FROM ${fn}(${args.map((_,i)=>`$${i+1}`).join(',')})`,args)).rows[0];
  await as(creator);let row=await rpc('save_inspection_request',[request,{contact_name:'Local test only',phone:'555',property_address:'Local fixture address'},0]);
