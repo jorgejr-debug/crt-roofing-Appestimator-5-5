@@ -10443,6 +10443,8 @@ function App() {
   const [cfoReceivableDraft, setCfoReceivableDraft] = useState(() => createBlankCfoReceivableEntry());
   const [cfoReceivableEditingId, setCfoReceivableEditingId] = useState("");
   const [cfoReceivablePaymentMessage, setCfoReceivablePaymentMessage] = useState("");
+  const [cfoReceivablePaymentMessageType, setCfoReceivablePaymentMessageType] = useState("");
+  const [cfoReceivablePaymentSavingId, setCfoReceivablePaymentSavingId] = useState("");
   const [cfoSupplierPaymentMessage, setCfoSupplierPaymentMessage] = useState("");
   const [cfoSupplierPaymentSavingId, setCfoSupplierPaymentSavingId] = useState("");
   const [cfoSupplierPaymentEntry, setCfoSupplierPaymentEntry] = useState(null);
@@ -25568,19 +25570,53 @@ function App() {
       });
       setCfoReceivableEditingId(String(entry.id));
     };
-    const markReceivableEntryPaid = (entry) => {
+    const markReceivableEntryPaid = async (entry) => {
+      if (!entry?.id || cfoReceivablePaymentSavingId) return;
       const customerName = String(entry?.customerName || "this customer").trim() || "this customer";
       if (!window.confirm(`Mark ${customerName} as paid and move this payment to Paid history?`)) return;
 
-      setCfoReceivableEntries((current) => current.map((item) => (
+      const paidEntry = normalizeCfoReceivableEntry({
+        ...entry,
+        paymentStatus: "Paid",
+        rowVersion: Math.max(1, toNumber(entry.rowVersion, 1)) + 1,
+      });
+      const nextReceivableEntries = cfoReceivableEntries.map((item) => (
         item.id === entry.id
-          ? normalizeCfoReceivableEntry({ ...item, paymentStatus: "Paid" })
+          ? paidEntry
           : item
-      )));
+      ));
+      setCfoReceivablePaymentSavingId(String(entry.id));
+      setCfoReceivablePaymentMessage("");
+      setCfoReceivablePaymentMessageType("");
+      setCfoSyncStatus("saving");
+      setCfoSyncError("");
+      const saveResult = await upsertCompanyFinancialRecordsToSupabase(
+        flattenCfoNonLiquidCashRecords([paidEntry], {}),
+        authUser.id || authUser.key,
+      );
+      setCfoReceivablePaymentSavingId("");
+      if (saveResult.error) {
+        const saveMessage = saveResult.error.message || "The payment could not be saved to company data.";
+        setCfoSyncStatus("error");
+        setCfoSyncError(saveMessage);
+        setCfoReceivablePaymentMessageType("error");
+        setCfoReceivablePaymentMessage(`Payment not recorded: ${saveMessage}`);
+        setSessionMessageType("error");
+        setSessionMessage(`Payment not recorded for ${customerName}.`);
+        return;
+      }
+
+      cfoLastSyncedRef.current = JSON.stringify(
+        flattenCfoNonLiquidCashRecords(nextReceivableEntries, cfoManualEntriesByCard),
+      );
+      setCfoReceivableEntries(nextReceivableEntries);
       if (cfoReceivableEditingId === entry.id) {
         setCfoReceivableEditingId("");
         setCfoReceivableDraft(createBlankCfoReceivableEntry());
       }
+      setCfoSyncStatus("saved");
+      setCfoSyncError("");
+      setCfoReceivablePaymentMessageType("success");
       setCfoReceivablePaymentMessage(`${customerName} was marked paid and moved to Paid history.`);
       setSessionMessageType("success");
       setSessionMessage(`${customerName} was marked paid.`);
@@ -26612,7 +26648,7 @@ function App() {
 
             <div className="cfoDetailBody">
               {selectedCard.key === "waitingOnPayment" && cfoReceivablePaymentMessage ? (
-                <p className="statusMessage">{cfoReceivablePaymentMessage}</p>
+                <p className={`statusMessage ${cfoReceivablePaymentMessageType === "error" ? "dangerMessage" : "proposalSuccess"}`}>{cfoReceivablePaymentMessage}</p>
               ) : null}
               {selectedCard.key === "supplierTotalsPayable" && cfoSupplierPaymentMessage ? (
                 <p className="statusMessage">{cfoSupplierPaymentMessage}</p>
@@ -26647,8 +26683,8 @@ function App() {
                                   Edit
                                 </button>
                                 {paymentStatus !== "Paid" ? (
-                                  <button type="button" className="successButton" onClick={() => markReceivableEntryPaid(entry)}>
-                                    Mark Paid
+                                  <button type="button" className="successButton" disabled={Boolean(cfoReceivablePaymentSavingId)} onClick={() => void markReceivableEntryPaid(entry)}>
+                                    {cfoReceivablePaymentSavingId === String(entry.id) ? "Saving payment…" : "Mark Paid"}
                                   </button>
                                 ) : null}
                                 {paymentStatus === "Overdue" ? (
@@ -26811,7 +26847,7 @@ function App() {
                 type="button"
                 className="summaryCard cfoKpiCard"
                 onClick={() => {
-                  if (card.key === "waitingOnPayment") setCfoReceivablePaymentMessage("");
+                  if (card.key === "waitingOnPayment") { setCfoReceivablePaymentMessage(""); setCfoReceivablePaymentMessageType(""); }
                   if (card.key === "supplierTotalsPayable") setCfoSupplierPaymentMessage("");
                   if (["waitingOnPayment", "supplierTotalsPayable"].includes(card.key)) {
                     setCfoDashboardFilters((current) => ({ ...current, currentOverdue: "all" }));
