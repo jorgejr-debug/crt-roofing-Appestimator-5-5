@@ -15685,7 +15685,7 @@ function App() {
   };
 
   const submitInvoiceHandoff = async () => {
-    if (!invoiceHandoffJob || !invoiceHandoffDraft || !authUser?.key) return;
+    if (!invoiceHandoffJob || !invoiceHandoffDraft || !authUser?.key || invoiceHandoffSaving) return;
     const errors = validateInvoiceHandoffDraft(invoiceHandoffDraft);
     if (errors.length) {
       setInvoiceHandoffError(errors[0]);
@@ -15693,37 +15693,69 @@ function App() {
     }
     setInvoiceHandoffSaving(true);
     setInvoiceHandoffError("");
-    const { error } = await supabase.rpc("submit_active_job_for_invoicing", {
-      p_source_record_uid: buildSharedJobSourceId(invoiceHandoffJob),
-      p_completion_date: invoiceHandoffDraft.completionDate,
-      p_invoice_type: invoiceHandoffDraft.invoiceType,
-      p_customer_name: invoiceHandoffDraft.customerName,
-      p_billing_contact_name: invoiceHandoffDraft.billingContactName,
-      p_billing_email: invoiceHandoffDraft.billingEmail,
-      p_billing_address: invoiceHandoffDraft.billingAddress,
-      p_purchase_order_number: invoiceHandoffDraft.purchaseOrderNumber,
-      p_payment_terms: invoiceHandoffDraft.paymentTerms,
-      p_contract_amount: Number(invoiceHandoffDraft.contractAmount || 0),
-      p_change_orders_amount: Number(invoiceHandoffDraft.changeOrders || 0),
-      p_amount_already_billed: Number(invoiceHandoffDraft.amountAlreadyBilled || 0),
-      p_amount_to_invoice: Number(invoiceHandoffDraft.amountToInvoice || 0),
-      p_retainage_amount: Number(invoiceHandoffDraft.retainageAmount || 0),
-      p_notes: invoiceHandoffDraft.notes,
-    });
-    setInvoiceHandoffSaving(false);
-    if (error) {
-      setInvoiceHandoffError(error.message || "The job could not be sent to invoicing.");
-      return;
-    }
+    setJobsSyncStatus("saving");
+    let committedRequest = null;
+    try {
+      const { data, error } = await supabase.rpc("submit_active_job_for_invoicing", {
+        p_source_record_uid: buildSharedJobSourceId(invoiceHandoffJob),
+        p_completion_date: invoiceHandoffDraft.completionDate,
+        p_invoice_type: invoiceHandoffDraft.invoiceType,
+        p_customer_name: invoiceHandoffDraft.customerName,
+        p_billing_contact_name: invoiceHandoffDraft.billingContactName,
+        p_billing_email: invoiceHandoffDraft.billingEmail,
+        p_billing_address: invoiceHandoffDraft.billingAddress,
+        p_purchase_order_number: invoiceHandoffDraft.purchaseOrderNumber,
+        p_payment_terms: invoiceHandoffDraft.paymentTerms,
+        p_contract_amount: Number(invoiceHandoffDraft.contractAmount || 0),
+        p_change_orders_amount: Number(invoiceHandoffDraft.changeOrders || 0),
+        p_amount_already_billed: Number(invoiceHandoffDraft.amountAlreadyBilled || 0),
+        p_amount_to_invoice: Number(invoiceHandoffDraft.amountToInvoice || 0),
+        p_retainage_amount: Number(invoiceHandoffDraft.retainageAmount || 0),
+        p_notes: invoiceHandoffDraft.notes,
+      });
+      if (error) throw error;
+      committedRequest = Array.isArray(data) ? data[0] : data;
+      if (!committedRequest?.id) throw new Error("The invoice request was created, but its confirmation number was not returned.");
 
-    const refreshed = await fetchSharedJobsFromSupabase();
-    if (!refreshed.error) applySharedJobRows(refreshed.data);
-    setActiveJobSelectedId("");
-    setInvoiceHandoffJob(null);
-    setInvoiceHandoffDraft(null);
-    setSessionMessageType("success");
-    setSessionMessage("Job closed and sent to Natalia's Invoice Requests queue.");
-    setActiveTemplate(canAccessInvoiceQueue ? "invoices" : "activeJobs");
+      const [refreshed, invoiceConfirmation] = await Promise.all([
+        fetchSharedJobsFromSupabase(),
+        supabase
+          .from("invoice_requests")
+          .select("id, status")
+          .eq("id", committedRequest.id)
+          .maybeSingle(),
+      ]);
+      if (refreshed.error) throw new Error(`The job was sent to invoicing, but Active Jobs could not refresh: ${refreshed.error.message || refreshed.error}`);
+      if (invoiceConfirmation.error || !invoiceConfirmation.data?.id) {
+        throw new Error(`The job was sent to invoicing, but the Invoice Requests queue could not be confirmed: ${invoiceConfirmation.error?.message || "request not found"}`);
+      }
+
+      applySharedJobRows(refreshed.data);
+      setJobsSyncStatus("saved");
+      setJobsSyncError("");
+      setActiveJobSelectedId("");
+      setInvoiceHandoffJob(null);
+      setInvoiceHandoffDraft(null);
+      setSessionMessageType("success");
+      setSessionMessage("Job closed and sent to Natalia's Invoice Requests queue.");
+      setActiveTemplate(canAccessInvoiceQueue ? "invoices" : "activeJobs");
+    } catch (handoffError) {
+      const handoffMessage = handoffError.message || String(handoffError);
+      setJobsSyncStatus("error");
+      setJobsSyncError(handoffMessage);
+      if (committedRequest) {
+        setActiveJobSelectedId("");
+        setInvoiceHandoffJob(null);
+        setInvoiceHandoffDraft(null);
+        setSessionMessageType("error");
+        setSessionMessage(handoffMessage);
+        setActiveTemplate(canAccessInvoiceQueue ? "invoices" : "activeJobs");
+      } else {
+        setInvoiceHandoffError(handoffMessage || "The job could not be sent to invoicing.");
+      }
+    } finally {
+      setInvoiceHandoffSaving(false);
+    }
   };
 
   const handleMoveApprovedJobToActive = async (job) => {
