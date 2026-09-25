@@ -10350,6 +10350,7 @@ function App() {
   const [crmLeads, setCrmLeads] = useState([]);
   const [crmLeadSyncStatus, setCrmLeadSyncStatus] = useState("idle");
   const [crmLeadSyncError, setCrmLeadSyncError] = useState("");
+  const [crmLeadDeletingId, setCrmLeadDeletingId] = useState("");
   const [crmLeadDocuments, setCrmLeadDocuments] = useState([]);
   const [crmLeadWorkOrderFile, setCrmLeadWorkOrderFile] = useState(null);
   const [crmLeadWorkOrderUploading, setCrmLeadWorkOrderUploading] = useState(false);
@@ -13763,15 +13764,27 @@ function App() {
     }
   };
 
-  const deleteCrmLead = (leadId) => {
-    setCrmLeads((current) => current.filter((lead) => lead.id !== leadId));
+  const deleteCrmLead = async (leadId) => {
+    if (!leadId || crmLeadDeletingId) return;
+    const lead = crmLeads.find((item) => item.id === leadId);
+    const leadName = crmLeadDisplayName(lead || {}) || "this lead";
+    if (!window.confirm(`Delete ${leadName} from the shared CRM? This cannot be undone.`)) return;
+
+    setCrmLeadDeletingId(leadId);
+    setSessionMessageType("info");
+    setSessionMessage(`Deleting ${leadName} from the shared CRM…`);
+    const result = await deleteCrmLeadFromSupabase(leadId);
+    setCrmLeadDeletingId("");
+    if (result?.error) {
+      setSessionMessageType("error");
+      setSessionMessage(`The lead was not deleted: ${result.error.message || result.error}`);
+      return;
+    }
+
+    setCrmLeads((current) => current.filter((item) => item.id !== leadId));
     if (crmLeadEditingId === leadId) startNewCrmLeadDraft();
-    void deleteCrmLeadFromSupabase(leadId).then((result) => {
-      if (result?.error) {
-        setSessionMessageType("error");
-        setSessionMessage(`Lead was removed locally, but shared deletion failed: ${result.error.message || result.error}`);
-      }
-    });
+    setSessionMessageType("success");
+    setSessionMessage(`${leadName} was deleted from the shared CRM.`);
   };
 
   const saveCrmWeeklyInspectionTarget = async () => {
@@ -20102,8 +20115,8 @@ function App() {
                                 Edit
                               </button>
                               {isFinanceUser ? (
-                                <button type="button" className="dangerButton" onClick={() => deleteCrmLead(lead.id)}>
-                                  Delete
+                                <button type="button" className="dangerButton" disabled={Boolean(crmLeadDeletingId)} onClick={() => void deleteCrmLead(lead.id)}>
+                                  {crmLeadDeletingId === lead.id ? "Deleting…" : "Delete"}
                                 </button>
                               ) : null}
                             </div>
