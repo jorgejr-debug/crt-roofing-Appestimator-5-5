@@ -10464,6 +10464,7 @@ function App() {
   }));
   const [jobsSyncStatus, setJobsSyncStatus] = useState("idle");
   const [jobsSyncError, setJobsSyncError] = useState("");
+  const [activeJobMutationKey, setActiveJobMutationKey] = useState("");
   const [cfoSyncStatus, setCfoSyncStatus] = useState("idle");
   const [cfoSyncError, setCfoSyncError] = useState("");
   const [crmTab, setCrmTab] = useState("quickCapture");
@@ -15531,12 +15532,13 @@ function App() {
   };
 
   const handleCancelActiveJobEdit = () => {
+    if (activeJobMutationKey) return;
     setActiveJobEditDraft(null);
     setActiveJobEditMode(false);
   };
 
   const handleSaveActiveJobEdit = async (job) => {
-    if (!job || !activeJobEditDraft || !authUser?.key) return;
+    if (!job || !activeJobEditDraft || !authUser?.key || activeJobMutationKey) return;
     if (!canManageActiveJobData) {
       setSessionMessageType("error");
       setSessionMessage("You do not have permission to edit shared jobs.");
@@ -15550,52 +15552,60 @@ function App() {
       activityId: `activity-edit-active-${Date.now()}`,
     });
 
+    setActiveJobMutationKey(`edit:${job.id}`);
     setJobsSyncStatus("saving");
     setSessionMessage("");
-    const { error } = isProjectManager
-      ? await supabase.rpc("save_project_manager_active_job", {
-          p_source_record_uid: buildSharedJobSourceId(updatedJob),
-          p_updates: {
-            propertyManager: updatedJob.propertyManager,
-            projectContact: updatedJob.projectContact,
-            projectManager: updatedJob.projectManager,
-            fieldSupervisor: updatedJob.fieldSupervisor,
-            foreman: updatedJob.foreman,
-            officeCoordinator: updatedJob.officeCoordinator,
-            status: updatedJob.status,
-            currentPhase: updatedJob.currentPhase,
-            riskLevel: updatedJob.riskLevel,
-            riskReason: updatedJob.riskReason,
-            startDate: updatedJob.startDate,
-            expectedCompletionDate: updatedJob.expectedCompletionDate,
-            percentComplete: updatedJob.percentComplete,
-            activityLog: updatedJob.activityLog,
-          },
-        })
-      : await upsertSharedJobToSupabase(
-          updatedJob,
-          authUser.key,
-          authUser.id || authUser.key,
-        );
-    if (error) {
-      setJobsSyncStatus("error");
-      setJobsSyncError(error.message || String(error));
-      setSessionMessageType("error");
-      setSessionMessage(`Could not save project changes: ${error.message || error}`);
-      return;
-    }
+    try {
+      const { error } = isProjectManager
+        ? await supabase.rpc("save_project_manager_active_job", {
+            p_source_record_uid: buildSharedJobSourceId(updatedJob),
+            p_updates: {
+              propertyManager: updatedJob.propertyManager,
+              projectContact: updatedJob.projectContact,
+              projectManager: updatedJob.projectManager,
+              fieldSupervisor: updatedJob.fieldSupervisor,
+              foreman: updatedJob.foreman,
+              officeCoordinator: updatedJob.officeCoordinator,
+              status: updatedJob.status,
+              currentPhase: updatedJob.currentPhase,
+              riskLevel: updatedJob.riskLevel,
+              riskReason: updatedJob.riskReason,
+              startDate: updatedJob.startDate,
+              expectedCompletionDate: updatedJob.expectedCompletionDate,
+              percentComplete: updatedJob.percentComplete,
+              activityLog: updatedJob.activityLog,
+            },
+          })
+        : await upsertSharedJobToSupabase(
+            updatedJob,
+            authUser.key,
+            authUser.id || authUser.key,
+          );
+      if (error) throw error;
 
-    const refreshed = await fetchSharedJobsFromSupabase();
-    if (!refreshed.error) applySharedJobRows(refreshed.data);
-    setJobsSyncStatus(refreshed.error ? "error" : "saved");
-    setJobsSyncError(refreshed.error?.message || "");
-    setSessionMessageType(refreshed.error ? "error" : "success");
-    setSessionMessage(
-      refreshed.error
-        ? `Changes saved, but the project could not refresh: ${refreshed.error.message || refreshed.error}`
-        : `${updatedJob.projectName || "Active job"} updated.`,
-    );
-    if (!refreshed.error) handleCancelActiveJobEdit();
+      const refreshed = await fetchSharedJobsFromSupabase();
+      if (!refreshed.error) applySharedJobRows(refreshed.data);
+      setJobsSyncStatus(refreshed.error ? "error" : "saved");
+      setJobsSyncError(refreshed.error?.message || "");
+      setSessionMessageType(refreshed.error ? "error" : "success");
+      setSessionMessage(
+        refreshed.error
+          ? `Changes saved, but the project could not refresh: ${refreshed.error.message || refreshed.error}`
+          : `${updatedJob.projectName || "Active job"} updated.`,
+      );
+      if (!refreshed.error) {
+        setActiveJobEditDraft(null);
+        setActiveJobEditMode(false);
+      }
+    } catch (saveError) {
+      const saveMessage = saveError.message || String(saveError);
+      setJobsSyncStatus("error");
+      setJobsSyncError(saveMessage);
+      setSessionMessageType("error");
+      setSessionMessage(`Could not save project changes: ${saveMessage}`);
+    } finally {
+      setActiveJobMutationKey("");
+    }
   };
 
   const handleArchiveActiveJob = async (job) => {
@@ -24472,8 +24482,8 @@ function App() {
                 </div>
               ) : null}
               <div className="actionRow">
-                <button type="button" className="primaryButton" onClick={() => handleSaveActiveJobEdit(project)}>Save project changes</button>
-                <button type="button" className="secondaryButton" onClick={handleCancelActiveJobEdit}>Cancel</button>
+                <button type="button" className="primaryButton" disabled={Boolean(activeJobMutationKey)} onClick={() => void handleSaveActiveJobEdit(project)}>{activeJobMutationKey === `edit:${project.id}` ? "Saving changes…" : "Save project changes"}</button>
+                <button type="button" className="secondaryButton" disabled={Boolean(activeJobMutationKey)} onClick={handleCancelActiveJobEdit}>Cancel</button>
               </div>
             </div>
           ) : (
