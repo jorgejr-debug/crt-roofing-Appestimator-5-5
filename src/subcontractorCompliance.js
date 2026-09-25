@@ -1,4 +1,17 @@
 export const SUBCONTRACTOR_COI_BUCKET = "subcontractor-coi";
+export const SUBCONTRACTOR_DOCUMENT_MAX_BYTES = 15 * 1024 * 1024;
+const SUBCONTRACTOR_DOCUMENT_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
+const SUBCONTRACTOR_DOCUMENT_EXTENSIONS = [".pdf", ".jpg", ".jpeg", ".png", ".webp"];
+
+export function validateSubcontractorDocument(file) {
+  if (!file) return "Choose a COI or compliance document.";
+  const name = String(file.name || "").toLowerCase();
+  const supported = SUBCONTRACTOR_DOCUMENT_TYPES.has(String(file.type || "").toLowerCase())
+    || SUBCONTRACTOR_DOCUMENT_EXTENSIONS.some((extension) => name.endsWith(extension));
+  if (!supported) return `${file.name || "This file"} must be a PDF, JPG, PNG, or WebP file.`;
+  if (Number(file.size || 0) > SUBCONTRACTOR_DOCUMENT_MAX_BYTES) return `${file.name || "This file"} is larger than 15 MB.`;
+  return "";
+}
 
 export function daysUntilDate(value, now = new Date()) {
   if (!value) return null;

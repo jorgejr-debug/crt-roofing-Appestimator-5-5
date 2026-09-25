@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { SUBCONTRACTOR_COI_BUCKET, buildCoiStoragePath, getSubcontractorComplianceStatus, normalizeSubcontractorPayload, validateSubcontractor } from "./subcontractorCompliance.js";
+import { SUBCONTRACTOR_COI_BUCKET, buildCoiStoragePath, getSubcontractorComplianceStatus, normalizeSubcontractorPayload, validateSubcontractor, validateSubcontractorDocument } from "./subcontractorCompliance.js";
 import FileDropZone from "./FileDropZone.jsx";
 import ActionFeedback from "./ActionFeedback.jsx";
 import "./SubcontractorCompliance.css";
@@ -35,9 +35,15 @@ export default function SubcontractorCompliance({ supabase, authUser, readOnly =
   const filtered = useMemo(() => records.filter((record) => [record.company_name, record.trade, record.contact_name, record.license_number].join(" ").toLowerCase().includes(search.toLowerCase())), [records, search]);
   const statuses = useMemo(() => records.map((record) => getSubcontractorComplianceStatus(record)), [records]);
   const update = (key, value) => { setDraft((current) => ({ ...current, [key]: value })); setInvalidFields((current) => current.filter((item) => item !== key)); };
-  const addCoiFiles = (files) => setCoiFiles((current) => [...current, ...files.filter((file) => !current.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified))]);
+  const addCoiFiles = (files) => {
+    const invalid = files.map((file) => validateSubcontractorDocument(file)).find(Boolean);
+    if (invalid) { setMessage(""); setError(invalid); return; }
+    setError("");
+    setCoiFiles((current) => [...current, ...files.filter((file) => !current.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified))]);
+  };
 
   const save = async () => {
+    if (busy) return;
     const validation = validateSubcontractor(draft);
     if (!validation.valid) {
       const fieldByLabel = { "Company name": "company_name", "Trade / service": "trade", "Contact name": "contact_name", "License number": "license_number", "Workers' compensation expiration date": "workers_comp_expiration_date" };
@@ -89,9 +95,8 @@ export default function SubcontractorCompliance({ supabase, authUser, readOnly =
       <span><b>{statuses.filter((status) => status.tone === "warning").length}</b> Expiring within 30 days</span>
       <span><b>{statuses.filter((status) => status.tone === "danger").length}</b> Action required</span>
     </div>
-    {message ? <p className="statusMessage proposalSuccess">{message}</p> : null}{error ? <p className="statusMessage dangerMessage">{error}</p> : null}
     {!readOnly ? <div id="subcontractor-compliance-editor" className="subcontractorEditor">
-      <div className="sectionHead"><div><h3>{records.some((record) => record.id === draft.id) ? "Edit vendor / subcontractor" : "Add vendor / subcontractor"}</h3><p>Track approval, licensing, workers' compensation, and CRT Roofing's certificate-holder status.</p></div><button type="button" className="secondaryButton" onClick={() => { setDraft(blankRecord()); setCoiFiles([]); setInvalidFields([]); }}>New vendor / subcontractor</button></div>
+      <div className="sectionHead"><div><h3>{records.some((record) => record.id === draft.id) ? "Edit vendor / subcontractor" : "Add vendor / subcontractor"}</h3><p>Track approval, licensing, workers' compensation, and CRT Roofing's certificate-holder status.</p></div><button type="button" className="secondaryButton" disabled={busy} onClick={() => { setDraft(blankRecord()); setCoiFiles([]); setInvalidFields([]); }}>New vendor / subcontractor</button></div>
       <div className="formGrid">
         <label><span>Company name *</span><input id="subcontractor-company_name" className={invalidFields.includes("company_name") ? "fieldInvalid" : ""} aria-invalid={invalidFields.includes("company_name")} value={draft.company_name} onChange={(e) => update("company_name", e.target.value)} /></label>
         <label><span>Trade / service *</span><input id="subcontractor-trade" className={invalidFields.includes("trade") ? "fieldInvalid" : ""} aria-invalid={invalidFields.includes("trade")} value={draft.trade} onChange={(e) => update("trade", e.target.value)} placeholder="Example: Hauling, roofing, HVAC, electrical" /></label>
@@ -103,7 +108,7 @@ export default function SubcontractorCompliance({ supabase, authUser, readOnly =
         <label><span>Workers' compensation</span><select value={draft.workers_comp_active ? "active" : "inactive"} onChange={(e) => update("workers_comp_active", e.target.value === "active")}><option value="inactive">Inactive / not provided</option><option value="active">Active</option></select></label>
         {draft.workers_comp_active ? <label><span>Workers' comp expiration *</span><input id="subcontractor-workers_comp_expiration_date" className={invalidFields.includes("workers_comp_expiration_date") ? "fieldInvalid" : ""} aria-invalid={invalidFields.includes("workers_comp_expiration_date")} type="date" value={draft.workers_comp_expiration_date || ""} onChange={(e) => update("workers_comp_expiration_date", e.target.value)} /></label> : null}
         <label><span>COI names CRT Roofing as certificate holder / insured?</span><select value={draft.coi_names_crt_insured ? "yes" : "no"} onChange={(e) => update("coi_names_crt_insured", e.target.value === "yes")}><option value="no">No / not confirmed</option><option value="yes">Yes</option></select></label>
-        <div className="subcontractorWide"><span className="fieldLabel">COI and compliance documents</span><FileDropZone accept=".pdf,image/jpeg,image/png,image/webp" label="Choose COI Files" help="PDF, JPG, PNG, or WebP — up to 15 MB each" onFiles={addCoiFiles} disabled={busy} />{coiFiles.length ? <div className="subcontractorPendingFiles">{coiFiles.map((file, index) => <div key={`${file.name}-${file.size}-${file.lastModified}`}><span>{file.name}</span><button type="button" className="secondaryButton" onClick={() => setCoiFiles((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></div>)}</div> : null}</div>
+        <div className="subcontractorWide"><span className="fieldLabel">COI and compliance documents</span><FileDropZone accept=".pdf,image/jpeg,image/png,image/webp" label="Choose COI Files" help="PDF, JPG, PNG, or WebP — up to 15 MB each" onFiles={addCoiFiles} disabled={busy} />{coiFiles.length ? <div className="subcontractorPendingFiles">{coiFiles.map((file, index) => <div key={`${file.name}-${file.size}-${file.lastModified}`}><span>{file.name}</span><button type="button" className="secondaryButton" disabled={busy} onClick={() => setCoiFiles((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></div>)}</div> : null}</div>
         <label><span>Approved / active?</span><select value={draft.is_active ? "yes" : "no"} onChange={(e) => update("is_active", e.target.value === "yes")}><option value="yes">Approved and active</option><option value="no">Not approved / inactive</option></select></label>
         <label className="subcontractorWide"><span>Notes</span><textarea rows="3" value={draft.notes || ""} onChange={(e) => update("notes", e.target.value)} /></label>
       </div>

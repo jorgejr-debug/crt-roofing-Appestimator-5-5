@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { daysUntilDate, getSubcontractorComplianceStatus, normalizeSubcontractorPayload, validateSubcontractor } from "./subcontractorCompliance.js";
+import { daysUntilDate, getSubcontractorComplianceStatus, normalizeSubcontractorPayload, validateSubcontractor, validateSubcontractorDocument } from "./subcontractorCompliance.js";
 
 const now = new Date("2026-09-02T12:00:00");
 
@@ -26,4 +26,11 @@ test("optional subcontractor dates are stored as null instead of invalid empty s
 
   const active = normalizeSubcontractorPayload({ workers_comp_active: true, workers_comp_expiration_date: "2027-01-15" });
   assert.equal(active.workers_comp_expiration_date, "2027-01-15");
+});
+
+test("COI uploads reject unsupported or oversized drag-and-drop files", () => {
+  assert.equal(validateSubcontractorDocument({ name: "coi.pdf", type: "application/pdf", size: 1024 }), "");
+  assert.equal(validateSubcontractorDocument({ name: "coi.webp", type: "", size: 1024 }), "");
+  assert.match(validateSubcontractorDocument({ name: "malware.exe", type: "application/octet-stream", size: 1024 }), /must be a PDF/);
+  assert.match(validateSubcontractorDocument({ name: "huge.pdf", type: "application/pdf", size: 16 * 1024 * 1024 }), /larger than 15 MB/);
 });
