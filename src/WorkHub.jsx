@@ -274,19 +274,19 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
   return (
     <div className="appShell workHub">
       <ActionFeedback message={error || taskNotice} tone={error ? "error" : "success"} onDismiss={() => { setError(""); setTaskNotice(""); }} />
-      <header className="workHubHeader">
+      {activeTab !== "inspections" ? <header className="workHubHeader">
         <div><p className="eyebrow">Collaboration</p><h1>Tasks & Messages</h1><p className="intro">Assign work, discuss projects, and reach your team from one place.</p></div>
         <div className="workHubStats">
           <div><span>My open tasks</span><strong>{openMyTasks}</strong></div>
           <div><span>Unread messages</span><strong>{unreadMessages}</strong></div>
           <div><span>Team members</span><strong>{profiles.length}</strong></div>
         </div>
-      </header>
+      </header> : null}
 
-      <div className="workHubRequestActions">
+      {activeTab !== "inspections" ? <div className="workHubRequestActions">
         {onSubmitInspection ? <button type="button" className="primaryButton" onClick={() => { setInspectionCreateKey(value => value + 1); setActiveTab("inspections"); }}>Submit Inspection Request</button> : null}
         <button type="button" className="secondaryButton" onClick={() => setActiveTab("proposals")}>Submit Proposal Request</button>
-      </div>
+      </div> : null}
       <div className="workHubTabs" role="tablist">
         <button type="button" className={activeTab === "tasks" ? "active" : ""} onClick={() => setActiveTab("tasks")}>Tasks</button>
         {onSubmitInspection ? <button type="button" className={activeTab === "inspections" ? "active" : ""} onClick={() => { setInspectionCreateKey(0); setActiveTab("inspections"); }}>Inspection Requests</button> : null}
@@ -399,7 +399,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
         </>
       ) : null}
 
-      {activeTab === "inspections" && onSubmitInspection ? <InspectionRequests key={inspectionCreateKey ? "create" : "queue"} supabase={supabase} authUser={authUser} profiles={profiles} createKey={inspectionCreateKey} tasks={tasks} onOpenTask={taskId => { setSelectedTaskId(taskId); setActiveTab("tasks"); }} onOpenProposal={id => { setProposalInitialId(id); setActiveTab("proposals"); }} /> : null}
+      {activeTab === "inspections" && onSubmitInspection ? <InspectionRequests key={inspectionCreateKey ? "create" : "queue"} supabase={supabase} authUser={authUser} profiles={profiles} createKey={inspectionCreateKey} tasks={tasks} assignees={assignees} onOpenTask={taskId => { setSelectedTaskId(taskId); setActiveTab("tasks"); }} onOpenProposal={id => { setProposalInitialId(id); setActiveTab("proposals"); }} /> : null}
 
       {!loading && activeTab === "proposals" ? <ProposalRequests key={proposalInitialId || "queue"} initialRequestId={proposalInitialId} supabase={supabase} authUser={authUser} profiles={profiles} /> : null}
 
