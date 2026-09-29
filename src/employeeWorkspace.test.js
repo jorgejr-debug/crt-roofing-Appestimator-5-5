@@ -21,7 +21,7 @@ test("Ivan receives an inspection and estimating handoff workspace", () => {
 
 test("Daniela receives a proposal-delivery workspace", () => {
   const workspace = getEmployeeWorkspace({ email: "daniela@crtroofing.com", role: "estimator", capabilities: allCapabilities });
-  assert.deepEqual(workspace.actions, ["proposalRequests", "tasks", "customers", "approvedJobs"]);
+  assert.deepEqual(workspace.actions, ["proposalRequests", "estimates", "tasks", "customers", "approvedJobs"]);
 });
 
 test("Miguel receives a production-only workspace", () => {
@@ -42,7 +42,7 @@ test("capability checks remove financial shortcuts even if a role configuration 
 test("navigation follows each employee's SOP instead of showing every module", () => {
   assert.deepEqual(getEmployeeNavigationKeys({ email: "chris@crtroofing.com", role: "salesperson", capabilities: allCapabilities }), ["dashboard", "workHub", "inspectionRequests", "crm", "proposalRequests"]);
   assert.deepEqual(getEmployeeNavigationKeys({ email: "ivan@crtroofing.com", role: "salesperson", capabilities: allCapabilities }), ["dashboard", "workHub", "inspectionRequests", "crm", "fieldNotes", "estimateTemplates", "proposalRequests", "approvedJobs"]);
-  assert.deepEqual(getEmployeeNavigationKeys({ email: "daniela@crtroofing.com", role: "estimator", capabilities: allCapabilities }), ["dashboard", "workHub", "inspectionRequests", "crm", "proposalRequests", "approvedJobs", "activeJobs"]);
+  assert.deepEqual(getEmployeeNavigationKeys({ email: "daniela@crtroofing.com", role: "estimator", capabilities: allCapabilities }), ["dashboard", "workHub", "inspectionRequests", "crm", "estimateTemplates", "proposalRequests", "approvedJobs", "activeJobs"]);
   assert.deepEqual(getEmployeeNavigationKeys({ email: "miguel@crtroofing.com", role: "project_manager", capabilities: allCapabilities }), ["dashboard", "workHub", "kpis", "activeJobs", "subcontractors"]);
 });
 
@@ -90,4 +90,16 @@ test("management retains the complete operational dashboard history", () => {
   assert.deepEqual(getEmployeeDashboardSections({ email: "jorgejr@crtroofing.com", role: "cfo" }), {
     activeJobs: true, completedJobs: true, archivedJobs: true, approvedJobs: true, savedEstimates: true,
   });
+});
+
+ test("Daniela can open all estimate workspaces and saved estimates without financial or admin access", () => {
+  const identity = { email: " DANIELA@CRTROOFING.COM ", role: "estimator" };
+  const allowed = getEmployeeAllowedTemplates(identity);
+  for (const template of ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair", "proposalRequests", "proposalBuilder"]) {
+    assert.ok(allowed.includes(template), template);
+  }
+  for (const template of ["cfoDashboard", "administration", "adminPricing", "invoices"]) {
+    assert.equal(allowed.includes(template), false, template);
+  }
+  assert.equal(getEmployeeDashboardSections(identity).savedEstimates, true);
 });
