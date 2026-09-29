@@ -14,8 +14,8 @@ function InspectionDetail({row,profiles,supabase,userId,isOffice,busy,onAction,o
  const change=(field,value)=>setDraft(current=>({...current,[field]:value}));
  const update=(action,status)=>onAction(row,action,{...draft,appointment_at:appointmentIso(draft.appointment_at)},status);
  const person=id=>profiles.find(p=>p.id===id)?.full_name||profiles.find(p=>p.id===id)?.email||'Recorded employee';
- return <section className="panel inspectionDetail"><button className="secondaryButton" type="button" disabled={busy||pending} onClick={onBack}>Back to Inspection Request Center</button>
- <div className="inspectionDetailTitle"><h2>IR-{row.request_number} · {row.contact_name}</h2><span className="inspectionBadge">{INSPECTION_STATUSES[row.status]}</span></div>
+ return <section className={`panel inspectionDetail ${row.urgency==='Urgent'?'inspectionUrgent':''}`}><button className="secondaryButton" type="button" disabled={busy||pending} onClick={onBack}>Back to Inspection Request Center</button>
+ <div className="inspectionDetailTitle"><h2>IR-{row.request_number} · {row.contact_name}</h2><span className="inspectionBadge">{INSPECTION_STATUSES[row.status]}</span>{row.urgency==='Urgent'?<span className="inspectionBadge inspectionUrgentBadge">Urgent · Prompt follow-up needed</span>:null}</div>
  <p>{row.property_address||'Address not supplied'}</p><div className="inspectionActions">{row.phone?<a href={`tel:${row.phone}`}>{row.phone}</a>:null}{row.email?<a href={`mailto:${row.email}`}>{row.email}</a>:null}</div>
  <p>Assigned to {person(row.assigned_to)} · Requested by {person(row.created_by)}</p><p>Best time to call: {row.best_time_to_call||'Not specified'} · {row.urgency} priority</p>
  <p role="status">{inspectionTiming(row)}</p>
@@ -61,8 +61,8 @@ export default function InspectionRequests({supabase,authUser,profiles=[],create
  {error?<p className="notice" role="alert">{error}</p>:null}{notice?<p className="notice" role="status">{notice}</p>:null}
  {view==='queue'?<><div className="inspectionFilters"><label><span>Search inspections</span><input type="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Customer, address or request number"/></label><label><span>Status</span><select value={filter} onChange={e=>setFilter(e.target.value)}><option value="active">Active</option><option value="all">All requests</option>{Object.entries(INSPECTION_STATUSES).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></label><button type="button" className="secondaryButton" disabled={loading} onClick={()=>void load()}>Refresh</button></div>
  {loading?<p role="status">Loading inspections…</p>:null}
- <div className="inspectionQueue">{visible.map(row=><button type="button" className={`inspectionCard ${inspectionTiming(row)?'attention':''}`} key={row.id} onClick={()=>open(row)}>
- <span className="inspectionCardTop"><span className="inspectionBadge">{INSPECTION_STATUSES[row.status]}</span><span className="inspectionBadge">{row.urgency||'Normal'}</span></span>
+ <div className="inspectionQueue">{visible.map(row=><button type="button" className={`inspectionCard ${inspectionTiming(row)?'attention':''} ${row.urgency==='Urgent'?'inspectionUrgent':''}`} key={row.id} onClick={()=>open(row)}>
+ <span className="inspectionCardTop"><span className="inspectionBadge">{INSPECTION_STATUSES[row.status]}</span><span className={`inspectionBadge ${row.urgency==='Urgent'?'inspectionUrgentBadge':''}`}>{row.urgency||'Normal'}</span></span>
  <strong>IR-{row.request_number} · {row.contact_name||'Untitled draft'}</strong><span>{row.property_address||'Address not supplied'}</span>
  <span className="inspectionCardDetails"><span>Assigned technician: {person(row.assigned_to)}</span><span>Appointment: {inspectionDate(row.appointment_at)}</span></span>
  {inspectionTiming(row)?<b>{inspectionTiming(row)}</b>:null}</button>)}</div>

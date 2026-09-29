@@ -524,6 +524,7 @@ const DEFAULT_PROPOSAL_TEMPLATE = {
 const DEFAULT_PROPOSAL_TEMPLATE_ID = DEFAULT_PROPOSAL_TEMPLATE.id;
 
 const CRM_LEAD_SOURCE_OPTIONS = [
+  "AI Phone",
   "Phone Call / Office",
   "Cold Calling",
   "Existing customer",
