@@ -3,7 +3,7 @@ import { PAYROLL_TAX_RATE, WORKERS_COMP_RATE } from "./laborBurden.js";
 export const SPRAY_FOAM_GALLONS_PER_KIT = 110;
 export const SPRAY_FOAM_KIT_COST = 2600;
 export const APPROVED_JOB_OPERATING_OVERHEAD_RATE = 0.15;
-export const CHRIS_GROSS_PROFIT_COMMISSION_RATE = 0.25;
+export const CHRIS_GROSS_PROFIT_COMMISSION_RATE = 0.15;
 
 function numberValue(value) {
   const parsed = Number(value);
@@ -113,6 +113,28 @@ export function getDefaultSalesCommissionRate(salesperson) {
   return normalized.includes("chris") ? CHRIS_GROSS_PROFIT_COMMISSION_RATE : 0;
 }
 
+export function createJobCommissionPlan(salesperson = "") {
+  const name = String(salesperson).toLowerCase();
+  return {
+    ivan: { enabled: name.includes("ivan"), rate: 0.05 },
+    chris: { enabled: name.includes("chris"), rate: 0.15 },
+  };
+}
+
+export function calculateJobCommissions(plan, totalSalePrice, profitBeforeCommissions) {
+  const rate = (entry, fallback) => Math.min(1, Math.max(0,
+    entry?.rate == null ? fallback : numberValue(entry.rate)));
+  const ivanRate = rate(plan.ivan, 0.05);
+  const chrisRate = rate(plan.chris, 0.15);
+  const ivanCommission = plan.ivan?.enabled
+    ? currencyValue(Math.max(0, totalSalePrice) * ivanRate) : 0;
+  const chrisCommissionBase = currencyValue(Math.max(0, profitBeforeCommissions - ivanCommission));
+  const chrisCommission = plan.chris?.enabled
+    ? currencyValue(chrisCommissionBase * chrisRate) : 0;
+  return { ivanRate, chrisRate, ivanCommission, chrisCommissionBase, chrisCommission,
+    totalCommission: currencyValue(ivanCommission + chrisCommission) };
+}
+
 export function calculateApprovedJobFullyLoadedProfitability({
   approvedSalePrice,
   changeOrders,
@@ -120,6 +142,7 @@ export function calculateApprovedJobFullyLoadedProfitability({
   operatingOverheadCost,
   otherJobCosts,
   salesCommissionRate,
+  commissionPlan,
 } = {}) {
   const salePrice = Math.max(0, numberValue(approvedSalePrice));
   const normalizedChangeOrders = numberValue(changeOrders);
@@ -130,7 +153,11 @@ export function calculateApprovedJobFullyLoadedProfitability({
   const commissionRate = Math.max(0, numberValue(salesCommissionRate));
   const grossProfitBeforeOverhead = currencyValue(totalSalePrice - directCost - otherCosts);
   const commissionableGrossProfit = currencyValue(totalSalePrice - directCost - overheadCost - otherCosts);
-  const salesCommission = currencyValue(Math.max(0, commissionableGrossProfit) * commissionRate);
+  const commissionBreakdown = commissionPlan
+    ? calculateJobCommissions(commissionPlan, totalSalePrice, commissionableGrossProfit) : null;
+  const salesCommission = commissionBreakdown
+    ? commissionBreakdown.totalCommission
+    : currencyValue(Math.max(0, commissionableGrossProfit) * commissionRate);
   const fullyLoadedCost = currencyValue(directCost + overheadCost + otherCosts + salesCommission);
   const netCompanyProfit = currencyValue(totalSalePrice - fullyLoadedCost);
   const netCompanyMarginPercent = totalSalePrice > 0
@@ -138,6 +165,7 @@ export function calculateApprovedJobFullyLoadedProfitability({
     : 0;
 
   return {
+    ...(commissionBreakdown ? { commissionBreakdown } : {}),
     approvedSalePrice: currencyValue(salePrice),
     changeOrders: currencyValue(normalizedChangeOrders),
     totalSalePrice,

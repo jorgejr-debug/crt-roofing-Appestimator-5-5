@@ -1,5 +1,5 @@
 import InspectionEvidence from "./InspectionEvidence.jsx";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   PROPOSAL_JOB_TYPES,
   PROPOSAL_REQUEST_PRIORITIES,
@@ -108,7 +108,10 @@ const proposalMatchesStatusFilter = (request, filter) => {
   return status === filter;
 };
 
-export default function ProposalRequests({ supabase, authUser, profiles = [], initialRequestId = "" }) {
+export default function ProposalRequests({ supabase, authUser, profiles = [], initialRequestId = "", initialDiscussion = false }) {
+  const discussionRef = useRef(null);
+  const didFocusDiscussion = useRef(false);
+  const [loaded, setLoaded] = useState(false);
   const [requests, setRequests] = useState([]);
   const [crmLeads, setCrmLeads] = useState([]);
   const [versions, setVersions] = useState([]);
@@ -182,6 +185,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
     setAudit(auditResult.data || []); setAttachments(attachmentResult.data || []);
     setComments(commentResult.data || []);
     setCrmLeads(leadResult.data || []);
+    setLoaded(true);
   }, [supabase]);
 
   useEffect(() => {
@@ -195,6 +199,16 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [authUser?.key, load, supabase]);
+
+  useEffect(() => {
+    if (!initialDiscussion || !selected || view !== "detail" || didFocusDiscussion.current) return;
+    const timer = window.setTimeout(() => {
+      discussionRef.current?.scrollIntoView({ block: "start" });
+      discussionRef.current?.focus({ preventScroll: true });
+      didFocusDiscussion.current = true;
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [initialDiscussion, selected, view]);
 
   const run = async (action, success) => {
     setBusy(true); setError(""); setMessage("");
@@ -556,6 +570,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
       <div className="proposalStickyActions">{submissionNotice.text ? <p className={`proposalSubmitNotice ${submissionNotice.tone}`} role="status" aria-live="polite">{submissionNotice.text}</p> : null}<button type="button" className="secondaryButton" disabled={busy} onClick={() => void saveDraft()}>Save Draft</button><button type="submit" className="primaryButton" disabled={busy || submissionNotice.tone === "success"}>{busy ? "Sending…" : submissionNotice.tone === "success" ? "Sent ✓" : draft.status === "missing_information" ? "Resubmit Complete Request" : "Submit to Daniela"}</button></div>
     </form> : null}
 
+    {view === "detail" && !selected ? <p role="status">{error || (loaded ? "This proposal request was not found or your account does not have access. Return to the queue to view available requests." : "Opening proposal request…")}</p> : null}
     {view === "detail" && selected ? <div className="proposalDetail">
       <section className="panel proposalDetailHeader"><div><p className="eyebrow">PR-{selected.request_number}</p><h3>{selected.property_name}</h3><p>{selected.customer_name} · {selected.service_address}</p></div><div><span className={`proposalStatus ${selected.draft_handoff_status === "awaiting_review" ? "handoff_review" : selected.status}`}>{requestStatusLabel(selected)}</span><p>{selected.draft_handoff_status === "awaiting_review" ? "Awaiting Daniela's review — SLA not started" : getSlaDisplay(selected).label}</p>{["draft","missing_information"].includes(selected.status) && selected.salesperson_id === authUser.key ? <button type="button" className="primaryButton" onClick={() => setView("form")}>Complete Full Request</button> : null}</div></section>
       {selected.status === "sent" && selected.sent_at && Number.isFinite(Date.parse(selected.sent_at)) ? <p className="notice">Automatic sales follow-up starts {dateTime(new Date(Date.parse(selected.sent_at) + 3 * 86400000).toISOString())}. The assigned salesperson receives a daily reminder while this proposal remains Sent.</p> : null}
@@ -591,7 +606,7 @@ export default function ProposalRequests({ supabase, authUser, profiles = [], in
       {isEstimator && selected.draft_handoff_status === "awaiting_review" ? <section className="panel proposalDraftReview"><p className="eyebrow">Pre-Queue Review</p><h3>{selected.intake_mode === "draft_proposal" ? "Review Ivan's Draft Proposal" : "Review Inspection Handoff"}</h3><p>Accept only when the uploaded draft, field notes, and supporting files give you enough information to begin. Acceptance starts the estimating SLA. Otherwise, describe exactly what Ivan still needs to provide.</p><div className="proposalRequestActions"><button type="button" className="primaryButton" disabled={busy} onClick={() => run(() => supabase.rpc("review_draft_proposal_handoff", { p_request_id: selected.id, p_action: "accept", p_missing_notes: "", p_target_at: managementDraft.targetAt || null }), "Handoff accepted. The estimating SLA has started.")}>Accept &amp; Start Estimating</button><input value={missingNotes} onChange={(e) => setMissingNotes(e.target.value)} placeholder="What information is still missing?" /><button type="button" className="secondaryButton" disabled={busy || !missingNotes.trim()} onClick={() => run(() => supabase.rpc("review_draft_proposal_handoff", { p_request_id: selected.id, p_action: "missing_information", p_missing_notes: missingNotes, p_target_at: null }), "Returned to Ivan for missing information; SLA has not started.")}>Request Information</button></div></section> : null}
       {isEstimator && selected.draft_handoff_status === "accepted" && selected.status === "under_review" ? <section className="panel"><h3>Accepted Draft Handoff</h3><p>Estimating is underway. If a material gap is discovered, return it to Ivan with a specific request and pause the SLA.</p><div className="proposalRequestActions"><input value={missingNotes} onChange={(e) => setMissingNotes(e.target.value)} placeholder="Describe the newly discovered missing information" /><button type="button" className="secondaryButton" disabled={busy || !missingNotes.trim()} onClick={() => run(() => supabase.rpc("review_proposal_request", { p_request_id: selected.id, p_action: "missing_information", p_missing_notes: missingNotes, p_target_at: null }), "Returned to Ivan; SLA paused.")}>Return for Information</button></div></section> : null}
       {isManager && selected.priority === "rush" && selected.rush_approval_status === "pending" ? <section className="panel"><h3>Rush approval</h3><div className="proposalRequestActions"><button className="primaryButton" onClick={() => run(() => supabase.rpc("approve_rush_proposal_request", { p_request_id: selected.id, p_approved: true, p_notes: "" }), "Rush approved.")}>Approve Rush</button><button className="secondaryButton" onClick={() => run(() => supabase.rpc("approve_rush_proposal_request", { p_request_id: selected.id, p_approved: false, p_notes: "" }), "Rush rejected; priority set to High.")}>Reject Rush</button></div></section> : null}
-      <section className="panel proposalConversation">
+      <section ref={discussionRef} tabIndex={-1} className="panel proposalConversation">
         <div className="proposalConversationHeader"><div><h3>Proposal conversation</h3><p>Comments stay with this request. Daniela and the requesting salesperson receive each other’s comments by email.</p></div><span>{selectedComments.length} comment{selectedComments.length === 1 ? "" : "s"}</span></div>
         <div className="proposalCommentThread">
           {selectedComments.length ? selectedComments.map((comment) => {

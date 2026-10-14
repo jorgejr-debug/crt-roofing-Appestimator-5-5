@@ -15,6 +15,6 @@ export default function WorkflowNotifications({ supabase, userId }) {
   return <details className="workflowAlerts"><summary>Workflow alerts ({items.length}{items.length===50?'+':''})</summary>
     {error?<p role="alert">{error}</p>:null}<button type="button" className="secondaryButton" onClick={()=>void refresh()}>Refresh alerts</button>
     {!items.length&&!error?<p>No unread alerts.</p>:null}
-    {items.map(item=><article key={item.id}><strong>{item.kind.replaceAll('_',' ')}</strong><p>{item.message}</p><small>{new Date(item.created_at).toLocaleString()} · Email: {item.email_status}</small><button type="button" className="secondaryButton" disabled={Boolean(busy)} onClick={()=>void acknowledge(item.id)}>Acknowledge alert</button></article>)}
+    {items.map(item=><article key={item.id}><strong>{item.kind.replaceAll('_',' ')}</strong><p>{item.message}</p>{item.message.match(/https:\/\/crt-roofing-estimator\.vercel\.app\/\?signedProposal=[0-9a-f-]{36}/i)?.[0] && <a href={item.message.match(/https:\/\/crt-roofing-estimator\.vercel\.app\/\?signedProposal=[0-9a-f-]{36}/i)[0]}>Review signed proposal</a>}<small>{new Date(item.created_at).toLocaleString()} · Email: {item.email_status}</small><button type="button" className="secondaryButton" disabled={Boolean(busy)} onClick={()=>void acknowledge(item.id)}>Acknowledge alert</button></article>)}
   </details>;
 }

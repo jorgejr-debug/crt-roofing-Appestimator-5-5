@@ -95,11 +95,37 @@ test("management retains the complete operational dashboard history", () => {
  test("Daniela can open all estimate workspaces and saved estimates without financial or admin access", () => {
   const identity = { email: " DANIELA@CRTROOFING.COM ", role: "estimator" };
   const allowed = getEmployeeAllowedTemplates(identity);
-  for (const template of ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair", "proposalRequests", "proposalBuilder"]) {
+  for (const template of ["estimateTemplates", "tpo", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair", "proposalRequests", "proposalBuilder"]) {
     assert.ok(allowed.includes(template), template);
   }
   for (const template of ["cfoDashboard", "administration", "adminPricing", "invoices"]) {
     assert.equal(allowed.includes(template), false, template);
   }
   assert.equal(getEmployeeDashboardSections(identity).savedEstimates, true);
+});
+
+
+test("TPO access follows estimate access for Daniela and Ivan while other employee restrictions remain", () => {
+  for (const email of ["daniela@crtroofing.com", "ivan@crtroofing.com"]) {
+    for (const role of ["salesperson", "estimator"]) {
+      assert.ok(getEmployeeAllowedTemplates({ email, role }).includes("tpo"), `${email}: ${role}`);
+    }
+  }
+  for (const email of ["chris@crtroofing.com", "miguel@crtroofing.com", "natalia@crtroofing.com"]) {
+    assert.equal(getEmployeeAllowedTemplates({ email, role: "salesperson" }).includes("tpo"), false, email);
+  }
+});
+
+test("Natalia's admin account can navigate to employee management without dashboard redirect", () => {
+  const user = { email: "natalia@crtroofing.com", role: "admin" };
+  assert.ok(getEmployeeNavigationKeys(user).includes("administration"));
+  assert.ok(getEmployeeAllowedTemplates(user).includes("administration"));
+});
+
+test("employee management stays restricted to finance and admin roles", () => {
+  for (const email of ["natalia@crtroofing.com", "chris@crtroofing.com", "ivan@crtroofing.com", "daniela@crtroofing.com", "miguel@crtroofing.com"]) {
+    const user = { email, role: "salesperson" };
+    assert.equal(getEmployeeNavigationKeys(user).includes("administration"), false);
+    assert.equal(getEmployeeAllowedTemplates(user).includes("administration"), false);
+  }
 });

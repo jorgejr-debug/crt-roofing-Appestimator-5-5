@@ -44,7 +44,7 @@ const NAVIGATION_TEMPLATE_GROUPS = {
   kpis: ["kpis"],
   crm: ["crm"],
   fieldNotes: ["fieldNotes"],
-  estimateTemplates: ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"],
+  estimateTemplates: ["estimateTemplates", "tpo", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"],
   proposalRequests: ["proposalRequests", "proposalBuilder"],
   subcontractors: ["subcontractors"],
   approvedJobs: ["approvedJobs", "approvedJob", "jobMetrics", "pastJobInsights"],
@@ -100,6 +100,7 @@ export function getEmployeeNavigationKeys({ email = "", role = "", capabilities 
   if (["admin", "cfo", "salesperson", "estimator"].includes(normalizedRole)) {
     keys.splice(keys.indexOf("workHub") + 1, 0, "inspectionRequests");
   }
+  if (["admin", "cfo"].includes(normalizedRole)) keys.push("administration");
   return keys.filter((key) => {
     if (key === "invoices") return Boolean(capabilities.canAccessInvoices);
     if (key === "cfoDashboard") return Boolean(capabilities.canAccessFinance);

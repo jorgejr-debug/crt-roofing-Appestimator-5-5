@@ -2,7 +2,7 @@ const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_SELECTED_BYTES = 90000;
 const extractedKeys = ['call_type', 'caller_name', 'callback_number', 'property_address',
   'property_type', 'reason_for_call', 'urgency_status', 'requested_timing',
-  'requested_employee', 'email_address', 'roofing_work_requested'];
+  'requested_employee', 'email_address', 'roofing_work_requested', 'message_route'];
 const metadataKeys = ['call_id', 'agent_id', 'call_type', 'direction', 'from_number',
   'to_number', 'start_timestamp', 'end_timestamp', 'duration_ms', 'call_status', 'disconnection_reason'];
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);

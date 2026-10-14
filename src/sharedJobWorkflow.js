@@ -31,7 +31,7 @@ export function canUpdateDailyJobCosts(role, email = "") {
 export function canCreateApprovedJobs(role, email = "") {
   const normalized = safeString(role).toLowerCase();
   const normalizedEmail = safeString(email).toLowerCase();
-  return normalized === "admin" || normalized === "cfo" || normalizedEmail === "ivan@crtroofing.com";
+  return normalized === "admin" || normalized === "cfo" || ["ivan@crtroofing.com", "daniela@crtroofing.com"].includes(normalizedEmail);
 }
 
 export function inferWorkflowStatus(job = {}) {

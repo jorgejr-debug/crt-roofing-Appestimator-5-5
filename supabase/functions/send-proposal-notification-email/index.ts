@@ -1,3 +1,4 @@
+import { buildProposalLink } from "../_shared/proposalLinks.js";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const headers = { "Content-Type": "application/json" };
@@ -30,6 +31,7 @@ Deno.serve(async (request) => {
     await admin.from("proposal_request_notifications").update({ email_status: "failed", email_error: "Recipient or proposal request not found" }).eq("id", notification.id);
     return new Response(JSON.stringify({ error: "Recipient or proposal request not found" }), { status: 422, headers });
   }
+  const proposalUrl = buildProposalLink(appUrl, notification.proposal_request_id, notification.notification_type === "comment_added");
   const subject = `Proposal Request #${proposal.request_number}: ${String(notification.notification_type).replaceAll("_", " ")}`;
   const html = `<div style="font-family:Arial,sans-serif;color:#102536;line-height:1.5;max-width:640px;margin:auto">
     <h1 style="font-size:24px">CRT Roofing Proposal Request update</h1>
@@ -40,7 +42,7 @@ Deno.serve(async (request) => {
       <p>${escapeHtml(proposal.customer_name)}<br>Status: ${escapeHtml(proposal.status)}${proposal.target_completion_at ? `<br>Target: ${escapeHtml(new Date(proposal.target_completion_at).toLocaleString())}` : ""}</p>
       ${actorResult.data ? `<small>Updated by ${escapeHtml(actorResult.data.full_name || actorResult.data.email)}</small>` : ""}
     </div>
-    <p style="margin-top:22px"><a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#087ec4;color:white;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:bold">Open Proposal Requests</a></p>
+    <p style="margin-top:22px"><a href="${escapeHtml(proposalUrl)}" style="display:inline-block;background:#087ec4;color:white;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:bold">Open Request #${escapeHtml(proposal.request_number)}${notification.notification_type === "comment_added" ? " Discussion" : ""}</a></p>
   </div>`;
   const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ from: fromEmail, to: [recipient.email], subject, html }) });
   if (!response.ok) {
