@@ -534,6 +534,7 @@ const CRM_LEAD_SOURCE_OPTIONS = [
   "Referral",
   "Google",
   "Website",
+  "Meta Ads",
   "Yelp",
   "HOA / Property Manager",
   "General Contractor",

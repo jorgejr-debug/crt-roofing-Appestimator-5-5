@@ -31,6 +31,9 @@ verify_jwt = false
 [functions.process-workflow-notifications]
 verify_jwt = true
 
+[functions.meta-lead-intake]
+verify_jwt = false
+
 # Retell authenticates via x-retell-signature over the original request body.
 [functions.retell-webhook]
 verify_jwt = false
