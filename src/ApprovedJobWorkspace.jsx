@@ -1,3 +1,5 @@
+import { createJobCommissionPlan } from "./approvedDailyProgress.js";
+
 export default function ApprovedJobWorkspace({ workspace }) {
  const { APPROVED_JOB_OPERATING_OVERHEAD_RATE, Field, LOGO_SRC, PAYROLL_TAX_RATE, SPRAY_FOAM_GALLONS_PER_KIT, SPRAY_FOAM_KIT_COST, Section, TRAVEL_VEHICLE_OPTIONS, approvedAttachmentUploadingDayIds, approvedDailyProgressLogs, approvedJobData, authUser, buildEmployeeDisplayName, calculateApprovedJobFullyLoadedProfitability, calculateApprovedJobTotals, calculateDailyEmployeeLaborCost, calculateDailyTravelCost, calculateSubcontractorCost, canManageSharedJobData, collapsedApprovedDailyProgressDayIds, css, employeeDirectory, formatAttachmentSize, handleAddDailyProgressDay, handleAddDailyTravelRow, handleAddEmployeeRow, handleAddMaterialItem, handleAddSubcontractorRow, handleApprovedJobFormChange, handleApprovedJobSalespersonChange, handleApprovedProgressAttachmentUpload, handleDailyProgressFieldChange, handleDailyTravelRowChange, handleDeleteDailyProgressDay, handleDeleteEmployeeRow, handleEmployeeRowChange, handleMaterialItemChange, handleNumberInputWheel, handleOpenApprovedProgressAttachment, handleRemoveApprovedProgressAttachment, handleRemoveDailyTravelRow, handleRemoveMaterialItem, handleRemoveSubcontractorRow, handleSaveApprovedJob, handleSubcontractorRowChange, handleToggleDailyProgressDay, isProjectManager, money2, round, selectedApprovedJob, sessionMessage, sessionMessageType, setActiveTemplate, summarizeApprovedDailyProgress, toNumber } = workspace;
 
@@ -23,6 +25,7 @@ export default function ApprovedJobWorkspace({ workspace }) {
       operatingOverheadCost: totals.operatingOverheadCost,
       otherJobCosts: approvedJobData.otherJobCosts,
       salesCommissionRate: approvedJobData.salesCommissionRate,
+      commissionPlan: approvedJobData.commissionPlan,
     });
     const dailyCostReturnTemplate = selectedApprovedJob?.workflowStatus === "active" ? "activeJob" : "approvedJobs";
     const payrollTaxPercentLabel = `${(PAYROLL_TAX_RATE * 100).toFixed(2)}%`;
@@ -90,9 +93,6 @@ export default function ApprovedJobWorkspace({ workspace }) {
                 <Field label="Salesperson">
                   <input type="text" value={approvedJobData.salesperson || ""} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobSalespersonChange(e.target.value)} />
                 </Field>
-                <Field label="Sales commission rate (%)">
-                  <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={round(toNumber(approvedJobData.salesCommissionRate) * 100, 2)} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("salesCommissionRate", Math.max(0, toNumber(e.target.value)) / 100)} />
-                </Field>
                 <Field label="Other job costs">
                   <input type="number" onWheel={handleNumberInputWheel} min="0" step="0.01" value={approvedJobData.otherJobCosts ?? 0} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("otherJobCosts", Math.max(0, toNumber(e.target.value)))} />
                 </Field>
@@ -108,6 +108,43 @@ export default function ApprovedJobWorkspace({ workspace }) {
             </Field>
           </div>
         </Section>
+
+        {!isProjectManager && (
+          <Section title="Commissions" subtitle="Select the salespeople involved in this job. Rates can be adjusted before saving.">
+            {approvedJobData.commissionPlan ? (
+              <>
+                <p className="smallNote">Ivan: percentage of the sale including change orders. Chris: percentage of profit after direct costs, operating / overhead, other job costs, and Ivan’s commission. These are calculated amounts, not a payment record.</p>
+                <div className="formGrid">
+                  {[{ key: "ivan", name: "Ivan", base: "sale amount", fallback: 0.05 }, { key: "chris", name: "Chris", base: "remaining profit", fallback: 0.15 }].map(({ key, name, base, fallback }) => {
+                    const entry = approvedJobData.commissionPlan[key] || { enabled: false, rate: fallback };
+                    const update = (patch) => handleApprovedJobFormChange("commissionPlan", {
+                      ...approvedJobData.commissionPlan, [key]: { ...entry, ...patch },
+                    });
+                    return <div key={key}>
+                      <label><input type="checkbox" checked={Boolean(entry.enabled)} disabled={!canManageSharedJobData} onChange={(e) => update({ enabled: e.target.checked })} /> {name} involved in this sale</label>
+                      <Field label={`${name} commission (% of ${base})`}>
+                        <input type="number" min="0" max="100" step="0.01" onWheel={handleNumberInputWheel} value={round(toNumber(entry.rate, fallback) * 100, 2)} disabled={!canManageSharedJobData || !entry.enabled} onChange={(e) => update({ rate: Math.min(100, Math.max(0, toNumber(e.target.value))) / 100 })} />
+                      </Field>
+                    </div>;
+                  })}
+                </div>
+                <div className="detailRow"><span>Ivan commission</span><strong>{money2(financialSummary.commissionBreakdown.ivanCommission)}</strong></div>
+                <div className="detailRow"><span>Profit available for Chris’s commission</span><strong>{money2(financialSummary.commissionBreakdown.chrisCommissionBase)}</strong></div>
+                <div className="detailRow"><span>Chris commission</span><strong>{money2(financialSummary.commissionBreakdown.chrisCommission)}</strong></div>
+                <div className="detailRow"><span>Total commissions included in job cost</span><strong>{money2(financialSummary.salesCommission)}</strong></div>
+              </>
+            ) : (
+              <>
+                <p className="smallNote">This job has a previously saved commission rate. It stays unchanged until you choose the new Ivan / Chris setup.</p>
+                <Field label="Existing commission (% of profit after costs)">
+                  <input type="number" min="0" step="0.01" value={round(toNumber(approvedJobData.salesCommissionRate) * 100, 2)} disabled={!canManageSharedJobData} onChange={(e) => handleApprovedJobFormChange("salesCommissionRate", Math.max(0, toNumber(e.target.value)) / 100)} />
+                </Field>
+                <button type="button" className="secondaryButton" disabled={!canManageSharedJobData} onClick={() => handleApprovedJobFormChange("commissionPlan", createJobCommissionPlan(approvedJobData.salesperson))}>Set up Ivan / Chris commissions</button>
+              </>
+            )}
+          </Section>
+        )}
+
 
         <Section title="Daily job progress" subtitle="Log each day with labor, materials, notes, and issues.">
           <div className="actionRow" style={{ marginBottom: 12 }}>
@@ -539,7 +576,7 @@ export default function ApprovedJobWorkspace({ workspace }) {
                 <div className="detailRow"><span>Other job costs</span><strong>{money2(financialSummary.otherJobCosts)}</strong></div>
                 <div className="detailRow"><span>Gross profit before operating / overhead</span><strong>{money2(financialSummary.grossProfitBeforeOverhead)}</strong></div>
                 <div className="detailRow"><span>Commissionable gross profit after operating / overhead</span><strong>{money2(financialSummary.commissionableGrossProfit)}</strong></div>
-                <div className="detailRow"><span>Sales commission ({round(financialSummary.salesCommissionRate * 100, 2)}%)</span><strong>{money2(financialSummary.salesCommission)}</strong></div>
+                <div className="detailRow"><span>{approvedJobData.commissionPlan ? "Total commissions" : `Sales commission (${round(financialSummary.salesCommissionRate * 100, 2)}%)`}</span><strong>{money2(financialSummary.salesCommission)}</strong></div>
                 <div className="detailRow"><span>Total fully loaded cost</span><strong>{money2(financialSummary.fullyLoadedCost)}</strong></div>
                 <div className="detailRow"><span>Net company profit</span><strong>{money2(financialSummary.netCompanyProfit)}</strong></div>
                 <div className="detailRow"><span>Net company profit margin</span><strong>{financialSummary.netCompanyMarginPercent}%</strong></div>

@@ -15,3 +15,7 @@
 .inspectionCenterHeader{align-items:flex-start}.inspectionCenterHeader h2{font-size:clamp(1.8rem,4vw,3.2rem)}
 .inspectionCenterHeader p{margin:5px 0}.inspectionCenterHeader>button{flex-shrink:0}
 @media(max-width:760px){.inspectionCardDetails{grid-template-columns:1fr}.inspectionCenterHeader>button{width:100%}}
+
+/* Urgency is distinct from appointment timing; retain text as well as color. */
+.inspectionCard.inspectionUrgent,.inspectionDetail.inspectionUrgent{border-left:5px solid #e14a67}
+.inspectionCenter .inspectionUrgentBadge{background:#891d32;color:#fff;font-weight:800}

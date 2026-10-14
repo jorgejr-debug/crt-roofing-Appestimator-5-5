@@ -7,6 +7,8 @@ import TaskAttachments from "./TaskAttachments.jsx";
 import InspectionRequests from "./InspectionRequests.jsx";
 import ActionFeedback from "./ActionFeedback.jsx";
 
+import { canShowOwnerTaskView, selectOwnerTasks } from "./taskOwnerView.js";
+
 const PROFILE_BUCKET = "profile-photos";
 
 function initials(profile = {}) {
@@ -52,11 +54,11 @@ function PersonAvatar({ profile, size = "normal" }) {
   );
 }
 
-export default function WorkHub({ supabase, authUser, initialTab = "tasks", initialTaskId = "", initialCreateTask = false, onSubmitInspection }) {
+export default function WorkHub({ supabase, authUser, initialTab = "tasks", initialTaskId = "", initialCreateTask = false, initialProposalRequestId = "", initialProposalDiscussion = false, onSubmitInspection, onSubmitApprovedWork }) {
   const authUserKey = authUser?.key;
   const [activeTab, setActiveTab] = useState(initialTaskId ? "tasks" : initialTab === "inspectionNew" ? "inspections" : initialTab);
   const [inspectionCreateKey, setInspectionCreateKey] = useState(initialTab === "inspectionNew" ? 1 : 0);
-  const [proposalInitialId, setProposalInitialId] = useState("");
+  const [proposalInitialId, setProposalInitialId] = useState(initialProposalRequestId);
   const [profiles, setProfiles] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [assignees, setAssignees] = useState([]);
@@ -74,6 +76,10 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
   const [updatingTaskId, setUpdatingTaskId] = useState("");
   const [deletingTaskId, setDeletingTaskId] = useState("");
   const [search, setSearch] = useState("");
+  const [taskScope, setTaskScope] = useState("mine");
+  const [ownerAssignee, setOwnerAssignee] = useState("");
+  const canReviewTeamTasks = canShowOwnerTaskView(authUser);
+  const ownerReadOnly = canReviewTeamTasks && taskScope === "team";
   const [taskView, setTaskView] = useState("active");
   const [taskTypeFilter, setTaskTypeFilter] = useState("all");
   const [showCreateTask, setShowCreateTask] = useState(Boolean(initialCreateTask));
@@ -136,7 +142,9 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
 
   const taskAssignees = useCallback((taskId) => assignees.filter((entry) => entry.task_id === taskId).map((entry) => profileById[entry.user_id]).filter(Boolean), [assignees, profileById]);
   const myTasks = useMemo(() => tasks.filter((task) => task.created_by === authUser.key || assignees.some((entry) => entry.task_id === task.id && entry.user_id === authUser.key)), [assignees, authUser.key, tasks]);
-  const visibleTasks = myTasks.filter((task) => taskMatchesView(task, taskView) && (taskTypeFilter === "all" || taskType(task) === taskTypeFilter));
+  const selectedTaskReadOnly = ownerReadOnly || Boolean(selectedTask && !myTasks.some(task => task.id === selectedTask.id));
+  const scopedTasks = ownerReadOnly ? selectOwnerTasks(tasks, assignees, ownerAssignee) : myTasks;
+  const visibleTasks = scopedTasks.filter((task) => taskMatchesView(task, taskView) && (taskTypeFilter === "all" || taskType(task) === taskTypeFilter));
   const filteredTasks = visibleTasks.filter((task) => [task.title, task.description, task.related_label].join(" ").toLowerCase().includes(search.trim().toLowerCase()));
   const unreadMessages = messages.filter((message) => message.recipient_id === authUser.key && !message.read_at).length;
   const openMyTasks = myTasks.filter((task) => !isTaskClosed(task)).length;
@@ -155,7 +163,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
 
   const createTask = async (event) => {
     event.preventDefault();
-    if (!taskDraft.title.trim() || saving) return;
+    if (ownerReadOnly || !taskDraft.title.trim() || saving) return;
     setSaving(true);
     setError("");
     const { data: task, error: taskError } = await supabase.rpc("create_private_company_task", {
@@ -179,6 +187,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
   };
 
   const updateTaskStatus = async (task, status) => {
+    if (ownerReadOnly || !myTasks.some(item => item.id === task.id)) return;
     if (updatingTaskId || task.status === status) return;
     if (status === "voided" && !window.confirm("Mark this task as voided? It will leave the active list but remain available in task history.")) return;
     setUpdatingTaskId(task.id);
@@ -197,6 +206,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
 
   const openTask = async (taskId) => {
     setSelectedTaskId(taskId);
+    if (ownerReadOnly) return;
     const unreadIds = taskNotifications.filter((item) => item.task_id === taskId && !item.read_at).map((item) => item.id);
     if (!unreadIds.length) return;
     const readAt = new Date().toISOString();
@@ -205,6 +215,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
   };
 
   const deleteTask = async (task) => {
+    if (ownerReadOnly) return;
     if (!canDeleteTask(task, authUserKey) || deletingTaskId) return;
     if (!window.confirm(TASK_DELETE_CONFIRMATION)) return;
 
@@ -236,6 +247,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
 
   const addComment = async (event) => {
     event.preventDefault();
+    if (ownerReadOnly || !myTasks.some(task => task.id === selectedTaskId)) return;
     if (!commentDraft.trim() || !selectedTaskId || saving) return;
     setSaving(true);
     const { error: commentError } = await supabase.from("company_task_comments").insert({ task_id: selectedTaskId, author_id: authUser.key, body: commentDraft.trim() });
@@ -284,6 +296,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
       </header> : null}
 
       {activeTab !== "inspections" ? <div className="workHubRequestActions">
+        {onSubmitApprovedWork ? <button type="button" className="primaryButton" onClick={onSubmitApprovedWork}>Submit Approved Work</button> : null}
         {onSubmitInspection ? <button type="button" className="primaryButton" onClick={() => { setInspectionCreateKey(value => value + 1); setActiveTab("inspections"); }}>Submit Inspection Request</button> : null}
         <button type="button" className="secondaryButton" onClick={() => setActiveTab("proposals")}>Submit Proposal Request</button>
       </div> : null}
@@ -304,9 +317,9 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
               <strong>{filteredTasks.length} task{filteredTasks.length === 1 ? "" : "s"} in this view</strong>
               <span>Past-due tasks are identified automatically from their due date.</span>
             </div>
-            <button type="button" className={showCreateTask ? "secondaryButton" : "primaryButton"} onClick={() => { setSelectedTaskId(""); setShowCreateTask((current) => !current); }}>
+            {!ownerReadOnly ? <button type="button" className={showCreateTask ? "secondaryButton" : "primaryButton"} onClick={() => { setSelectedTaskId(""); setShowCreateTask((current) => !current); }}>
               {showCreateTask ? "Cancel New Task" : "New Task"}
-            </button>
+            </button> : null}
           </div>
           <div className={`workHubColumns ${showCreateTask ? "" : "withoutCreator"} ${selectedTask ? "hasSelection" : ""}`}>
           {showCreateTask ? <section className="panel workHubCreator">
@@ -327,7 +340,12 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
           </section> : null}
 
           <section className="panel workHubTaskBrowser">
-            <div className="sectionHead"><div><h2>My Tasks</h2><p>Only tasks you created or were assigned to appear here.</p></div></div>
+            <div className="sectionHead"><div><h2>{ownerReadOnly ? "All Team Tasks" : "My Tasks"}</h2><p>{ownerReadOnly ? "Owner view · Read-only tasks and discussions." : "Only tasks you created or were assigned to appear here."}</p></div></div>
+            {canReviewTeamTasks ? <div className="workHubOwnerFilters">
+              <label>Task view<select value={taskScope} onChange={event => { setTaskScope(event.target.value); setSelectedTaskId(""); setShowCreateTask(false); setCommentDraft(""); setTaskView("all"); }}><option value="mine">My tasks</option><option value="team">All team tasks (read-only)</option></select></label>
+              {ownerReadOnly ? <label>Assigned employee<select value={ownerAssignee} onChange={event => { setOwnerAssignee(event.target.value); setSelectedTaskId(""); }}><option value="">All employees</option>{profiles.map(profile => <option key={profile.id} value={profile.id}>{displayName(profile)}</option>)}</select></label> : null}
+              <button type="button" className="secondaryButton" onClick={() => loadData({ quiet: true })}>Refresh</button>
+            </div> : null}
             <div className="workHubTaskFilters">
               <input className="workHubSearch" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search tasks" />
               <select aria-label="Task status" value={taskView} onChange={(event) => setTaskView(event.target.value)}>
@@ -361,7 +379,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
                   </button>
                   <div className="workHubTaskFooter">
                     <div className="workHubAvatarStack">{taskAssignees(task.id).map((profile) => <PersonAvatar key={profile.id} profile={profile} size="small" />)}</div>
-                    {canDeleteTask(task, authUserKey) ? (
+                    {!ownerReadOnly && canDeleteTask(task, authUserKey) ? (
                       <button
                         type="button"
                         className="workHubTaskDelete"
@@ -384,6 +402,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
             {selectedTask ? <>
               <div className="workHubDiscussionTitle"><span className={`workHubTypeBadge ${taskType(selectedTask)}`}>{taskTypeLabel(selectedTask)}</span><h3>{selectedTask.title}</h3></div>
               {selectedTask.description ? <p className="workHubTaskDescription">{selectedTask.description}</p> : null}
+              {selectedTaskReadOnly ? <p className="smallNote">Read-only · {taskStatusLabel(selectedTask)} · Assigned to: {taskAssignees(selectedTask.id).map(displayName).join(", ") || "Unassigned"}</p> : <>
               <div className="workHubQuickStatuses" aria-label="Quick task actions">
                 <button type="button" className="secondaryButton" disabled={selectedTaskUpdating} onClick={() => updateTaskStatus(selectedTask, "in_progress")}>Working on It</button>
                 <button type="button" className="secondaryButton successAction" disabled={selectedTaskUpdating} onClick={() => updateTaskStatus(selectedTask, "completed")}>Completed</button>
@@ -391,8 +410,9 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
               </div>
               <label className="workHubStatusField"><span>{selectedTaskUpdating ? "Updating status…" : "Status"}</span><select className="workHubStatusSelect" disabled={selectedTaskUpdating} value={selectedTask.status} onChange={(event) => updateTaskStatus(selectedTask, event.target.value)}><option value="open">Open</option><option value="in_progress">Working on It</option><option value="blocked">Blocked</option><option value="completed">Completed</option><option value="voided">Voided</option></select></label>
               <TaskAttachments key={selectedTask.id} supabase={supabase} taskId={selectedTask.id} userId={authUserKey} />
+              </>}
               <div className="workHubComments">{taskComments.map((comment) => <div key={comment.id} className="workHubComment"><PersonAvatar profile={profileById[comment.author_id]} size="small" /><div><strong>{displayName(profileById[comment.author_id])}</strong><p>{comment.body}</p><small>{new Date(comment.created_at).toLocaleString()}</small></div></div>)}{!taskComments.length ? <p className="emptyState">No comments yet.</p> : null}</div>
-              <form className="workHubComposer" onSubmit={addComment}><textarea rows="3" value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="Add a comment or update" /><button type="submit" className="primaryButton" disabled={saving || !commentDraft.trim()}>Comment</button></form>
+              {!selectedTaskReadOnly ? <form className="workHubComposer" onSubmit={addComment}><textarea rows="3" value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="Add a comment or update" /><button type="submit" className="primaryButton" disabled={saving || !commentDraft.trim()}>Comment</button></form> : null}
             </> : <p className="emptyState">Select a task to open its discussion.</p>}
           </section>
         </div>
@@ -401,7 +421,7 @@ export default function WorkHub({ supabase, authUser, initialTab = "tasks", init
 
       {activeTab === "inspections" && onSubmitInspection ? <InspectionRequests key={inspectionCreateKey ? "create" : "queue"} supabase={supabase} authUser={authUser} profiles={profiles} createKey={inspectionCreateKey} tasks={tasks} assignees={assignees} onOpenTask={taskId => { setSelectedTaskId(taskId); setActiveTab("tasks"); }} onOpenProposal={id => { setProposalInitialId(id); setActiveTab("proposals"); }} /> : null}
 
-      {!loading && activeTab === "proposals" ? <ProposalRequests key={proposalInitialId || "queue"} initialRequestId={proposalInitialId} supabase={supabase} authUser={authUser} profiles={profiles} /> : null}
+      {!loading && activeTab === "proposals" ? <ProposalRequests key={proposalInitialId || "queue"} initialRequestId={proposalInitialId} initialDiscussion={initialProposalDiscussion && proposalInitialId === initialProposalRequestId} supabase={supabase} authUser={authUser} profiles={profiles} /> : null}
 
       {!loading && activeTab === "messages" ? (
         <div className="workHubMessaging">

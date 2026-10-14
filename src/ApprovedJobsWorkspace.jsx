@@ -37,7 +37,8 @@ export default function ApprovedJobsWorkspace({ workspace }) {
       </div>
 
       {approvedJobQuickCreateOpen ? (
-        <Section title="Add Approved Job" subtitle="Create an approved or upcoming project without opening the CFO dashboard.">
+        <Section title="Submit Approved Work" subtitle="Enter the approved job details, then upload the signed customer proposal. Saving adds the job to Approved Jobs and sends Miguel a private document link.">
+          <p>If this job is already listed below, open that job to attach its signed proposal instead of creating another entry.</p>
           <div className="formGrid">
             <Field label="Job number / project">
               <input type="text" value={approvedJobQuickDraft.projectName} onChange={(e) => handleApprovedJobQuickDraftChange("projectName", e.target.value)} placeholder="Job number or project name" />
@@ -66,7 +67,7 @@ export default function ApprovedJobsWorkspace({ workspace }) {
             </Field>
           </div>
           <div className="actionRow" style={{ marginTop: 14 }}>
-            <button type="button" className="primaryButton" onClick={handleCreateApprovedJobQuick}>Save Approved Job</button>
+            <button type="button" className="primaryButton" disabled={jobsSyncStatus === "saving"} onClick={handleCreateApprovedJobQuick}>{jobsSyncStatus === "saving" ? "Submitting…" : "Continue to Signed Proposal"}</button>
             <button type="button" className="secondaryButton" onClick={() => setApprovedJobQuickCreateOpen(false)}>Cancel</button>
           </div>
         </Section>

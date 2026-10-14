@@ -164,3 +164,35 @@ test("toggles one minimized day without changing the others", () => {
 test("collects saved day ids so existing days can open minimized", () => {
   assert.deepEqual(getDailyProgressDayIds([{ id: "day-1" }, {}, { id: "day-3" }]), ["day-1", "day-3"]);
 });
+
+test("two salespeople use sale amount for Ivan and profit after Ivan for Chris", () => {
+  const result = calculateApprovedJobFullyLoadedProfitability({
+    approvedSalePrice: 100000, directJobCost: 65000, operatingOverheadCost: 10000, otherJobCosts: 5000,
+    commissionPlan: { ivan: { enabled: true, rate: 0.05 }, chris: { enabled: true, rate: 0.15 } },
+  });
+  assert.equal(result.commissionBreakdown.ivanCommission, 5000);
+  assert.equal(result.commissionBreakdown.chrisCommissionBase, 15000);
+  assert.equal(result.commissionBreakdown.chrisCommission, 2250);
+  assert.equal(result.salesCommission, 7250);
+  assert.equal(result.fullyLoadedCost, 87250);
+  assert.equal(result.netCompanyProfit, 12750);
+});
+
+test("optional participation and edited rates, including zero, control commissions", () => {
+  const calculate = (ivan, chris) => calculateApprovedJobFullyLoadedProfitability({
+    approvedSalePrice: 100000, directJobCost: 80000, commissionPlan: { ivan, chris },
+  });
+  assert.equal(calculate({ enabled: false, rate: 0.05 }, { enabled: true, rate: 0.2 }).salesCommission, 4000);
+  assert.equal(calculate({ enabled: true, rate: 0.02 }, { enabled: false, rate: 0.15 }).salesCommission, 2000);
+  assert.equal(calculate({ enabled: true, rate: 0 }, { enabled: true, rate: 0 }).salesCommission, 0);
+});
+
+test("loss-making jobs still calculate Ivan's sale commission but no Chris commission", () => {
+  const result = calculateApprovedJobFullyLoadedProfitability({
+    approvedSalePrice: 10000, changeOrders: 2000, directJobCost: 12000,
+    commissionPlan: { ivan: { enabled: true, rate: 0.05 }, chris: { enabled: true, rate: 0.15 } },
+  });
+  assert.equal(result.commissionBreakdown.ivanCommission, 600);
+  assert.equal(result.commissionBreakdown.chrisCommission, 0);
+  assert.equal(result.netCompanyProfit, -600);
+});

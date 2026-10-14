@@ -37,6 +37,7 @@ test("CFO approved totals use shared approved and active jobs without duplicates
 
 test("Ivan can create approved jobs without receiving management access", () => {
   assert.equal(canCreateApprovedJobs("salesperson", "ivan@crtroofing.com"), true);
+  assert.equal(canCreateApprovedJobs("salesperson", "daniela@crtroofing.com"), true);
   assert.equal(canCreateApprovedJobs("salesperson", "another.employee@crtroofing.com"), false);
   assert.equal(canManageSharedJobs("salesperson"), false);
 });

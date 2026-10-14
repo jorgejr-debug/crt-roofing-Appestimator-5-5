@@ -56,3 +56,36 @@ test('database retries preserve reviewed leads and reject invalid owner', async 
     assert.equal(perms.rows[0].allowed, false);
   } finally { await db.close(); }
 });
+
+test('Meta intake coexists with Retell and waits for explicit office handoff to Ivan', async () => {
+  const { createInspectionDatabase, office, ivan } = await import('./inspectionDatabaseFixture.js');
+  const db = await createInspectionDatabase();
+  try {
+    // Restore production CRM defaults omitted by the shared inspection fixture.
+    await db.exec("ALTER TABLE crm_leads ALTER COLUMN id SET DEFAULT gen_random_uuid(), ALTER COLUMN status SET DEFAULT 'New', ALTER COLUMN qualification_status SET DEFAULT 'captured', ADD COLUMN lead_payload jsonb DEFAULT '{}'::jsonb");
+    await db.exec(await readFile(new URL('../supabase/migrations/20261014230000_meta_lead_intake.sql', import.meta.url), 'utf8'));
+    await db.exec('SET ROLE service_role');
+    const args = ['123456', office, JSON.stringify({contact_name:'Meta Test', phone:'5550100'}), '{}'];
+    const id = (await db.query('SELECT ingest_meta_lead($1,$2,$3,$4) AS id', args)).rows[0].id;
+    await db.exec('RESET ROLE');
+    const lead = (await db.query('SELECT * FROM crm_leads WHERE id=$1', [id])).rows[0];
+    assert.equal(lead.assigned_staff_id, office);
+    assert.equal(lead.qualification_status, 'captured');
+    for (const table of ['inspection_requests', 'company_tasks', 'company_task_notifications']) {
+      assert.equal(Number((await db.query('SELECT count(*) FROM ' + table)).rows[0].count), 0);
+    }
+    assert.ok((await db.query("SELECT to_regprocedure('process_retell_call(jsonb)') AS fn")).rows[0].fn);
+    await db.query("UPDATE crm_leads SET property_address='123 Test St', qualification_status='qualified', assigned_staff_id=$2 WHERE id=$1", [id, ivan]);
+    await db.query("SELECT set_config('test.uid',$1,false)", [office]);
+    await db.exec('SET ROLE authenticated');
+    const task = (await db.query("SELECT * FROM create_inspection_request_task($1,'Review roof','Office reviewed','normal',$2)", [id, ivan])).rows[0];
+    await db.exec('RESET ROLE');
+    const request = (await db.query('SELECT * FROM inspection_requests WHERE lead_id=$1', [id])).rows[0];
+    assert.equal(request.assigned_to, ivan);
+    assert.equal(request.task_id, task.id);
+    await db.exec('SET ROLE service_role');
+    assert.equal((await db.query('SELECT ingest_meta_lead($1,$2,$3,$4) AS id', args)).rows[0].id, id);
+    await db.exec('RESET ROLE');
+    assert.equal(Number((await db.query('SELECT count(*) FROM company_tasks')).rows[0].count), 1);
+  } finally { await db.close(); }
+});

@@ -1,3 +1,5 @@
+import { readProposalLink } from "../supabase/functions/_shared/proposalLinks.js";
+import SignedProposalHandoff, { SignedProposalUpload } from "./SignedProposalHandoff.jsx";
 import { normalizeCompanyVehicle, isMissingVehicleTable } from "./companyVehicles.js";
 import { fetchAccessibleFieldLogRows, ownFieldLogsForCache } from "./fieldLogAccess.js";
 import ConnectionStatus from "./ConnectionStatus.jsx";
@@ -86,6 +88,7 @@ import {
   calculateSprayFoamMaterialUsage,
   calculateSubcontractorCost,
   getDefaultSalesCommissionRate,
+  createJobCommissionPlan,
   getDailyProgressDayIds,
   SPRAY_FOAM_GALLONS_PER_KIT,
   SPRAY_FOAM_KIT_COST,
@@ -524,6 +527,7 @@ const DEFAULT_PROPOSAL_TEMPLATE = {
 const DEFAULT_PROPOSAL_TEMPLATE_ID = DEFAULT_PROPOSAL_TEMPLATE.id;
 
 const CRM_LEAD_SOURCE_OPTIONS = [
+  "AI Phone",
   "Phone Call / Office",
   "Cold Calling",
   "Existing customer",
@@ -4373,7 +4377,7 @@ async function fetchSharedJobsFromSupabase() {
   return { data: Array.isArray(data) ? data : [], error };
 }
 
-async function upsertSharedJobToSupabase(job, userKey = "", updatedBy = "") {
+async function persistSharedJobToSupabase(job, userKey = "", updatedBy = "") {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: [], error: null };
   const payload = buildSharedJobUpsertRow(job, userKey, updatedBy);
   const { data, error } = await supabase
@@ -4401,9 +4405,11 @@ async function updateDailyJobCostsForStaffInSupabase(job, updatedBy = "") {
   return { data: latestData, error: null };
 }
 
-async function createApprovedJobFromStaffDraft(draft = {}) {
+async function createApprovedJobFromStaffDraft(draft = {}, jobId, source = null) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return { data: null, error: null };
-  const { data, error } = await supabase.rpc("create_staff_approved_job", {
+  const { data, error } = await supabase.rpc("create_staff_approved_job_with_proposal", {
+    p_job_id: jobId,
+    p_source: source,
     p_project_name: String(draft.projectName || "").trim(),
     p_customer_name: String(draft.customerName || "").trim(),
     p_project_address: String(draft.projectAddress || "").trim(),
@@ -9863,6 +9869,40 @@ function OverheadCalculator({
 }
 
 function App() {
+  const [proposalUploadRequest, setProposalUploadRequest] = useState(null);
+  const proposalUploadResolve = useRef(null);
+  const quickApprovalJobId = useRef(null);
+  const [handoffRefresh, setHandoffRefresh] = useState(0);
+  const [proposalEmailLink] = useState(() => readProposalLink(window.location.search));
+  const signedProposalLink = new URLSearchParams(window.location.search).get('signedProposal');
+  const completeProposalUpload = (id) => {
+    proposalUploadResolve.current?.(id);
+    proposalUploadResolve.current = null;
+    setProposalUploadRequest(null);
+    setHandoffRefresh(value => value + 1);
+  };
+  const ensureSignedProposal = async (source, allowLegacy = true) => {
+    const existing = await supabase.from('signed_proposal_handoffs').select('id').eq('source_record_uid', source).maybeSingle();
+    if (existing.error) throw existing.error;
+    if (existing.data) return existing.data.id;
+    if (allowLegacy) {
+      const existingJob = await supabase.from(COMPANY_ACTIVE_JOBS_TABLE).select('id').eq('source_record_uid', source).maybeSingle();
+      if (existingJob.error) throw existingJob.error;
+      if (existingJob.data) return null;
+    }
+    if (proposalUploadResolve.current) throw new Error('Finish the current signed proposal upload first.');
+    const id = await new Promise(resolve => { proposalUploadResolve.current = resolve; setProposalUploadRequest(source); });
+    if (!id) throw new Error('Approval cancelled. No job was approved.');
+    return id;
+  };
+  const upsertSharedJobToSupabase = async (job, userKey, updatedBy) => {
+    try {
+      const row = buildSharedJobUpsertRow(job, userKey, updatedBy);
+      if (['approved', 'active', 'completed'].includes(row.workflow_status)) await ensureSignedProposal(row.source_record_uid);
+      return await persistSharedJobToSupabase(job, userKey, updatedBy);
+    } catch (error) { return { data: [], error }; }
+  };
+
   const getInitialAppearancePreference = () => {
     if (typeof window === "undefined") return "system";
     const stored = String(window.localStorage.getItem(APPEARANCE_PREFERENCE_KEY) || "").toLowerCase();
@@ -10242,7 +10282,7 @@ function App() {
   const [employeeManagementSearch, setEmployeeManagementSearch] = useState("");
   const [fieldOperationCompanyVehicles, setFieldOperationCompanyVehicles] = useState([]);
   const [fieldOperationsDeviceId, setFieldOperationsDeviceId] = useState(() => readJson(FIELD_DAILY_LOG_DEVICE_KEY, "") || createFieldDailyLogId());
-  const [activeTemplate, setActiveTemplate] = useState("dashboard");
+  const [activeTemplate, setActiveTemplate] = useState(() => proposalEmailLink ? "proposalRequests" : "dashboard");
   const [adminPricing, setAdminPricing] = useState(() => normalizeAdminPricing(readJson(ADMIN_PRICING_KEY, DEFAULT_ADMIN_PRICING)));
   const [adminTravelSettings, setAdminTravelSettings] = useState(() =>
     normalizeTravelAdminSettings(readJson(ADMIN_TRAVEL_SETTINGS_KEY, DEFAULT_TRAVEL_ADMIN_SETTINGS)),
@@ -10305,7 +10345,7 @@ function App() {
   const [activeJobMutationKey, setActiveJobMutationKey] = useState("");
   const [cfoSyncStatus, setCfoSyncStatus] = useState("idle");
   const [cfoSyncError, setCfoSyncError] = useState("");
-  const [crmTab, setCrmTab] = useState("quickCapture");
+  const [crmTab, setCrmTab] = useState("pipeline");
   const [crmLeads, setCrmLeads] = useState([]);
   const [crmLeadSyncStatus, setCrmLeadSyncStatus] = useState("idle");
   const [crmLeadSyncError, setCrmLeadSyncError] = useState("");
@@ -10506,7 +10546,7 @@ function App() {
               workflowStatus: job.workflowStatus || (isActiveJobStatus(job.status) ? "active" : "approved"),
             };
             // eslint-disable-next-line no-await-in-loop
-            const migrateRes = await upsertSharedJobToSupabase(payload, authUser.key, authUser.id || authUser.key);
+            const migrateRes = await persistSharedJobToSupabase(payload, authUser.key, authUser.id || authUser.key);
             if (migrateRes.error) {
               console.warn("Shared jobs migration row failed:", migrateRes.error?.message || migrateRes.error);
             }
@@ -13216,6 +13256,7 @@ function App() {
       startDate: "",
     });
     setApprovedJobQuickCreateOpen(false);
+    quickApprovalJobId.current = null;
     setApprovedJobQuickDraft(createBlankApprovedJobQuickDraft());
     setActiveJobIssueModalOpen(false);
     setActiveJobIssueDraft(createBlankActiveJobIssue());
@@ -13314,6 +13355,9 @@ function App() {
 
   const startNewEmployeeDraft = () => {
     setEmployeeManagementDraft(createBlankEmployeeRecord());
+    window.requestAnimationFrame(() => {
+      employeeManagementEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   };
 
   const editEmployeeRecord = (employee) => {
@@ -13434,6 +13478,18 @@ function App() {
     setCrmLeadEditingId("");
     setCrmLeadWorkOrderFile(null);
     setCrmTab("quickCapture");
+  };
+
+  const openCrmSavedList = () => {
+    setCrmTab("pipeline");
+    setCrmPipelineView("table");
+    setCrmLeadSearch("");
+    setCrmLeadStatusFilter("all");
+    setCrmLeadSourceFilter("all");
+    setCrmLeadAssigneeFilter("all");
+    setCrmLeadDateFrom("");
+    setCrmLeadDateTo("");
+    setActiveTemplate("crm");
   };
 
   const openDashboardLeadCapture = () => {
@@ -15054,6 +15110,7 @@ function App() {
       approvedBidAmount: estimate.summary?.selectedBidAmount || 0,
       changeOrders: 0,
       salesperson: estimate.inputs?.salesperson || "",
+      commissionPlan: createJobCommissionPlan(estimate.inputs?.salesperson || estimate.inputs?.sprayFoamSalesperson || estimate.inputs?.shingleSalesperson),
       salesCommissionRate: getDefaultSalesCommissionRate(estimate.inputs?.salesperson),
       otherJobCosts: 0,
       status: "approved",
@@ -15096,6 +15153,7 @@ function App() {
         || matchingEstimate?.inputs?.sprayFoamSalesperson
         || matchingEstimate?.inputs?.shingleSalesperson
         || "",
+      commissionPlan: job.commissionPlan || (job.salesCommissionRate == null ? createJobCommissionPlan(job.salesperson) : null),
       salesCommissionRate: toNumber(
         job.salesCommissionRate,
         getDefaultSalesCommissionRate(job.salesperson || matchingEstimate?.inputs?.salesperson),
@@ -15103,7 +15161,7 @@ function App() {
       otherJobCosts: toNumber(job.otherJobCosts || 0),
       status: job.status || "approved",
     };
-    setSelectedApprovedJob(matchingEstimate || job);
+    setSelectedApprovedJob(job);
     setApprovedJobData(data);
     const existingDailyProgress = job.dailyProgressLog || [];
     setApprovedDailyProgressLogs(existingDailyProgress);
@@ -16091,7 +16149,7 @@ function App() {
       setSessionMessage("Please sign in and select a job.");
       return;
     }
-    if (!canUpdateDailyJobCostData) {
+    if (!canUpdateDailyJobCostData && !canCreateApprovedJobData) {
       setSessionMessageType("error");
       setSessionMessage("You do not have permission to update daily job costs.");
       return;
@@ -16108,6 +16166,7 @@ function App() {
       operatingOverheadCost: totals.operatingOverheadCost,
       otherJobCosts: approvedJobData.otherJobCosts,
       salesCommissionRate: approvedJobData.salesCommissionRate,
+      commissionPlan: approvedJobData.commissionPlan,
     });
     const actualProfit = financialSummary.netCompanyProfit;
     const marginPercent = financialSummary.netCompanyMarginPercent;
@@ -16139,6 +16198,8 @@ function App() {
       salesperson: approvedJobData.salesperson || selectedApprovedJob?.salesperson || "",
       salesCommissionRate: financialSummary.salesCommissionRate,
       salesCommission: financialSummary.salesCommission,
+      commissionPlan: approvedJobData.commissionPlan || null,
+      commissionBreakdown: financialSummary.commissionBreakdown || null,
       otherJobCosts: financialSummary.otherJobCosts,
       grossProfitBeforeOverhead: financialSummary.grossProfitBeforeOverhead,
       commissionableGrossProfit: financialSummary.commissionableGrossProfit,
@@ -16174,9 +16235,19 @@ function App() {
     };
 
     try {
-      const { data, error } = canManageSharedJobData
-        ? await upsertSharedJobToSupabase(sharedJob, authUser.key, authUser.id || authUser.key)
-        : await updateDailyJobCostsForStaffInSupabase(sharedJob, authUser.displayName || authUser.email || authUser.key);
+      let result;
+      const existing = await supabase.from(COMPANY_ACTIVE_JOBS_TABLE).select('id').eq('source_record_uid', buildSharedJobSourceId(sharedJob)).maybeSingle();
+      if (existing.error) throw existing.error;
+      if (!canManageSharedJobData && canCreateApprovedJobData && !existing.data) {
+        await ensureSignedProposal(buildSharedJobSourceId(sharedJob), false);
+        const created = await createApprovedJobFromStaffDraft({ projectName: sharedJob.projectName, customerName: sharedJob.customerName, projectAddress: sharedJob.jobAddress, contractAmount: sharedJob.contractAmount, projectContact: sharedJob.projectContact }, crypto.randomUUID(), buildSharedJobSourceId(sharedJob));
+        result = { data: created.data ? [created.data] : [], error: created.error };
+      } else {
+        result = canManageSharedJobData
+          ? await upsertSharedJobToSupabase(sharedJob, authUser.key, authUser.id || authUser.key)
+          : await updateDailyJobCostsForStaffInSupabase(sharedJob, authUser.displayName || authUser.email || authUser.key);
+      }
+      const { data, error } = result;
       if (error) {
         const cloudErrorMessage = error.message || String(error);
         console.warn("Approved job save failed:", cloudErrorMessage);
@@ -17396,7 +17467,7 @@ function App() {
     </div>
   );
 
-  const renderCrmLeadsScreen = () => <CrmWorkspace workspace={{ CRM_FOLLOWUP_STATUS_OPTIONS, CRM_FOLLOWUP_TYPE_OPTIONS, CRM_LEAD_SERVICE_OPTIONS, CRM_LEAD_SOURCE_OPTIONS, CRM_LEAD_STATUS_OPTIONS, CRM_PIPELINE_STATUS_OPTIONS, CRM_PROPERTY_TYPE_OPTIONS, CRM_TIMELINE_TYPE_OPTIONS, CRM_URGENCY_OPTIONS, CRM_VISIT_OUTCOME_OPTIONS, DetailRow, Field, LOGO_SRC, Section, addCrmContactToCustomer, addCrmJobToCustomer, addCrmPropertyToCustomer, addCrmTimelineEntry, authUser, calculateDanielaKpis, calculateIvanKpis, calculateLeadKpis, completedJobs, convertCrmLeadToCustomer, crmActiveStaffOptions, crmCustomerDeletingId, crmCustomerDisplayName, crmCustomerDraft, crmCustomerSaving, crmCustomerSearch, crmCustomers, crmDanielaProfileId, crmFollowupDeletingId, crmFollowupDraft, crmFollowupSaving, crmFollowupSearch, crmFollowups, crmInspectionSending, crmIvanProfileId, crmLeadAssigneeFilter, crmLeadDateFrom, crmLeadDateTo, crmLeadDeletingId, crmLeadDisplayName, crmLeadDocuments, crmLeadDraft, crmLeadSearch, crmLeadSortBy, crmLeadSortDirection, crmLeadSourceFilter, crmLeadStatusFilter, crmLeadSyncError, crmLeadSyncStatus, crmLeadWorkOrderFile, crmLeadWorkOrderUploading, crmLeads, crmPipelineView, crmProposalAuditEvents, crmProposalRequests, crmProposalVersions, crmRecordSyncError, crmSelectedCustomer, crmTab, crmWeeklyInspectionTarget, css, deleteCrmCustomer, deleteCrmFollowup, deleteCrmLead, editCrmCustomer, editCrmFollowup, editCrmLead, getAccountTitle, handleCrmLeadAction, handleNumberInputWheel, isFinanceUser, money2, num, openCrmLeadDocument, openDashboardLeadCapture, openProposalBuilder, proposals, removeCrmContact, removeCrmFile, removeCrmJob, removeCrmProperty, removeCrmTimelineEntry, renderMiguelKpiSection, saveCrmCustomerDraft, saveCrmFollowupDraft, saveCrmLeadDraft, saveCrmWeeklyInspectionTarget, saveQuickLeadAndAddNext, selectCrmLeadWorkOrder, sendCrmLeadForInspection, setActiveTemplate, setCrmCustomerSearch, setCrmFollowupSearch, setCrmLeadAssigneeFilter, setCrmLeadDateFrom, setCrmLeadDateTo, setCrmLeadSearch, setCrmLeadSortBy, setCrmLeadSortDirection, setCrmLeadSourceFilter, setCrmLeadStatusFilter, setCrmPipelineView, setCrmTab, setCrmWeeklyInspectionTarget, setSessionMessage, setSessionMessageType, startNewCrmCustomerDraft, startNewCrmFollowupDraft, startNewCrmLeadDraft, toNumber, updateCrmContactField, updateCrmCustomerDraftField, updateCrmFollowupDraftField, updateCrmJobField, updateCrmLeadDraftField, updateCrmPropertyField, updateCrmTimelineField }} />;
+  const renderCrmLeadsScreen = () => <CrmWorkspace workspace={{ CRM_FOLLOWUP_STATUS_OPTIONS, CRM_FOLLOWUP_TYPE_OPTIONS, CRM_LEAD_SERVICE_OPTIONS, CRM_LEAD_SOURCE_OPTIONS, CRM_LEAD_STATUS_OPTIONS, CRM_PIPELINE_STATUS_OPTIONS, CRM_PROPERTY_TYPE_OPTIONS, CRM_TIMELINE_TYPE_OPTIONS, CRM_URGENCY_OPTIONS, CRM_VISIT_OUTCOME_OPTIONS, DetailRow, Field, LOGO_SRC, Section, addCrmContactToCustomer, addCrmJobToCustomer, addCrmPropertyToCustomer, addCrmTimelineEntry, authUser, calculateDanielaKpis, calculateIvanKpis, calculateLeadKpis, completedJobs, convertCrmLeadToCustomer, crmActiveStaffOptions, crmCustomerDeletingId, crmCustomerDisplayName, crmCustomerDraft, crmCustomerSaving, crmCustomerSearch, crmCustomers, crmDanielaProfileId, crmFollowupDeletingId, crmFollowupDraft, crmFollowupSaving, crmFollowupSearch, crmFollowups, crmInspectionSending, crmIvanProfileId, crmLeadAssigneeFilter, crmLeadDateFrom, crmLeadDateTo, crmLeadDeletingId, crmLeadDisplayName, crmLeadDocuments, crmLeadDraft, crmLeadSearch, crmLeadSortBy, crmLeadSortDirection, crmLeadSourceFilter, crmLeadStatusFilter, crmLeadSyncError, crmLeadSyncStatus, crmLeadWorkOrderFile, crmLeadWorkOrderUploading, crmLeads, crmPipelineView, crmProposalAuditEvents, crmProposalRequests, crmProposalVersions, crmRecordSyncError, crmSelectedCustomer, crmTab, crmWeeklyInspectionTarget, css, deleteCrmCustomer, deleteCrmFollowup, deleteCrmLead, editCrmCustomer, editCrmFollowup, editCrmLead, getAccountTitle, handleCrmLeadAction, handleNumberInputWheel, isFinanceUser, money2, num, openCrmLeadDocument, openCrmSavedList, openDashboardLeadCapture, openProposalBuilder, proposals, removeCrmContact, removeCrmFile, removeCrmJob, removeCrmProperty, removeCrmTimelineEntry, renderMiguelKpiSection, saveCrmCustomerDraft, saveCrmFollowupDraft, saveCrmLeadDraft, saveCrmWeeklyInspectionTarget, saveQuickLeadAndAddNext, selectCrmLeadWorkOrder, sendCrmLeadForInspection, setActiveTemplate, setCrmCustomerSearch, setCrmFollowupSearch, setCrmLeadAssigneeFilter, setCrmLeadDateFrom, setCrmLeadDateTo, setCrmLeadSearch, setCrmLeadSortBy, setCrmLeadSortDirection, setCrmLeadSourceFilter, setCrmLeadStatusFilter, setCrmPipelineView, setCrmTab, setCrmWeeklyInspectionTarget, setSessionMessage, setSessionMessageType, startNewCrmCustomerDraft, startNewCrmFollowupDraft, startNewCrmLeadDraft, toNumber, updateCrmContactField, updateCrmCustomerDraftField, updateCrmFollowupDraftField, updateCrmJobField, updateCrmLeadDraftField, updateCrmPropertyField, updateCrmTimelineField }} />;
 
   const renderAdminPricingScreen = () => (
     <div className="appShell">
@@ -17696,6 +17767,14 @@ function App() {
     </div>
   );
 
+  const handleSubmitApprovedWork = () => {
+    if (!canCreateApprovedJobData) return;
+    setApprovedJobQuickCreateOpen(true);
+    setSessionMessage("");
+    setActiveTemplate("approvedJobs");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const handleApprovedJobQuickDraftChange = (field, value) => {
     setApprovedJobQuickDraft((current) => ({ ...current, [field]: value }));
   };
@@ -17714,7 +17793,13 @@ function App() {
 
     setJobsSyncStatus("saving");
     setSessionMessage("");
-    const created = await createApprovedJobFromStaffDraft(approvedJobQuickDraft);
+    let created;
+    try {
+      const jobId = quickApprovalJobId.current || crypto.randomUUID();
+      quickApprovalJobId.current = jobId;
+      await ensureSignedProposal(`job:staff-approved:${jobId}`, false);
+      created = await createApprovedJobFromStaffDraft(approvedJobQuickDraft, jobId);
+    } catch (error) { created = { error }; }
     if (created.error) {
       setJobsSyncStatus("error");
       setJobsSyncError(created.error.message || String(created.error));
@@ -17734,6 +17819,7 @@ function App() {
         : `${approvedJobQuickDraft.projectName.trim()} added to Approved Jobs.`,
     );
     if (!refreshed.error) {
+      quickApprovalJobId.current = null;
       setApprovedJobQuickDraft(createBlankApprovedJobQuickDraft());
       setApprovedJobQuickCreateOpen(false);
     }
@@ -18225,7 +18311,7 @@ function App() {
     const dashboardActionDefinitions = {
       collectLead: { eyebrow: "Business Development", title: "Collect Lead", description: "Log a new opportunity quickly.", open: openDashboardLeadCapture },
       sendInspection: { eyebrow: "Scheduling", title: "Send for Inspection", description: "Capture the caller and notify Ivan.", open: openDashboardInspectionRequest },
-      customers: { eyebrow: "CRM", title: "Customers", description: "Review leads, follow-ups, and customer history.", open: () => setActiveTemplate("crm") },
+      customers: { eyebrow: "CRM", title: "Customers & Leads", description: "View saved contacts, follow-ups, and customer history.", open: openCrmSavedList },
       tasks: { eyebrow: "Team", title: "New Task", description: "Assign work and start a discussion.", open: openTaskCreator },
       inspections: { eyebrow: "Field", title: "Inspection Request Center", description: "Schedule inspections, capture findings, and send the proposal handoff.", open: () => setActiveTemplate("inspectionRequests") },
       proposalRequests: { eyebrow: "Proposals", title: "Proposal Requests", description: "Submit or process estimating information.", open: () => setActiveTemplate("proposalRequests") },
@@ -19675,6 +19761,7 @@ function App() {
   };
 
   const navigateFromSidebar = (destination) => {
+    if (destination === "crm") openCrmSavedList();
     if (destination === "workHub") {
       setWorkHubInitialTab("tasks");
       setWorkHubInitialTaskId("");
@@ -19914,11 +20001,12 @@ function App() {
 
   const renderAuthenticatedLayout = (screen) => {
     const navigationDefinitions = {
+      administration: { key: "administration", label: "Employees & Wages", icon: "EW", matches: ["administration"] },
       dashboard: { key: "dashboard", label: "Dashboard", icon: "D", matches: ["dashboard"] },
       workHub: { key: "workHub", label: "Tasks & Messages", icon: "T", matches: ["workHub"] },
       kpis: { key: "kpis", label: "KPI Scorecards", icon: "K", matches: ["kpis"] },
       inspectionRequests: { key: "inspectionRequests", label: "Inspection Requests", icon: "IR", matches: ["inspectionRequests"] },
-      crm: { key: "crm", label: "Customers", icon: "C", matches: ["crm"] },
+      crm: { key: "crm", label: "Customers & Leads", icon: "C", matches: ["crm"] },
       fieldNotes: { key: "fieldNotes", label: "Inspections", icon: "I", matches: ["fieldNotes"] },
       estimateTemplates: { key: "estimateTemplates", label: "Estimates", icon: "E", matches: ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"] },
       proposalRequests: { key: "proposalRequests", label: "Proposals", icon: "P", matches: ["proposalRequests"] },
@@ -19937,7 +20025,7 @@ function App() {
     const accountNavigation = [
       { key: "profile", label: "User Profile", icon: "U", matches: ["profile"] },
       { key: "accountAccess", label: "Account Access", icon: "K", matches: ["accountAccess"] },
-      { key: "settings", label: "Settings", icon: "S", matches: ["settings", "administration", "adminPricing"] },
+      { key: "settings", label: "Settings", icon: "S", matches: ["settings", "adminPricing"] },
     ];
     const renderSidebarButton = (item) => (
       <button
@@ -19996,6 +20084,9 @@ function App() {
         ) : null}
         <main className="portalMain">
           <ConnectionStatus />
+          {proposalUploadRequest && <SignedProposalUpload key={proposalUploadRequest} supabase={supabase} userId={authUser.key} source={proposalUploadRequest} onDone={completeProposalUpload} onCancel={() => completeProposalUpload(null)} />}
+          {signedProposalLink && <SignedProposalHandoff key={`link:${signedProposalLink}:${handoffRefresh}`} supabase={supabase} user={authUser} documentId={signedProposalLink} />}
+          {activeTemplate === "approvedJob" && selectedApprovedJob && <SignedProposalHandoff key={`${buildSharedJobSourceId(selectedApprovedJob)}:${handoffRefresh}`} supabase={supabase} user={authUser} source={buildSharedJobSourceId(selectedApprovedJob)} onUpload={!isProjectManager ? () => { void ensureSignedProposal(buildSharedJobSourceId(selectedApprovedJob), false).catch(error => { setSessionMessageType('error'); setSessionMessage(error.message); }); } : undefined} />}
           {activeTemplate === "dashboard" ? <React.Suspense fallback={null}><WorkflowNotifications supabase={supabase} userId={authUser?.id || authUser?.key} /></React.Suspense> : null}
           <WorkspaceErrorBoundary key={activeTemplate} onReturnDashboard={() => setActiveTemplate("dashboard")}>
             <React.Suspense fallback={(
@@ -20170,16 +20261,16 @@ function App() {
   if (activeTemplate === "estimateTemplates") return renderAuthenticatedLayout(renderEstimateTemplatesScreen());
   if (activeTemplate === "approvedJobs") return renderAuthenticatedLayout(renderApprovedJobsScreen());
   if (activeTemplate === "approvedJob") return renderAuthenticatedLayout(renderApprovedJobScreen());
-  if (activeTemplate === "proposalBuilder") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab="proposals" />);
+  if (activeTemplate === "proposalBuilder") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitApprovedWork={canCreateApprovedJobData ? handleSubmitApprovedWork : undefined} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab="proposals" />);
   if (activeTemplate === "jobMetrics") return renderAuthenticatedLayout(renderJobMetricsScreen());
   if (activeTemplate === "pastJobInsights") return renderAuthenticatedLayout(renderPastJobInsightsScreen());
   if (activeTemplate === "crm") return renderAuthenticatedLayout(renderCrmLeadsScreen());
   if (activeTemplate === "archive") return renderAuthenticatedLayout(renderArchiveScreen());
   if (activeTemplate === "profile") return renderAuthenticatedLayout(renderProfileScreen());
   if (activeTemplate === "settings") return renderAuthenticatedLayout(renderSettingsScreen());
-  if (activeTemplate === "workHub") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab={workHubInitialTab} initialTaskId={workHubInitialTaskId} initialCreateTask={workHubInitialCreateTask} />);
-  if (activeTemplate === "inspectionRequests") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab="inspections" />);
-  if (activeTemplate === "proposalRequests") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab="proposals" />);
+  if (activeTemplate === "workHub") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitApprovedWork={canCreateApprovedJobData ? handleSubmitApprovedWork : undefined} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab={workHubInitialTab} initialTaskId={workHubInitialTaskId} initialCreateTask={workHubInitialCreateTask} />);
+  if (activeTemplate === "inspectionRequests") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} onSubmitApprovedWork={canCreateApprovedJobData ? handleSubmitApprovedWork : undefined} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab="inspections" />);
+  if (activeTemplate === "proposalRequests") return renderAuthenticatedLayout(<WorkHub key={activeTemplate} initialProposalRequestId={proposalEmailLink?.id || ""} initialProposalDiscussion={Boolean(proposalEmailLink?.discussion)} onSubmitApprovedWork={canCreateApprovedJobData ? handleSubmitApprovedWork : undefined} onSubmitInspection={["admin", "cfo", "salesperson", "estimator"].includes(authRole) ? sendCrmLeadForInspection : undefined} supabase={supabase} authUser={authUser} initialTab="proposals" />);
   if (activeTemplate === "subcontractors") return renderAuthenticatedLayout(renderSubcontractorDirectoryScreen());
   if (activeTemplate === "sprayFoam") return renderAuthenticatedLayout(renderSprayFoamScreen());
   if (activeTemplate === "shingle") return renderAuthenticatedLayout(renderShingleScreen());

@@ -6,7 +6,9 @@ inspection tasks until reviewed through the existing handoff. Meta Ads is a CRM 
 
 ## Deployment prerequisites
 
-- Confirm this repository/main is the deployed CRT app (Retell integration is absent here).
+- This draft includes the committed live baseline from `feat/retell-phone-integration`,
+  commit `27c5566957e44af2e082b6d921cb2d2ac2954b04`. Do not deploy older main
+  over that baseline. Review the combined changes before any production deployment.
 - Apply `20261014230000_meta_lead_intake.sql` to the app's Supabase project.
 - Configure a Meta developer app with lead retrieval access for the CRT Page, the required
   Page subscription permissions/access level, and a supported Graph API version. Complete

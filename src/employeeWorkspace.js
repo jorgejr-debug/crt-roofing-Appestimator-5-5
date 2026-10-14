@@ -14,7 +14,7 @@ const WORKSPACES = {
   daniela: {
     title: "Proposal Specialist / Estimating",
     focus: "Move complete proposal requests through review and customer delivery on time.",
-    actions: ["proposalRequests", "tasks", "customers", "approvedJobs"],
+    actions: ["proposalRequests", "estimates", "tasks", "customers", "approvedJobs"],
   },
   miguel: {
     title: "Project Manager / Production",
@@ -44,7 +44,7 @@ const NAVIGATION_TEMPLATE_GROUPS = {
   kpis: ["kpis"],
   crm: ["crm"],
   fieldNotes: ["fieldNotes"],
-  estimateTemplates: ["estimateTemplates", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"],
+  estimateTemplates: ["estimateTemplates", "tpo", "sprayFoam", "shingle", "tile", "coating", "maintenance", "repair"],
   proposalRequests: ["proposalRequests", "proposalBuilder"],
   subcontractors: ["subcontractors"],
   approvedJobs: ["approvedJobs", "approvedJob", "jobMetrics", "pastJobInsights"],
@@ -88,7 +88,7 @@ export function getEmployeeNavigationKeys({ email = "", role = "", capabilities 
   } else if (normalizedEmail === "ivan@crtroofing.com") {
     keys = ["dashboard", "workHub", "crm", "fieldNotes", "estimateTemplates", "proposalRequests", "approvedJobs"];
   } else if (normalizedEmail === "daniela@crtroofing.com") {
-    keys = ["dashboard", "workHub", "crm", "proposalRequests", "approvedJobs", "activeJobs"];
+    keys = ["dashboard", "workHub", "crm", "estimateTemplates", "proposalRequests", "approvedJobs", "activeJobs"];
   } else if (normalizedEmail === "miguel@crtroofing.com" || normalizedRole === "project_manager") {
     keys = ["dashboard", "workHub", "kpis", "activeJobs", "subcontractors"];
   } else if (normalizedEmail === "natalia@crtroofing.com") {
@@ -100,6 +100,7 @@ export function getEmployeeNavigationKeys({ email = "", role = "", capabilities 
   if (["admin", "cfo", "salesperson", "estimator"].includes(normalizedRole)) {
     keys.splice(keys.indexOf("workHub") + 1, 0, "inspectionRequests");
   }
+  if (["admin", "cfo"].includes(normalizedRole)) keys.push("administration");
   return keys.filter((key) => {
     if (key === "invoices") return Boolean(capabilities.canAccessInvoices);
     if (key === "cfoDashboard") return Boolean(capabilities.canAccessFinance);
@@ -142,7 +143,7 @@ export function getEmployeeDashboardSections({ email = "", role = "" } = {}) {
     return { activeJobs: false, completedJobs: false, archivedJobs: false, approvedJobs: true, savedEstimates: true };
   }
   if (normalizedEmail === "daniela@crtroofing.com") {
-    return { activeJobs: true, completedJobs: false, archivedJobs: false, approvedJobs: true, savedEstimates: false };
+    return { activeJobs: true, completedJobs: false, archivedJobs: false, approvedJobs: true, savedEstimates: true };
   }
   if (normalizedEmail === "miguel@crtroofing.com" || normalizedRole === "project_manager") {
     return { activeJobs: true, completedJobs: false, archivedJobs: false, approvedJobs: false, savedEstimates: false };

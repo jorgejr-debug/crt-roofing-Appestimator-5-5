@@ -1,5 +1,5 @@
 export default function CrmWorkspace({ workspace }) {
- const { CRM_FOLLOWUP_STATUS_OPTIONS, CRM_FOLLOWUP_TYPE_OPTIONS, CRM_LEAD_SERVICE_OPTIONS, CRM_LEAD_SOURCE_OPTIONS, CRM_LEAD_STATUS_OPTIONS, CRM_PIPELINE_STATUS_OPTIONS, CRM_PROPERTY_TYPE_OPTIONS, CRM_TIMELINE_TYPE_OPTIONS, CRM_URGENCY_OPTIONS, CRM_VISIT_OUTCOME_OPTIONS, DetailRow, Field, LOGO_SRC, Section, addCrmContactToCustomer, addCrmJobToCustomer, addCrmPropertyToCustomer, addCrmTimelineEntry, authUser, calculateDanielaKpis, calculateIvanKpis, calculateLeadKpis, completedJobs, convertCrmLeadToCustomer, crmActiveStaffOptions, crmCustomerDeletingId, crmCustomerDisplayName, crmCustomerDraft, crmCustomerSaving, crmCustomerSearch, crmCustomers, crmDanielaProfileId, crmFollowupDeletingId, crmFollowupDraft, crmFollowupSaving, crmFollowupSearch, crmFollowups, crmInspectionSending, crmIvanProfileId, crmLeadAssigneeFilter, crmLeadDateFrom, crmLeadDateTo, crmLeadDeletingId, crmLeadDisplayName, crmLeadDocuments, crmLeadDraft, crmLeadSearch, crmLeadSortBy, crmLeadSortDirection, crmLeadSourceFilter, crmLeadStatusFilter, crmLeadSyncError, crmLeadSyncStatus, crmLeadWorkOrderFile, crmLeadWorkOrderUploading, crmLeads, crmPipelineView, crmProposalAuditEvents, crmProposalRequests, crmProposalVersions, crmRecordSyncError, crmSelectedCustomer, crmTab, crmWeeklyInspectionTarget, css, deleteCrmCustomer, deleteCrmFollowup, deleteCrmLead, editCrmCustomer, editCrmFollowup, editCrmLead, getAccountTitle, handleCrmLeadAction, handleNumberInputWheel, isFinanceUser, money2, num, openCrmLeadDocument, openDashboardLeadCapture, openProposalBuilder, proposals, removeCrmContact, removeCrmFile, removeCrmJob, removeCrmProperty, removeCrmTimelineEntry, renderMiguelKpiSection, saveCrmCustomerDraft, saveCrmFollowupDraft, saveCrmLeadDraft, saveCrmWeeklyInspectionTarget, saveQuickLeadAndAddNext, selectCrmLeadWorkOrder, sendCrmLeadForInspection, setActiveTemplate, setCrmCustomerSearch, setCrmFollowupSearch, setCrmLeadAssigneeFilter, setCrmLeadDateFrom, setCrmLeadDateTo, setCrmLeadSearch, setCrmLeadSortBy, setCrmLeadSortDirection, setCrmLeadSourceFilter, setCrmLeadStatusFilter, setCrmPipelineView, setCrmTab, setCrmWeeklyInspectionTarget, setSessionMessage, setSessionMessageType, startNewCrmCustomerDraft, startNewCrmFollowupDraft, startNewCrmLeadDraft, toNumber, updateCrmContactField, updateCrmCustomerDraftField, updateCrmFollowupDraftField, updateCrmJobField, updateCrmLeadDraftField, updateCrmPropertyField, updateCrmTimelineField } = workspace;
+ const { CRM_FOLLOWUP_STATUS_OPTIONS, CRM_FOLLOWUP_TYPE_OPTIONS, CRM_LEAD_SERVICE_OPTIONS, CRM_LEAD_SOURCE_OPTIONS, CRM_LEAD_STATUS_OPTIONS, CRM_PIPELINE_STATUS_OPTIONS, CRM_PROPERTY_TYPE_OPTIONS, CRM_TIMELINE_TYPE_OPTIONS, CRM_URGENCY_OPTIONS, CRM_VISIT_OUTCOME_OPTIONS, DetailRow, Field, LOGO_SRC, Section, addCrmContactToCustomer, addCrmJobToCustomer, addCrmPropertyToCustomer, addCrmTimelineEntry, authUser, calculateDanielaKpis, calculateIvanKpis, calculateLeadKpis, completedJobs, convertCrmLeadToCustomer, crmActiveStaffOptions, crmCustomerDeletingId, crmCustomerDisplayName, crmCustomerDraft, crmCustomerSaving, crmCustomerSearch, crmCustomers, crmDanielaProfileId, crmFollowupDeletingId, crmFollowupDraft, crmFollowupSaving, crmFollowupSearch, crmFollowups, crmInspectionSending, crmIvanProfileId, crmLeadAssigneeFilter, crmLeadDateFrom, crmLeadDateTo, crmLeadDeletingId, crmLeadDisplayName, crmLeadDocuments, crmLeadDraft, crmLeadSearch, crmLeadSortBy, crmLeadSortDirection, crmLeadSourceFilter, crmLeadStatusFilter, crmLeadSyncError, crmLeadSyncStatus, crmLeadWorkOrderFile, crmLeadWorkOrderUploading, crmLeads, crmPipelineView, crmProposalAuditEvents, crmProposalRequests, crmProposalVersions, crmRecordSyncError, crmSelectedCustomer, crmTab, crmWeeklyInspectionTarget, css, deleteCrmCustomer, deleteCrmFollowup, deleteCrmLead, editCrmCustomer, editCrmFollowup, editCrmLead, getAccountTitle, handleCrmLeadAction, handleNumberInputWheel, isFinanceUser, money2, num, openCrmLeadDocument, openCrmSavedList, openDashboardLeadCapture, openProposalBuilder, proposals, removeCrmContact, removeCrmFile, removeCrmJob, removeCrmProperty, removeCrmTimelineEntry, renderMiguelKpiSection, saveCrmCustomerDraft, saveCrmFollowupDraft, saveCrmLeadDraft, saveCrmWeeklyInspectionTarget, saveQuickLeadAndAddNext, selectCrmLeadWorkOrder, sendCrmLeadForInspection, setActiveTemplate, setCrmCustomerSearch, setCrmFollowupSearch, setCrmLeadAssigneeFilter, setCrmLeadDateFrom, setCrmLeadDateTo, setCrmLeadSearch, setCrmLeadSortBy, setCrmLeadSortDirection, setCrmLeadSourceFilter, setCrmLeadStatusFilter, setCrmPipelineView, setCrmTab, setCrmWeeklyInspectionTarget, setSessionMessage, setSessionMessageType, startNewCrmCustomerDraft, startNewCrmFollowupDraft, startNewCrmLeadDraft, toNumber, updateCrmContactField, updateCrmCustomerDraftField, updateCrmFollowupDraftField, updateCrmJobField, updateCrmLeadDraftField, updateCrmPropertyField, updateCrmTimelineField } = workspace;
 
     const assignedStaffOptions = [
       { value: "", label: "Unassigned" },
@@ -123,12 +123,13 @@ export default function CrmWorkspace({ workspace }) {
       .filter((lead) => String(lead.originatorEmail || "").toLowerCase() === "chris@crtroofing.com" && lead.leadStatus === "Approved")
       .reduce((sum, lead) => sum + Math.max(0, toNumber(lead.estimatedValue, 0)), 0);
     const chrisClosedJobs = completedJobs.filter((job) => {
+      if (job.commissionPlan) return Boolean(job.commissionPlan.chris?.enabled);
       const attributionEmail = String(job.leadOriginatorEmail || job.commissionRecipientEmail || "").toLowerCase();
       const attributionName = String(job.commissionRecipientName || job.leadOriginatorName || job.salesperson || "").toLowerCase();
       return attributionEmail === "chris@crtroofing.com" || attributionName.includes("chris");
     });
     const chrisFinalizedGrossProfit = chrisClosedJobs.reduce((sum, job) => sum + Math.max(0, toNumber(job.commissionableGrossProfit, 0)), 0);
-    const chrisEarnedCommission = chrisClosedJobs.reduce((sum, job) => sum + Math.max(0, toNumber(job.salesCommission, 0)), 0);
+    const chrisEarnedCommission = chrisClosedJobs.reduce((sum, job) => sum + Math.max(0, toNumber(job.commissionPlan ? job.commissionBreakdown?.chrisCommission : job.salesCommission, 0)), 0);
     const leadStatusCounts = CRM_LEAD_STATUS_OPTIONS.reduce((acc, status) => {
       acc[status] = crmLeads.filter((lead) => String(lead.leadStatus || "") === status).length;
       return acc;
@@ -640,7 +641,7 @@ export default function CrmWorkspace({ workspace }) {
               </div>
               <div>
                 <p className="eyebrow">CRT Roofing CRM</p>
-                <h1>CRM / Leads</h1>
+                <h1>Customers &amp; Leads</h1>
                 <p className="intro">Capture shared leads and move qualified opportunities into CRT Roofing's operating workflow.</p>
               </div>
             </div>
@@ -657,6 +658,9 @@ export default function CrmWorkspace({ workspace }) {
           <button type="button" className="secondaryButton" onClick={() => setActiveTemplate("dashboard")}>
             Back to dashboard
           </button>
+          <button type="button" className="primaryButton" onClick={openCrmSavedList}>
+            View saved leads
+          </button>
           <button type="button" className="secondaryButton" onClick={() => startNewCrmLeadDraft()}>
             + New lead
           </button>
@@ -668,12 +672,12 @@ export default function CrmWorkspace({ workspace }) {
           </button>
         </div>
 
-        <Section title="CRM Tabs" subtitle="Phase 1 workflow pages.">
+        <Section title="CRM" subtitle="Quick Capture entries appear in Saved Leads. Customer records and history are in Customers.">
           <div className="dashboardTabBar">
             {[
               ["quickCapture", "Quick Capture"],
               ["newLead", "Qualify / Edit"],
-              ["pipeline", "Lead Pipeline"],
+              ["pipeline", "Saved Leads"],
               ["customers", "Customers"],
               ["followUps", "Reminders"],
               ["reports", "KPI Scorecards"],
@@ -952,7 +956,7 @@ export default function CrmWorkspace({ workspace }) {
         ) : null}
 
         {crmTab === "pipeline" ? (
-          <Section title="Lead Pipeline" subtitle="Switch between table and Kanban views for lead tracking.">
+          <Section title="Saved Leads" subtitle="Find the contacts entered through Quick Capture, review their details, and update follow-ups.">
             <div className="detailList" style={{ marginBottom: 14 }}>
               <DetailRow label="Total leads" value={num(filteredLeads.length, 0)} />
               <DetailRow label="Appointment scheduled" value={num(leadStatusCounts["Appointment Scheduled"], 0)} />
@@ -1511,7 +1515,7 @@ export default function CrmWorkspace({ workspace }) {
               <div className="summaryCard">
                 <span>Earned commission</span>
                 <strong>{money2(chrisEarnedCommission)}</strong>
-                <p>25% of finalized commissionable gross profit on Chris-originated jobs.</p>
+                <p>Chris’s saved commission on jobs he is involved in; the new default is 15% after all costs, including Ivan’s commission.</p>
               </div>
             </div>
             <div className="notice" style={{ marginTop: 16 }}>
@@ -1520,7 +1524,7 @@ export default function CrmWorkspace({ workspace }) {
             </div>
             <div className="notice" style={{ marginTop: 16 }}>
               <strong>Commission control</strong>
-              <p style={{ marginBottom: 0 }}>Chris's 25% commission must be calculated from finalized job gross profit after operating/overhead costs. The CRM stores permanent lead attribution now; the dollar commission should populate only after that lead is linked through proposal, signed job, production, and closeout.</p>
+              <p style={{ marginBottom: 0 }}>Chris’s commission uses remaining profit after job costs, operating / overhead, other costs, and Ivan’s commission. Existing jobs keep their saved settings until updated in the job’s Commissions section.</p>
             </div>
           </Section>
           </>
